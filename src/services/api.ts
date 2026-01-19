@@ -220,6 +220,72 @@ class ApiService {
   }
 
   /**
+   * POST FormData 请求（用于文件上传）
+   * @param endpoint - API端点
+   * @param formData - FormData 对象
+   * @param headers - 请求头（不要设置 Content-Type，让浏览器自动设置）
+   */
+  async postFormData<T>(
+    endpoint: string,
+    formData: FormData,
+    headers?: Record<string, string>
+  ): Promise<ApiResponse<T>> {
+    const url = this.buildUrl(endpoint)
+    
+    // 构建请求头（不设置 Content-Type，让浏览器自动设置 multipart/form-data boundary）
+    const requestHeaders: Record<string, string> = {
+      ...headers,
+    }
+    // 移除 Content-Type，让浏览器自动设置
+    delete requestHeaders['Content-Type']
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 60000) // 上传超时60秒
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: formData,
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+
+      let data: T | undefined
+      const contentType = response.headers.get('content-type')
+      
+      if (contentType?.includes('application/json')) {
+        data = await response.json()
+      }
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: `请求失败: ${response.status} ${response.statusText}`,
+          status: response.status,
+        }
+      }
+
+      return {
+        success: true,
+        data,
+        status: response.status,
+      }
+    } catch (error) {
+      clearTimeout(timeoutId)
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          return { success: false, error: '请求超时' }
+        }
+        return { success: false, error: error.message }
+      }
+      
+      return { success: false, error: '未知错误' }
+    }
+  }
+
+  /**
    * 测试连接
    */
   async testConnection(): Promise<ApiResponse<{ connected: boolean }>> {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessageBox } from 'element-plus'
 
 interface ProcessPic {
   id: number
@@ -84,9 +85,23 @@ function handleUpload() {
   input.click()
 }
 
-// 删除
-function handleDelete() {
-  emit('delete', props.pic.id)
+// 删除（需确认）
+async function handleDelete() {
+  const name = props.pic.name || `留存项 ${props.pic.id}`
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除「${name}」吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    emit('delete', props.pic.id)
+  } catch {
+    // 用户取消
+  }
 }
 
 // 拍摄单张照片（优先使用 props 回调，否则使用 emit）

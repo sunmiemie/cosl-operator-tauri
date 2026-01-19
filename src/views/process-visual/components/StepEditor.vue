@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessageBox } from 'element-plus'
 
 interface ProcessStep {
   id: number
@@ -37,9 +38,23 @@ const stepDesc = computed({
   set: (value: string) => { props.step.desc = value }
 })
 
-// 删除
-function handleDelete() {
-  emit('delete', props.step.id)
+// 删除（需确认）
+async function handleDelete() {
+  const name = props.step.name || `检测项 ${props.step.id}`
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除「${name}」吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    emit('delete', props.step.id)
+  } catch {
+    // 用户取消
+  }
 }
 
 // 保存快捷

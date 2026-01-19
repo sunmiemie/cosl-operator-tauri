@@ -1,6 +1,6 @@
 /**
  * 文件系统操作封装
- * 使用 Tauri 的 fs 插件实现本地文件存储
+ * 使用 Tauri 的 fs 和 dialog 插件实现本地文件存储
  */
 import {
   exists,
@@ -10,7 +10,8 @@ import {
   readDir,
   remove
 } from '@tauri-apps/plugin-fs'
-import { appDataDir, join } from '@tauri-apps/api/path'
+import { save } from '@tauri-apps/plugin-dialog'
+import { appDataDir, join, downloadDir } from '@tauri-apps/api/path'
 
 // 目录常量
 const DOWNLOADS_DIR = 'downloads/processes'
@@ -116,6 +117,23 @@ export function useFileSystem() {
       return true
     } catch (error) {
       console.error('保存工艺缓存失败:', error)
+      return false
+    }
+  }
+
+  /**
+   * 删除单个工艺缓存
+   */
+  async function deleteProcessCache(processId: number): Promise<boolean> {
+    try {
+      const filePath = await getProcessCachePath(processId)
+      if (await exists(filePath)) {
+        await remove(filePath)
+        console.log('已删除工艺缓存:', processId)
+      }
+      return true
+    } catch (error) {
+      console.error('删除工艺缓存失败:', error)
       return false
     }
   }
@@ -334,23 +352,34 @@ export function useFileSystem() {
 
   /**
    * 导出工艺到用户选择的位置
-   * 注意：这需要使用 Tauri 的 dialog 插件
+   * 使用 Tauri dialog 插件打开保存文件对话框
    */
   async function exportProcessToFile(data: any, defaultName: string): Promise<boolean> {
-    // 此功能需要 dialog 插件，暂时使用浏览器下载方式
     try {
+      // 获取默认下载目录
+      const defaultPath = await downloadDir()
+      
+      // 打开保存文件对话框
+      const filePath = await save({
+        defaultPath: await join(defaultPath, `${defaultName}.json`),
+        filters: [{
+          name: '工艺文件',
+          extensions: ['json']
+        }],
+        title: '导出工艺文件'
+      })
+      
+      // 用户取消保存
+      if (!filePath) {
+        console.log('用户取消保存')
+        return false
+      }
+      
+      // 写入文件
       const jsonString = JSON.stringify(data, null, 2)
-      const blob = new Blob([jsonString], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
+      await writeTextFile(filePath, jsonString)
       
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${defaultName}.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-      
+      console.log('工艺导出成功:', filePath)
       return true
     } catch (error) {
       console.error('导出工艺失败:', error)
@@ -366,6 +395,7 @@ export function useFileSystem() {
     isProcessCached,
     readCachedProcess,
     saveProcessToCache,
+    deleteProcessCache,
     clearProcessCache,
     
     // 暂存工艺

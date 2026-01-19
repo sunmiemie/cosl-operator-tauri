@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ElMessageBox, ElMessage, ElPopover } from 'element-plus'
 import { useProcess } from './composables/useProcess'
 import { useLayout } from '@/composables/useLayout'
 
@@ -350,8 +350,13 @@ function handleResizeMouseDown(e: MouseEvent, direction: string) {
 
 // ========== 新增功能处理函数 ==========
 
-// 打开工作抽屉
+// 打开工作抽屉（同时刷新数据）
 function handleOpenJobDrawer() {
+  // 打开抽屉时刷新待处理和暂存数据
+  if (process.isOnlineMode.value) {
+    process.fetchMyJobData()
+  }
+  process.fetchTempProcessData()
   showJobDrawer.value = true
 }
 
@@ -728,6 +733,15 @@ async function handleExportProcess() {
     ElMessage.error('导出失败')
   }
 }
+
+// 监听步骤变化，返回选择页时刷新数据
+watch(() => process.currentStep.value, (newStep, oldStep) => {
+  // 当从编辑步骤返回到选择页时，刷新待处理和暂存数据
+  if (newStep === -1 && oldStep !== -1 && process.isOnlineMode.value) {
+    process.fetchMyJobData()
+    process.fetchTempProcessData()
+  }
+})
 
 // 初始化
 onMounted(() => {
@@ -1257,6 +1271,31 @@ onMounted(() => {
             暂存
           </button>
           
+          <!-- 修改意见按钮 (待修改状态时显示) -->
+          <el-popover 
+            v-if="process.showFeedback.value && process.feedbackList.value.length > 0"
+            placement="top" 
+            :width="Math.min(process.feedbackList.value.length * 320, 960)"
+            trigger="click"
+          >
+            <template #reference>
+              <button class="secondary-btn danger" title="查看修改意见">
+                <Icon icon="mdi:lightbulb-on-outline" />
+                修改意见
+              </button>
+            </template>
+            <div class="feedback-list">
+              <div 
+                v-for="(item, index) in process.feedbackList.value" 
+                :key="index"
+                class="feedback-item"
+              >
+                <div class="feedback-header">第{{ index + 1 }}次审核意见</div>
+                <div class="feedback-content">{{ item }}</div>
+              </div>
+            </div>
+          </el-popover>
+          
           <!-- 快捷检测项按钮 (仅在步骤2/3显示) -->
           <button 
             v-if="process.currentStep.value === 2 || process.currentStep.value === 3" 
@@ -1338,8 +1377,11 @@ onMounted(() => {
         <div class="loading-content">
           <Icon icon="mdi:loading" class="loading-icon spin" />
           <span>{{ process.jsonLoading.value ? '正在加载工艺数据...' : '加载中...' }}</span>
-          <div v-if="process.downloadProgress.value > 0" class="progress-bar">
-            <div class="progress-fill" :style="{ width: process.downloadProgress.value + '%' }"></div>
+          <div v-if="process.downloadProgress.value > 0" class="progress-wrapper">
+            <div class="progress-bar">
+              <div class="progress-fill" :style="{ width: process.downloadProgress.value + '%' }"></div>
+            </div>
+            <span class="progress-text">{{ process.downloadProgress.value }}%</span>
           </div>
         </div>
       </div>
@@ -1537,6 +1579,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  
 }
 
 /* 步骤1 样式 */
@@ -1855,6 +1898,7 @@ onMounted(() => {
 }
 
 .area-editor {
+  border: 1px solid var(--color-border);
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1921,6 +1965,7 @@ onMounted(() => {
 }
 
 .area-image {
+  border: 1px solid var(--color-border);
   height: 160px;
   background: var(--color-bg-tertiary);
   border-radius: 10px;
@@ -1978,6 +2023,7 @@ onMounted(() => {
 }
 
 .detail-content {
+  border: 1px solid var(--color-border);
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -2131,6 +2177,7 @@ onMounted(() => {
 /* 步骤4 样式 */
 .step-4 {
   background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -2141,6 +2188,7 @@ onMounted(() => {
 }
 
 .preview-dual {
+  
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
@@ -2257,6 +2305,45 @@ onMounted(() => {
 
 .secondary-btn:hover {
   background: var(--color-bg-hover);
+}
+
+.secondary-btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.secondary-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+/* 修改意见列表 */
+.feedback-list {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.feedback-item {
+  flex: 0 0 300px;
+  background: var(--color-bg-secondary);
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+}
+
+.feedback-header {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+}
+
+.feedback-content {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* 拍照下拉菜单 */
@@ -2376,12 +2463,18 @@ onMounted(() => {
 }
 
 /* 进度条 */
+.progress-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
 .progress-bar {
   width: 200px;
   height: 6px;
   background: rgba(255, 255, 255, 0.2);
   border-radius: 3px;
-  margin-top: 16px;
   overflow: hidden;
 }
 
@@ -2390,6 +2483,13 @@ onMounted(() => {
   background: var(--color-accent-blue);
   border-radius: 3px;
   transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-accent-blue);
+  min-width: 40px;
 }
 
 /* ===== 图片编辑器弹窗 ===== */

@@ -280,6 +280,7 @@ const stats = computed(() => {
 }
 
 .stat-item {
+  border: 1px solid var(--color-border);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -345,6 +346,7 @@ const stats = computed(() => {
 }
 
 .plane-section {
+  border: 1px solid var(--color-border);
   padding: 16px;
   background: var(--color-bg-tertiary);
   border-radius: 12px;
@@ -371,6 +373,7 @@ const stats = computed(() => {
 }
 
 .total-section {
+  border: 1px solid var(--color-border);
   padding: 16px;
   background: var(--color-bg-tertiary);
   border-radius: 12px;
@@ -457,8 +460,9 @@ const stats = computed(() => {
   color: var(--color-text-secondary);
   margin-top: 4px;
 }
-
 .areas-section {
+
+  border: 1px solid var(--color-border);
   padding: 16px;
   background: var(--color-bg-tertiary);
   border-radius: 12px;

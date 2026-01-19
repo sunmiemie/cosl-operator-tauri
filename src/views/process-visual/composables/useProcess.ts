@@ -493,7 +493,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
     }
   }
 
-  // 上传工艺（目检测试）
+  // 上传工艺（目检测试）- 使用 multipart/form-data 格式
   async function uploadProcess(): Promise<boolean> {
     try {
       isUploading.value = true
@@ -504,19 +504,30 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       
       const testtypeId = processType === 'eyes' ? 2 : 5
       
-      const response = await api.post<{ msg: string }>(endpoint, {
+      // 构建 JSON 文件内容
+      const fileContent = {
         name: editForm.name,
-        board_model_id: editForm.boardModelId,
         version: editForm.version,
-        testtype: testtypeId,
-        userId: userInfo.value?.id,
-        file: {
-          name: editForm.name,
-          version: editForm.version,
-          boardModelId: editForm.boardModelId,
-          json: processJson.value
-        }
-      })
+        boardModelId: editForm.boardModelId,
+        json: processJson.value
+      }
+      const jsonString = JSON.stringify(fileContent)
+      const jsonBlob = new Blob([jsonString], { type: 'application/json' })
+      
+      // 构建 FormData
+      const formData = new FormData()
+      formData.append('name', editForm.name)
+      formData.append('board_model_id', String(editForm.boardModelId))
+      formData.append('version', editForm.version)
+      formData.append('testtype', String(testtypeId))
+      formData.append('userId', String(userInfo.value?.id || ''))
+      formData.append('file', jsonBlob, 'data.json')
+      
+      const response = await api.postFormData<{ msg: string }>(
+        endpoint, 
+        formData, 
+        getAuthHeaders()
+      )
       return response.success && response.data?.msg === 'success'
     } catch (error) {
       console.error('上传工艺失败:', error)
@@ -526,7 +537,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
     }
   }
 
-  // 更新工艺
+  // 更新工艺 - 使用 multipart/form-data 格式
   async function updateProcess(): Promise<boolean> {
     try {
       isUploading.value = true
@@ -535,18 +546,34 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
         ? '/test/addprocess/eyesupdate/' 
         : '/test/addprocess/xrayupdate/'
       
-      const response = await api.post<{ msg: string }>(endpoint, {
-        id: editForm.processId,
+      // 构建 JSON 文件内容
+      const fileContent = {
         name: editForm.name,
         version: editForm.version,
-        file: {
-          name: editForm.name,
-          version: editForm.version,
-          boardModelId: editForm.boardModelId,
-          json: processJson.value
-        }
-      })
-      return response.success && response.data?.msg === 'success'
+        boardModelId: editForm.boardModelId,
+        json: processJson.value
+      }
+      const jsonString = JSON.stringify(fileContent)
+      const jsonBlob = new Blob([jsonString], { type: 'application/json' })
+      
+      // 构建 FormData
+      const formData = new FormData()
+      formData.append('id', String(editForm.processId))
+      formData.append('name', editForm.name)
+      formData.append('version', editForm.version)
+      formData.append('file', jsonBlob, 'data.json')
+      
+      const response = await api.postFormData<{ msg: string }>(
+        endpoint, 
+        formData, 
+        getAuthHeaders()
+      )
+      const success = response.success && response.data?.msg === 'success'
+      if (success) {
+        // 更新成功后删除本地缓存，确保下次获取到最新数据
+        await fileSystem.deleteProcessCache(editForm.processId)
+      }
+      return success
     } catch (error) {
       console.error('更新工艺失败:', error)
       return false
@@ -559,10 +586,17 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
   async function submitProcess(processId: number): Promise<boolean> {
     try {
       // 实际 API: /test/addprocess/submitcheck/
-      const response = await api.post<{ msg: string }>('/test/addprocess/submitcheck/', {
-        id: processId
-      })
-      return response.success && response.data?.msg === 'success'
+      const response = await api.post<{ msg: string }>(
+        '/test/addprocess/submitcheck/',
+        { id: processId },
+        getAuthHeaders()
+      )
+      const success = response.success && response.data?.msg === 'success'
+      if (success) {
+        // 提交成功后删除本地缓存，确保下次获取到最新数据
+        await fileSystem.deleteProcessCache(processId)
+      }
+      return success
     } catch (error) {
       console.error('提交审核失败:', error)
       return false
@@ -573,8 +607,16 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
   async function deleteProcess(processId: number): Promise<boolean> {
     try {
       // 实际 API: /test/process/delete/{id}/
-      const response = await api.delete<{ code: number }>(`/test/process/delete/${processId}/`)
-      return response.success && response.data?.code === 0
+      const response = await api.delete<{ code: number }>(
+        `/test/process/delete/${processId}/`,
+        getAuthHeaders()
+      )
+      const success = response.success && response.data?.code === 0
+      if (success) {
+        // 删除成功后同时删除本地缓存
+        await fileSystem.deleteProcessCache(processId)
+      }
+      return success
     } catch (error) {
       console.error('删除工艺失败:', error)
       return false

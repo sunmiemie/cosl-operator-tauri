@@ -326,7 +326,7 @@ function getExpandIcon(nodeId: number): string {
               :value="processVersion"
               @input="$emit('update:processVersion', ($event.target as HTMLInputElement).value)"
               type="text"
-              placeholder="1.0.0"
+              placeholder="请填写工艺版本"
               class="form-input version-field"
               :disabled="selectedBoardModel === '待选择'"
             />
