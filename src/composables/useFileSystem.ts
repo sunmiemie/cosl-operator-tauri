@@ -1,0 +1,386 @@
+/**
+ * 文件系统操作封装
+ * 使用 Tauri 的 fs 插件实现本地文件存储
+ */
+import {
+  exists,
+  mkdir,
+  readTextFile,
+  writeTextFile,
+  readDir,
+  remove
+} from '@tauri-apps/plugin-fs'
+import { appDataDir, join } from '@tauri-apps/api/path'
+
+// 目录常量
+const DOWNLOADS_DIR = 'downloads/processes'
+const TEMP_DIR = 'temp/processes'
+const QUICK_STEP_DIR = 'quick'
+
+// 工艺类型
+export type ProcessType = 'eyes' | 'xray'
+
+// 暂存工艺信息接口
+export interface TempProcessInfo {
+  fileName: string
+  type: ProcessType
+  name: string
+  version: string
+  boardModelId: number
+  mode: '编辑' | '修改'
+  processId?: number
+}
+
+// 暂存工艺数据接口
+export interface TempProcessData {
+  name: string
+  version: string
+  boardModelId: number
+  feedbackList?: string[]
+  json: any
+}
+
+/**
+ * 文件系统操作 Composable
+ */
+export function useFileSystem() {
+  /**
+   * 确保目录存在
+   */
+  async function ensureDir(dirPath: string): Promise<void> {
+    try {
+      const appData = await appDataDir()
+      const fullPath = await join(appData, dirPath)
+      
+      const dirExists = await exists(fullPath)
+      if (!dirExists) {
+        await mkdir(fullPath, { recursive: true })
+      }
+    } catch (error) {
+      console.error('创建目录失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 初始化所有必要的目录
+   */
+  async function initDirectories(): Promise<void> {
+    await ensureDir(DOWNLOADS_DIR)
+    await ensureDir(TEMP_DIR)
+    await ensureDir(QUICK_STEP_DIR)
+  }
+
+  /**
+   * 获取下载缓存的工艺文件路径
+   */
+  async function getProcessCachePath(processId: number): Promise<string> {
+    const appData = await appDataDir()
+    return await join(appData, DOWNLOADS_DIR, `${processId}.json`)
+  }
+
+  /**
+   * 检查工艺是否已缓存
+   */
+  async function isProcessCached(processId: number): Promise<boolean> {
+    try {
+      const filePath = await getProcessCachePath(processId)
+      return await exists(filePath)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 读取缓存的工艺
+   */
+  async function readCachedProcess<T>(processId: number): Promise<T | null> {
+    try {
+      const filePath = await getProcessCachePath(processId)
+      const content = await readTextFile(filePath)
+      return JSON.parse(content) as T
+    } catch (error) {
+      console.error('读取缓存工艺失败:', error)
+      return null
+    }
+  }
+
+  /**
+   * 保存工艺到缓存
+   */
+  async function saveProcessToCache(processId: number, data: any): Promise<boolean> {
+    try {
+      await ensureDir(DOWNLOADS_DIR)
+      const filePath = await getProcessCachePath(processId)
+      await writeTextFile(filePath, JSON.stringify(data, null, 2))
+      return true
+    } catch (error) {
+      console.error('保存工艺缓存失败:', error)
+      return false
+    }
+  }
+
+  /**
+   * 生成暂存工艺文件名
+   * 格式: {type}-{boardModelId}-{name}-{version}-{mode}.json
+   * 或: {type}-{boardModelId}-{name}-{version}-修改~{processId}.json
+   */
+  function generateTempFileName(
+    type: ProcessType,
+    boardModelId: number,
+    name: string,
+    version: string,
+    isEdit: boolean,
+    processId?: number
+  ): string {
+    const mode = isEdit ? `修改~${processId}` : '编辑'
+    return `${type}-${boardModelId}-${name}-${version}-${mode}.json`
+  }
+
+  /**
+   * 解析暂存工艺文件名
+   */
+  function parseTempFileName(fileName: string): TempProcessInfo | null {
+    try {
+      // 移除 .json 后缀
+      const baseName = fileName.replace(/\.json$/, '')
+      const parts = baseName.split('-')
+      
+      if (parts.length < 5) return null
+      
+      const type = parts[0] as ProcessType
+      const boardModelId = parseInt(parts[1], 10)
+      const name = parts[2]
+      const version = parts[3]
+      const modeStr = parts.slice(4).join('-') // 处理名称中可能有的 -
+      
+      // 解析模式
+      if (modeStr === '编辑') {
+        return {
+          fileName,
+          type,
+          name,
+          version,
+          boardModelId,
+          mode: '编辑'
+        }
+      } else if (modeStr.startsWith('修改~')) {
+        const processId = parseInt(modeStr.split('~')[1], 10)
+        return {
+          fileName,
+          type,
+          name,
+          version,
+          boardModelId,
+          mode: '修改',
+          processId
+        }
+      }
+      
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 获取暂存工艺文件路径
+   */
+  async function getTempProcessPath(fileName: string): Promise<string> {
+    const appData = await appDataDir()
+    return await join(appData, TEMP_DIR, fileName)
+  }
+
+  /**
+   * 保存暂存工艺
+   */
+  async function saveTempProcess(
+    type: ProcessType,
+    boardModelId: number,
+    name: string,
+    version: string,
+    isEdit: boolean,
+    processId: number | undefined,
+    data: TempProcessData
+  ): Promise<boolean> {
+    try {
+      await ensureDir(TEMP_DIR)
+      const fileName = generateTempFileName(type, boardModelId, name, version, isEdit, processId)
+      const filePath = await getTempProcessPath(fileName)
+      await writeTextFile(filePath, JSON.stringify(data, null, 2))
+      return true
+    } catch (error) {
+      console.error('保存暂存工艺失败:', error)
+      return false
+    }
+  }
+
+  /**
+   * 获取暂存工艺列表
+   */
+  async function getTempProcessList(type: ProcessType): Promise<TempProcessInfo[]> {
+    try {
+      await ensureDir(TEMP_DIR)
+      const appData = await appDataDir()
+      const dirPath = await join(appData, TEMP_DIR)
+      
+      const entries = await readDir(dirPath)
+      const result: TempProcessInfo[] = []
+      
+      for (const entry of entries) {
+        if (entry.isFile && entry.name?.endsWith('.json')) {
+          const info = parseTempFileName(entry.name)
+          if (info && info.type === type) {
+            result.push(info)
+          }
+        }
+      }
+      
+      return result
+    } catch (error) {
+      console.error('获取暂存工艺列表失败:', error)
+      return []
+    }
+  }
+
+  /**
+   * 加载暂存工艺
+   */
+  async function loadTempProcess(fileName: string): Promise<TempProcessData | null> {
+    try {
+      const filePath = await getTempProcessPath(fileName)
+      const content = await readTextFile(filePath)
+      return JSON.parse(content) as TempProcessData
+    } catch (error) {
+      console.error('加载暂存工艺失败:', error)
+      return null
+    }
+  }
+
+  /**
+   * 删除暂存工艺
+   */
+  async function deleteTempProcess(fileName: string): Promise<boolean> {
+    try {
+      const filePath = await getTempProcessPath(fileName)
+      const fileExists = await exists(filePath)
+      if (fileExists) {
+        await remove(filePath)
+      }
+      return true
+    } catch (error) {
+      console.error('删除暂存工艺失败:', error)
+      return false
+    }
+  }
+
+  /**
+   * 清除所有工艺缓存
+   */
+  async function clearProcessCache(): Promise<void> {
+    try {
+      const appData = await appDataDir()
+      const dirPath = await join(appData, DOWNLOADS_DIR)
+      
+      const dirExists = await exists(dirPath)
+      if (!dirExists) return
+      
+      const entries = await readDir(dirPath)
+      for (const entry of entries) {
+        if (entry.isFile && entry.name?.endsWith('.json')) {
+          const filePath = await join(dirPath, entry.name)
+          await remove(filePath)
+        }
+      }
+    } catch (error) {
+      console.error('清除工艺缓存失败:', error)
+    }
+  }
+
+  /**
+   * 保存快捷检测项到本地
+   */
+  async function saveQuickSteps(steps: any[]): Promise<boolean> {
+    try {
+      await ensureDir(QUICK_STEP_DIR)
+      const appData = await appDataDir()
+      const filePath = await join(appData, QUICK_STEP_DIR, 'quick_step.json')
+      await writeTextFile(filePath, JSON.stringify(steps, null, 2))
+      return true
+    } catch (error) {
+      console.error('保存快捷检测项失败:', error)
+      return false
+    }
+  }
+
+  /**
+   * 读取本地快捷检测项
+   */
+  async function readQuickSteps(): Promise<any[]> {
+    try {
+      const appData = await appDataDir()
+      const filePath = await join(appData, QUICK_STEP_DIR, 'quick_step.json')
+      
+      const fileExists = await exists(filePath)
+      if (!fileExists) return []
+      
+      const content = await readTextFile(filePath)
+      return JSON.parse(content)
+    } catch (error) {
+      console.error('读取快捷检测项失败:', error)
+      return []
+    }
+  }
+
+  /**
+   * 导出工艺到用户选择的位置
+   * 注意：这需要使用 Tauri 的 dialog 插件
+   */
+  async function exportProcessToFile(data: any, defaultName: string): Promise<boolean> {
+    // 此功能需要 dialog 插件，暂时使用浏览器下载方式
+    try {
+      const jsonString = JSON.stringify(data, null, 2)
+      const blob = new Blob([jsonString], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${defaultName}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      
+      return true
+    } catch (error) {
+      console.error('导出工艺失败:', error)
+      return false
+    }
+  }
+
+  return {
+    // 初始化
+    initDirectories,
+    
+    // 工艺缓存
+    isProcessCached,
+    readCachedProcess,
+    saveProcessToCache,
+    clearProcessCache,
+    
+    // 暂存工艺
+    saveTempProcess,
+    getTempProcessList,
+    loadTempProcess,
+    deleteTempProcess,
+    generateTempFileName,
+    parseTempFileName,
+    
+    // 快捷检测项
+    saveQuickSteps,
+    readQuickSteps,
+    
+    // 导出
+    exportProcessToFile
+  }
+}

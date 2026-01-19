@@ -1,0 +1,46 @@
+{
+  "name": "cosl-operator-tauri",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@iconify/json": "^2.2.429",
+    "@iconify/vue": "^4.3.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-fs": "^2.4.5",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-os": "^2.3.2",
+    "@tauri-apps/plugin-store": "^2.4.2",
+    "@types/fabric": "^5.3.11",
+    "crypto-js": "^4.2.0",
+    "echarts": "^6.0.0",
+    "element-plus": "^2.13.1",
+    "fabric": "^5.5.2",
+    "tui-color-picker": "^2.2.8",
+    "tui-image-editor": "^3.15.3",
+    "vue": "^3.5.13",
+    "vue-advanced-cropper": "^2.8.9",
+    "vue-echarts": "^8.0.1",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "@tauri-apps/cli": "^2",
+    "@types/crypto-js": "^4.2.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.23",
+    "postcss": "^8.5.6",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.18",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3",
+    "vue-tsc": "^2.1.10"
+  }
+}

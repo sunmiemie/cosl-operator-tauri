@@ -1,0 +1,46 @@
+[package]
+name = "cosl-operator-tauri"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "cosl_operator_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+tauri-plugin-store = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 摄像头控制 (跨平台支持)
+image = "0.25"
+base64 = "0.22"
+parking_lot = "0.12"
+lazy_static = "1.5"
+tokio = { version = "1", features = ["time"] }
+
+# nokhwa 摄像头库 - 跨平台
+# Windows: 使用 Media Foundation
+# Linux: 使用 Video4Linux
+[target.'cfg(target_os = "windows")'.dependencies]
+nokhwa = { version = "0.10", features = ["input-msmf", "output-threaded"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nokhwa = { version = "0.10", features = ["input-v4l", "output-threaded"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nokhwa = { version = "0.10", features = ["input-avfoundation", "output-threaded"] }
