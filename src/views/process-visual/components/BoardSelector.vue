@@ -38,8 +38,8 @@ const emit = defineEmits<{
 
 // 搜索关键词
 const searchKeyword = ref('')
-// 展开的节点集合 - 使用 reactive 确保响应式
-const expandedNodes = reactive(new Set<number>())
+// 展开的节点集合 - 使用字符串键确保唯一性（格式: "parentId_nodeId" 或 "nodeId"）
+const expandedNodes = reactive(new Set<string>())
 // 选中的版本行
 const selectedRow = ref<number | null>(null)
 
@@ -69,29 +69,37 @@ function filterTree(nodes: TreeNode[], keyword: string): TreeNode[] {
 
 const filteredTreeData = computed(() => filterTree(props.treeData, searchKeyword.value))
 
+// 生成唯一的节点键
+function getNodeKey(nodeId: number, parentKey?: string): string {
+  return parentKey ? `${parentKey}_${nodeId}` : `${nodeId}`
+}
+
 // 切换节点展开状态
-function toggleNode(nodeId: number, event?: Event) {
+function toggleNode(nodeKey: string, event?: Event) {
   event?.stopPropagation()
-  if (expandedNodes.has(nodeId)) {
-    expandedNodes.delete(nodeId)
+  if (expandedNodes.has(nodeKey)) {
+    expandedNodes.delete(nodeKey)
   } else {
-    expandedNodes.add(nodeId)
+    expandedNodes.add(nodeKey)
   }
 }
 
-// 处理叶子节点点击
-function handleLeafClick(node: TreeNode) {
+// 处理电路板节点点击（第三级）
+function handleBoardClick(node: TreeNode) {
   emit('update:selectedBoardModel', node.label)
   emit('update:selectedBoardModelId', node.id)
   emit('node-click', node)
 }
 
-// 处理节点点击
-function handleNodeClick(node: TreeNode, event?: Event) {
-  if (isLeaf(node)) {
-    handleLeafClick(node)
+// 处理节点点击 - 根据层级判断行为
+// level: 1=第一级, 2=第二级, 3=第三级
+function handleNodeClick(node: TreeNode, level: number, nodeKey: string, event?: Event) {
+  if (level === 3) {
+    // 第三级是电路板，可以选中
+    handleBoardClick(node)
   } else {
-    toggleNode(node.id, event)
+    // 第一二级只能展开/收起
+    toggleNode(nodeKey, event)
   }
 }
 
@@ -108,26 +116,24 @@ function clearSelection() {
 }
 
 // 检查节点是否展开
-function isExpanded(nodeId: number): boolean {
-  return expandedNodes.has(nodeId)
+function isExpanded(nodeKey: string): boolean {
+  return expandedNodes.has(nodeKey)
 }
 
-// 检查节点是否是叶子节点
-function isLeaf(node: TreeNode): boolean {
-  return !node.children || node.children.length === 0
-}
-
-// 获取节点图标
-function getNodeIcon(node: TreeNode): string {
-  if (isLeaf(node)) {
+// 获取节点图标 - 根据层级判断
+// level: 1=第一级, 2=第二级, 3=第三级
+function getNodeIcon(nodeKey: string, level: number): string {
+  if (level === 3) {
+    // 第三级是电路板
     return 'mdi:chip'
   }
-  return isExpanded(node.id) ? 'mdi:folder-open' : 'mdi:folder'
+  // 第一二级是文件夹
+  return isExpanded(nodeKey) ? 'mdi:folder-open' : 'mdi:folder'
 }
 
 // 获取展开图标
-function getExpandIcon(nodeId: number): string {
-  return isExpanded(nodeId) ? 'mdi:chevron-down' : 'mdi:chevron-right'
+function getExpandIcon(nodeKey: string): string {
+  return isExpanded(nodeKey) ? 'mdi:chevron-down' : 'mdi:chevron-right'
 }
 </script>
 
@@ -163,110 +169,67 @@ function getExpandIcon(nodeId: number): string {
         <template v-if="isOnline">
           <!-- 递归渲染树节点 -->
           <template v-for="node in filteredTreeData" :key="node.id">
-            <!-- 第一级节点 -->
+            <!-- 第一级节点（分类文件夹） -->
             <div class="tree-node-wrapper">
               <div 
-                class="tree-node"
-                :class="{ 
-                  selected: selectedBoardModelId === node.id && isLeaf(node),
-                  leaf: isLeaf(node),
-                  parent: !isLeaf(node)
-                }"
-                :style="{ paddingLeft: '12px' }"
-                @click="handleNodeClick(node, $event)"
+                class="tree-node parent"
+                :style="{ paddingLeft: '8px' }"
+                @click="handleNodeClick(node, 1, getNodeKey(node.id), $event)"
               >
                 <!-- 展开箭头 -->
                 <button 
-                  v-if="!isLeaf(node)" 
                   class="expand-btn"
-                  @click.stop="toggleNode(node.id, $event)"
+                  @click.stop="toggleNode(getNodeKey(node.id), $event)"
                 >
-                  <Icon :icon="getExpandIcon(node.id)" class="expand-icon" />
+                  <Icon :icon="getExpandIcon(getNodeKey(node.id))" class="expand-icon" />
                 </button>
                 <!-- 节点图标 -->
                 <Icon 
-                  :icon="getNodeIcon(node)" 
-                  class="node-icon"
-                  :class="{ folder: !isLeaf(node), chip: isLeaf(node) }"
+                  :icon="getNodeIcon(getNodeKey(node.id), 1)" 
+                  class="node-icon folder"
                 />
                 <!-- 节点标签 -->
                 <span class="node-label">{{ node.label }}</span>
               </div>
 
-              <!-- 第二级子节点 -->
-              <template v-if="!isLeaf(node) && isExpanded(node.id) && node.children">
-                <template v-for="child in node.children" :key="child.id">
+              <!-- 第二级子节点（分类文件夹） -->
+              <template v-if="isExpanded(getNodeKey(node.id)) && node.children">
+                <template v-for="child in node.children" :key="`${node.id}_${child.id}`">
                   <div class="tree-node-wrapper">
                     <div 
-                      class="tree-node"
-                      :class="{ 
-                        selected: selectedBoardModelId === child.id && isLeaf(child),
-                        leaf: isLeaf(child),
-                        parent: !isLeaf(child)
-                      }"
-                      :style="{ paddingLeft: '32px' }"
-                      @click="handleNodeClick(child, $event)"
+                      class="tree-node parent"
+                      :style="{ paddingLeft: '28px' }"
+                      @click="handleNodeClick(child, 2, getNodeKey(child.id, getNodeKey(node.id)), $event)"
                     >
                       <button 
-                        v-if="!isLeaf(child)" 
                         class="expand-btn"
-                        @click.stop="toggleNode(child.id, $event)"
+                        @click.stop="toggleNode(getNodeKey(child.id, getNodeKey(node.id)), $event)"
                       >
-                        <Icon :icon="getExpandIcon(child.id)" class="expand-icon" />
+                        <Icon :icon="getExpandIcon(getNodeKey(child.id, getNodeKey(node.id)))" class="expand-icon" />
                       </button>
                       <Icon 
-                        :icon="getNodeIcon(child)" 
-                        class="node-icon"
-                        :class="{ folder: !isLeaf(child), chip: isLeaf(child) }"
+                        :icon="getNodeIcon(getNodeKey(child.id, getNodeKey(node.id)), 2)" 
+                        class="node-icon folder"
                       />
                       <span class="node-label">{{ child.label }}</span>
                     </div>
 
-                    <!-- 第三级子节点 -->
-                    <template v-if="!isLeaf(child) && isExpanded(child.id) && child.children">
-                      <template v-for="grandChild in child.children" :key="grandChild.id">
-                        <div class="tree-node-wrapper">
-                          <div 
-                            class="tree-node"
-                            :class="{ 
-                              selected: selectedBoardModelId === grandChild.id && isLeaf(grandChild),
-                              leaf: isLeaf(grandChild),
-                              parent: !isLeaf(grandChild)
-                            }"
-                            :style="{ paddingLeft: '52px' }"
-                            @click="handleNodeClick(grandChild, $event)"
-                          >
-                            <button 
-                              v-if="!isLeaf(grandChild)" 
-                              class="expand-btn"
-                              @click.stop="toggleNode(grandChild.id, $event)"
-                            >
-                              <Icon :icon="getExpandIcon(grandChild.id)" class="expand-icon" />
-                            </button>
-                            <Icon 
-                              :icon="getNodeIcon(grandChild)" 
-                              class="node-icon"
-                              :class="{ folder: !isLeaf(grandChild), chip: isLeaf(grandChild) }"
-                            />
-                            <span class="node-label">{{ grandChild.label }}</span>
-                          </div>
-
-                          <!-- 第四级子节点 -->
-                          <template v-if="!isLeaf(grandChild) && isExpanded(grandChild.id) && grandChild.children">
-                            <div 
-                              v-for="greatGrandChild in grandChild.children" 
-                              :key="greatGrandChild.id"
-                              class="tree-node leaf"
-                              :class="{ selected: selectedBoardModelId === greatGrandChild.id }"
-                              :style="{ paddingLeft: '72px' }"
-                              @click="handleLeafClick(greatGrandChild)"
-                            >
-                              <Icon icon="mdi:chip" class="node-icon chip" />
-                              <span class="node-label">{{ greatGrandChild.label }}</span>
-                            </div>
-                          </template>
-                        </div>
-                      </template>
+                    <!-- 第三级子节点（电路板，可选中） -->
+                    <template v-if="isExpanded(getNodeKey(child.id, getNodeKey(node.id))) && child.children">
+                      <div 
+                        v-for="grandChild in child.children" 
+                        :key="`${node.id}_${child.id}_${grandChild.id}`"
+                        class="tree-node leaf"
+                        :class="{ selected: selectedBoardModelId === grandChild.id }"
+                        :style="{ paddingLeft: '72px' }"
+                        @click="handleNodeClick(grandChild, 3, getNodeKey(grandChild.id, getNodeKey(child.id, getNodeKey(node.id))), $event)"
+                      >
+                        <Icon 
+                          :icon="getNodeIcon(getNodeKey(grandChild.id, getNodeKey(child.id, getNodeKey(node.id))), 3)" 
+                          class="node-icon chip"
+                        />
+                        <span class="node-label">{{ grandChild.label }}</span>
+                      </div>
                     </template>
                   </div>
                 </template>

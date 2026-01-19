@@ -335,7 +335,7 @@ function closeUserMenu() {
 }
 
 .control-btn {
-  width: 40px;
+  width: 48px;
   height: 100%;
   border: none;
   background: transparent;
