@@ -23,16 +23,6 @@ appWindow.onResized(async () => {
   isMaximized.value = await appWindow.isMaximized()
 })
 
-// 窗口控制方法
-async function minimizeWindow() {
-  await appWindow.minimize()
-}
-
-async function toggleMaximize() {
-  await appWindow.toggleMaximize()
-  isMaximized.value = await appWindow.isMaximized()
-}
-
 async function closeWindow() {
   await appWindow.close()
 }
@@ -49,12 +39,6 @@ async function closeWindow() {
       
       <!-- 窗口控制按钮 -->
       <div class="window-controls">
-        <button class="control-btn minimize" @click="minimizeWindow" title="最小化">
-          <Icon icon="mdi:minus" />
-        </button>
-        <button class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
-          <Icon :icon="isMaximized ? 'mdi:window-restore' : 'mdi:window-maximize'" />
-        </button>
         <button class="control-btn close" @click="closeWindow" title="关闭">
           <Icon icon="mdi:close" />
         </button>
