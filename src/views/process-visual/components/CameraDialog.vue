@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { useCamera, type PhotoResult } from '@/composables/useCamera'
-import { useConfig } from '@/composables/useConfig'
+import { useConfig, type XrayCropArea } from '@/composables/useConfig'
 
 // 定义 props
 interface Props {
@@ -39,8 +39,22 @@ const deviceIndex = computed(() => {
   }
 })
 
+// 判断是否启用了 X-Ray 裁剪
+const isXrayCropEnabled = computed(() => {
+  return props.deviceType === 'xray' && config.value.xrayCropArea?.enabled
+})
+
+// 获取 X-Ray 裁剪配置
+const xrayCropArea = computed(() => config.value.xrayCropArea)
+
 // 视频元素引用
 const videoRef = ref<HTMLVideoElement | null>(null)
+
+// Canvas 引用（用于 X-Ray 裁剪预览）
+const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
+
+// 动画帧 ID
+let animationFrameId: number | null = null
 
 // 已拍摄的照片
 const capturedPhotos = ref<PhotoResult[]>([])
@@ -51,6 +65,7 @@ const showPreview = ref(false)
 
 // 关闭对话框
 function closeDialog() {
+  stopCropDrawLoop()
   camera.stopCamera()
   capturedPhotos.value = []
   emit('update:visible', false)
@@ -69,6 +84,112 @@ async function initCamera() {
   // 使用配置的设备索引启动摄像头
   const index = deviceIndex.value >= 0 ? deviceIndex.value : 0
   await camera.startCamera(index)
+  
+  // 如果是 X-Ray 且启用了裁剪，启动裁剪绘制循环
+  if (isXrayCropEnabled.value) {
+    startCropDrawLoop()
+  }
+}
+
+// 启动裁剪绘制循环
+function startCropDrawLoop() {
+  if (animationFrameId) return
+  drawCroppedFrame()
+}
+
+// 停止裁剪绘制循环
+function stopCropDrawLoop() {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId)
+    animationFrameId = null
+  }
+}
+
+// 绘制裁剪后的帧到 canvas
+function drawCroppedFrame() {
+  if (!props.visible || !isXrayCropEnabled.value) {
+    animationFrameId = null
+    return
+  }
+  
+  const canvas = cropCanvasRef.value
+  const cropConfig = xrayCropArea.value
+  const frameData = camera.currentFrame.value
+  
+  // 使用 camera.currentFrame 而不是 video 元素（Tauri 模式）
+  if (canvas && cropConfig && frameData) {
+    const img = new Image()
+    img.onload = () => {
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // 计算裁剪区域
+        const { sx, sy, sw, sh } = calculateCropRegion(img.width, img.height, cropConfig)
+        
+        // 设置 canvas 尺寸为裁剪后的尺寸
+        canvas.width = sw
+        canvas.height = sh
+        
+        // 绘制裁剪后的画面
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+      }
+    }
+    img.src = frameData
+  }
+  
+  animationFrameId = requestAnimationFrame(drawCroppedFrame)
+}
+
+// 计算裁剪区域（像素坐标）
+function calculateCropRegion(videoWidth: number, videoHeight: number, cropConfig: XrayCropArea) {
+  // 确保裁剪边界有效
+  const wMin = Math.min(cropConfig.w[0], cropConfig.w[1])
+  const wMax = Math.max(cropConfig.w[0], cropConfig.w[1])
+  const hMin = Math.min(cropConfig.h[0], cropConfig.h[1])
+  const hMax = Math.max(cropConfig.h[0], cropConfig.h[1])
+  
+  // 计算裁剪尺寸
+  let sw = wMax - wMin
+  let sh = hMax - hMin
+  
+  // 如果裁剪区域无效（宽度或高度为0），返回整个画面
+  if (sw <= 0 || sh <= 0) {
+    return { sx: 0, sy: 0, sw: videoWidth, sh: videoHeight }
+  }
+  
+  // 限制在视频尺寸范围内
+  const sx = Math.max(0, Math.min(wMin, videoWidth))
+  const sy = Math.max(0, videoHeight - Math.min(hMax, videoHeight))
+  sw = Math.min(sw, videoWidth - sx)
+  sh = Math.min(sh, videoHeight - sy)
+  
+  // 再次验证
+  if (sw <= 0 || sh <= 0) {
+    return { sx: 0, sy: 0, sw: videoWidth, sh: videoHeight }
+  }
+  
+  return { sx, sy, sw, sh }
+}
+
+// 裁剪图片（将 dataUrl 裁剪后返回）
+function cropImage(dataUrl: string, cropConfig: XrayCropArea): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const { sx, sy, sw, sh } = calculateCropRegion(img.width, img.height, cropConfig)
+      
+      const canvas = document.createElement('canvas')
+      canvas.width = sw
+      canvas.height = sh
+      
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+      }
+      
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.src = dataUrl
+  })
 }
 
 // 拍照
@@ -76,12 +197,18 @@ async function handleTakePhoto() {
   const photo = await camera.takePhoto()
   if (!photo) return
   
+  // 如果是 X-Ray 且启用了裁剪，对照片进行裁剪
+  let finalDataUrl = photo.dataUrl
+  if (isXrayCropEnabled.value && xrayCropArea.value) {
+    finalDataUrl = await cropImage(photo.dataUrl, xrayCropArea.value)
+  }
+  
   if (props.multiMode) {
     // 多图模式：添加到列表
-    capturedPhotos.value.push(photo)
+    capturedPhotos.value.push({ ...photo, dataUrl: finalDataUrl })
   } else {
     // 单图模式：直接返回
-    emit('photo-taken', photo.dataUrl)
+    emit('photo-taken', finalDataUrl)
     closeDialog()
   }
 }
@@ -137,6 +264,7 @@ onMounted(async () => {
 
 // 组件卸载时清理
 onUnmounted(() => {
+  stopCropDrawLoop()
   camera.stopCamera()
 })
 </script>
@@ -177,14 +305,21 @@ onUnmounted(() => {
                 </button>
               </div>
               
-              <!-- 视频预览 -->
+              <!-- 视频预览（非 X-Ray 或未启用裁剪时显示） -->
               <video 
                 ref="videoRef"
                 class="camera-video"
-                :class="{ hidden: camera.isLoading.value || camera.error.value }"
+                :class="{ hidden: camera.isLoading.value || camera.error.value || isXrayCropEnabled }"
                 autoplay
                 playsinline
                 muted
+              />
+              
+              <!-- 裁剪后的 Canvas 预览（X-Ray 启用裁剪时显示） -->
+              <canvas
+                v-show="isXrayCropEnabled && camera.isActive.value && !camera.isLoading.value && !camera.error.value"
+                ref="cropCanvasRef"
+                class="cropped-canvas"
               />
               
               <!-- 摄像头控制 -->
@@ -406,7 +541,20 @@ onUnmounted(() => {
 }
 
 .camera-video.hidden {
-  display: none;
+  /* 使用 position absolute + opacity 0 而不是 display none，
+     这样视频流仍然可以正常运行，只是不显示 */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cropped-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
 }
 
 .camera-controls {

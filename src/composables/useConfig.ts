@@ -10,6 +10,13 @@ const CONFIG_CHANGE_EVENT = 'config-changed'
 // 配置文件名
 const CONFIG_FILE = 'settings.json'
 
+// X-Ray 裁剪区域配置接口
+export interface XrayCropArea {
+  w: [number, number]  // 水平裁剪范围 [左边界, 右边界]
+  h: [number, number]  // 垂直裁剪范围 [下边界, 上边界]
+  enabled: boolean     // 是否启用裁剪
+}
+
 // 配置接口
 export interface AppConfig {
   // 连接设置
@@ -27,6 +34,9 @@ export interface AppConfig {
   planeDevice: number      // 水平仪摄像头索引
   xrayDevice: number       // X光机摄像头索引
   
+  // X-Ray 裁剪区域设置
+  xrayCropArea: XrayCropArea
+  
   // 离线功能设置
   dataDir: string          // 离线数据存储目录
   autoSave: boolean        // 测试过程自动保存
@@ -43,6 +53,12 @@ const defaultConfig: AppConfig = {
   microDevice: -1,
   planeDevice: -1,
   xrayDevice: -1,
+  // X-Ray 裁剪区域默认值（默认不启用，使用全画面）
+  xrayCropArea: {
+    w: [0, 1920],    // 默认水平范围
+    h: [0, 1080],    // 默认垂直范围
+    enabled: false   // 默认不启用裁剪
+  },
   // 离线功能默认值
   dataDir: '',
   autoSave: true,
@@ -88,6 +104,7 @@ export async function initializeConfig(): Promise<AppConfig> {
       const microDevice = await store.get<number>('microDevice')
       const planeDevice = await store.get<number>('planeDevice')
       const xrayDevice = await store.get<number>('xrayDevice')
+      const xrayCropArea = await store.get<XrayCropArea>('xrayCropArea')
       const dataDir = await store.get<string>('dataDir')
       const autoSave = await store.get<boolean>('autoSave')
       const autoReUpload = await store.get<boolean>('autoReUpload')
@@ -126,6 +143,10 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('xrayDevice', defaultConfig.xrayDevice)
         needsSave = true
       }
+      if (xrayCropArea === null || xrayCropArea === undefined) {
+        await store.set('xrayCropArea', defaultConfig.xrayCropArea)
+        needsSave = true
+      }
       
       // 离线功能配置
       if (dataDir === null || dataDir === undefined) {
@@ -156,6 +177,7 @@ export async function initializeConfig(): Promise<AppConfig> {
         microDevice: microDevice ?? defaultConfig.microDevice,
         planeDevice: planeDevice ?? defaultConfig.planeDevice,
         xrayDevice: xrayDevice ?? defaultConfig.xrayDevice,
+        xrayCropArea: xrayCropArea ?? defaultConfig.xrayCropArea,
         dataDir: dataDir ?? defaultConfig.dataDir,
         autoSave: autoSave ?? defaultConfig.autoSave,
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,

@@ -212,8 +212,8 @@ export function useWindow() {
     return await createModalWindow(
       '设置',
       WindowLabel.SETTINGS,
-      720,
-      560,
+      1200,
+      900,
       WindowLabel.MAIN
     )
   }

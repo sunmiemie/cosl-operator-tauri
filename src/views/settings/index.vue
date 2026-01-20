@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import ModalLayout from '@/layouts/ModalLayout.vue'
+import XrayCropCalibration from './components/XrayCropCalibration.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useConfig } from '@/composables/useConfig'
 import { useCamera, type CameraDevice } from '@/composables/useCamera'
@@ -44,6 +45,17 @@ const autoStart = ref(false)
 // 摄像头预览
 const previewDevice = ref<string | null>(null)
 const isPreviewOpen = ref(false)
+const previewVideo = ref<HTMLVideoElement | null>(null)
+const previewCanvasRef = ref<HTMLCanvasElement | null>(null)
+let previewAnimationId: number | null = null
+
+// X-Ray 区域校准
+const showXrayCropCalibration = ref(false)
+
+// 判断是否启用了 X-Ray 裁剪预览
+const isXrayPreviewWithCrop = computed(() => {
+  return previewDevice.value === 'xray' && config.value.xrayCropArea?.enabled
+})
 
 // 配置是否已加载（防止 watch 在初始化时触发保存）
 const configLoaded = ref(false)
@@ -213,14 +225,102 @@ async function previewCamera(deviceType: 'micro' | 'plane' | 'xray') {
   if (!success) {
     console.error('启动摄像头失败:', camera.error.value)
   }
+  
+  // 等待 DOM 更新后绑定 video 元素
+  await nextTick()
+  if (previewVideo.value) {
+    camera.bindVideoElement(previewVideo.value)
+  }
+  
+  // 如果是 X-Ray 且启用了裁剪，启动裁剪绘制循环
+  if (deviceType === 'xray' && config.value.xrayCropArea?.enabled) {
+    startPreviewCropLoop()
+  }
 }
 
 // 关闭预览
 async function closePreview() {
+  stopPreviewCropLoop()
   await camera.stopCamera()
   isPreviewOpen.value = false
   previewDevice.value = null
 }
+
+// 启动预览裁剪绘制循环
+function startPreviewCropLoop() {
+  if (previewAnimationId) return
+  drawPreviewCroppedFrame()
+}
+
+// 停止预览裁剪绘制循环
+function stopPreviewCropLoop() {
+  if (previewAnimationId) {
+    cancelAnimationFrame(previewAnimationId)
+    previewAnimationId = null
+  }
+}
+
+// 绘制裁剪后的预览帧
+function drawPreviewCroppedFrame() {
+  if (!isPreviewOpen.value || !isXrayPreviewWithCrop.value) {
+    previewAnimationId = null
+    return
+  }
+  
+  const canvas = previewCanvasRef.value
+  const cropConfig = config.value.xrayCropArea
+  const frameData = camera.currentFrame.value
+  
+  if (canvas && cropConfig && frameData) {
+    const img = new Image()
+    img.onload = () => {
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // 计算裁剪区域
+        const wMin = Math.min(cropConfig.w[0], cropConfig.w[1])
+        const wMax = Math.max(cropConfig.w[0], cropConfig.w[1])
+        const hMin = Math.min(cropConfig.h[0], cropConfig.h[1])
+        const hMax = Math.max(cropConfig.h[0], cropConfig.h[1])
+        
+        let sw = wMax - wMin
+        let sh = hMax - hMin
+        
+        // 如果裁剪区域无效，显示整个画面
+        if (sw <= 0 || sh <= 0) {
+          canvas.width = img.width
+          canvas.height = img.height
+          ctx.drawImage(img, 0, 0)
+        } else {
+          const sx = Math.max(0, Math.min(wMin, img.width))
+          const sy = Math.max(0, img.height - Math.min(hMax, img.height))
+          sw = Math.min(sw, img.width - sx)
+          sh = Math.min(sh, img.height - sy)
+          
+          canvas.width = sw
+          canvas.height = sh
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+        }
+      }
+    }
+    img.src = frameData
+  }
+  
+  previewAnimationId = requestAnimationFrame(drawPreviewCroppedFrame)
+}
+
+// 监听摄像头激活状态，绑定 video 元素
+watch(() => camera.isActive.value, async (isActive) => {
+  if (isActive && isPreviewOpen.value) {
+    await nextTick()
+    if (previewVideo.value) {
+      camera.bindVideoElement(previewVideo.value)
+    }
+    // 如果是 X-Ray 且启用了裁剪，启动裁剪绘制循环
+    if (isXrayPreviewWithCrop.value) {
+      startPreviewCropLoop()
+    }
+  }
+})
 
 // 监听设备选择变化 - 只在配置加载完成后才保存
 watch(microDevice, (val) => {
@@ -416,6 +516,14 @@ const languageOptions = [
               >
                 <Icon icon="mdi:eye" />
               </button>
+              <button 
+                class="preview-btn calibration-btn"
+                :disabled="xrayDevice < 0"
+                @click="showXrayCropCalibration = true"
+                title="区域校准"
+              >
+                <Icon icon="mdi:crop" />
+              </button>
             </div>
           </div>
         </div>
@@ -581,8 +689,15 @@ const languageOptions = [
               </button>
             </div>
             <div class="preview-content">
+              <!-- X-Ray 裁剪预览 Canvas -->
+              <canvas
+                v-if="isXrayPreviewWithCrop && camera.isActive.value"
+                ref="previewCanvasRef"
+                class="preview-canvas"
+              ></canvas>
+              <!-- 普通视频预览 -->
               <video 
-                v-if="camera.isActive.value"
+                v-else-if="camera.isActive.value"
                 ref="previewVideo"
                 autoplay
                 playsinline
@@ -598,6 +713,12 @@ const languageOptions = [
         </div>
       </Transition>
     </Teleport>
+
+    <!-- X-Ray 区域校准对话框 -->
+    <XrayCropCalibration 
+      v-model:visible="showXrayCropCalibration"
+      :xray-device-index="xrayDevice"
+    />
   </ModalLayout>
 </template>
 
@@ -1024,6 +1145,13 @@ const languageOptions = [
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.preview-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
 }
 
 .preview-placeholder {

@@ -8,7 +8,7 @@ import { Cropper } from 'vue-advanced-cropper'
 import 'vue-advanced-cropper/dist/style.css'
 import { Icon } from '@iconify/vue'
 import { useCamera } from '@/composables/useCamera'
-import { useConfig } from '@/composables/useConfig'
+import { useConfig, type XrayCropArea } from '@/composables/useConfig'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
@@ -41,6 +41,14 @@ const deviceIndex = computed(() => {
     default: return 0
   }
 })
+
+// 判断是否启用了 X-Ray 裁剪
+const isXrayCropEnabled = computed(() => {
+  return props.deviceType === 'xray' && config.value.xrayCropArea?.enabled
+})
+
+// 获取 X-Ray 裁剪配置
+const xrayCropArea = computed(() => config.value.xrayCropArea)
 
 // 裁剪器引用
 const cropperRef = ref<InstanceType<typeof Cropper> | null>(null)
@@ -96,6 +104,53 @@ async function releaseCamera() {
   await camera.stopCamera()
 }
 
+// 计算 X-Ray 裁剪区域（像素坐标）
+function calculateXrayCropRegion(imgWidth: number, imgHeight: number, cropConfig: XrayCropArea) {
+  // 确保裁剪边界有效
+  const wMin = Math.min(cropConfig.w[0], cropConfig.w[1])
+  const wMax = Math.max(cropConfig.w[0], cropConfig.w[1])
+  const hMin = Math.min(cropConfig.h[0], cropConfig.h[1])
+  const hMax = Math.max(cropConfig.h[0], cropConfig.h[1])
+  
+  // 计算裁剪尺寸
+  let sw = wMax - wMin
+  let sh = hMax - hMin
+  
+  // 如果裁剪区域无效（宽度或高度为0），返回整个画面
+  if (sw <= 0 || sh <= 0) {
+    return { sx: 0, sy: 0, sw: imgWidth, sh: imgHeight }
+  }
+  
+  // 限制在图像尺寸范围内
+  const sx = Math.max(0, Math.min(wMin, imgWidth))
+  const sy = Math.max(0, imgHeight - Math.min(hMax, imgHeight))
+  sw = Math.min(sw, imgWidth - sx)
+  sh = Math.min(sh, imgHeight - sy)
+  
+  // 再次验证
+  if (sw <= 0 || sh <= 0) {
+    return { sx: 0, sy: 0, sw: imgWidth, sh: imgHeight }
+  }
+  
+  return { sx, sy, sw, sh }
+}
+
+// 对图像应用 X-Ray 裁剪
+function applyXrayCrop(img: HTMLImageElement, cropConfig: XrayCropArea): HTMLCanvasElement {
+  const { sx, sy, sw, sh } = calculateXrayCropRegion(img.width, img.height, cropConfig)
+  
+  const canvas = document.createElement('canvas')
+  canvas.width = sw
+  canvas.height = sh
+  
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+  }
+  
+  return canvas
+}
+
 // 绘制带辅助线的帧
 function drawFrameWithGuidelines(frameDataUrl: string) {
   const canvas = canvasRef.value
@@ -106,18 +161,30 @@ function drawFrameWithGuidelines(frameDataUrl: string) {
   
   const img = new Image()
   img.onload = () => {
+    let displayWidth = img.width
+    let displayHeight = img.height
+    let sourceCanvas: HTMLCanvasElement | HTMLImageElement = img
+    
+    // 如果启用了 X-Ray 裁剪，先应用裁剪
+    if (isXrayCropEnabled.value && xrayCropArea.value) {
+      const croppedCanvas = applyXrayCrop(img, xrayCropArea.value)
+      sourceCanvas = croppedCanvas
+      displayWidth = croppedCanvas.width
+      displayHeight = croppedCanvas.height
+    }
+    
     // 更新画布尺寸
-    canvas.width = img.width
-    canvas.height = img.height
+    canvas.width = displayWidth
+    canvas.height = displayHeight
     
     // 更新滑块最大值
-    if (sliderMax.value !== img.width) {
-      sliderMax.value = img.width
-      sliderRange.value = [0, img.width]
+    if (sliderMax.value !== displayWidth) {
+      sliderMax.value = displayWidth
+      sliderRange.value = [0, displayWidth]
     }
     
     // 绘制图像
-    ctx.drawImage(img, 0, 0, img.width, img.height)
+    ctx.drawImage(sourceCanvas, 0, 0, displayWidth, displayHeight)
     
     // 绘制裁剪辅助线
     ctx.strokeStyle = '#ff0000'
@@ -148,14 +215,27 @@ async function takePhoto() {
   
   const img = new Image()
   img.onload = () => {
+    // 确定要裁剪的图像源
+    let sourceWidth = img.width
+    let sourceHeight = img.height
+    let sourceCanvas: HTMLCanvasElement | HTMLImageElement = img
+    
+    // 如果启用了 X-Ray 裁剪，先应用裁剪
+    if (isXrayCropEnabled.value && xrayCropArea.value) {
+      const croppedCanvas = applyXrayCrop(img, xrayCropArea.value)
+      sourceCanvas = croppedCanvas
+      sourceWidth = croppedCanvas.width
+      sourceHeight = croppedCanvas.height
+    }
+    
     const x = sliderRange.value[0]
     const width = sliderRange.value[1] - sliderRange.value[0]
     
     tempCanvas.width = width
-    tempCanvas.height = img.height
+    tempCanvas.height = sourceHeight
     
     // 只裁剪辅助线之间的区域
-    tempCtx.drawImage(img, x, 0, width, img.height, 0, 0, width, img.height)
+    tempCtx.drawImage(sourceCanvas, x, 0, width, sourceHeight, 0, 0, width, sourceHeight)
     
     const croppedUrl = tempCanvas.toDataURL('image/png')
     
