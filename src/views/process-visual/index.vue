@@ -154,11 +154,59 @@ function handleUploadImage() {
   input.click()
 }
 
+// 计算图片在容器中的实际位置和缩放比例
+function getImageDisplayInfo() {
+  if (!imageRef.value) return null
+  
+  const imgEl = imageRef.value
+  const containerEl = imgEl.parentElement
+  if (!containerEl) return null
+  
+  // 图片原始尺寸
+  const naturalWidth = imgEl.naturalWidth
+  const naturalHeight = imgEl.naturalHeight
+  
+  // 容器尺寸
+  const containerWidth = containerEl.clientWidth
+  const containerHeight = containerEl.clientHeight
+  
+  // 计算图片在容器中的实际显示尺寸（object-fit: contain）
+  const imgRatio = naturalWidth / naturalHeight
+  const containerRatio = containerWidth / containerHeight
+  
+  let displayWidth: number, displayHeight: number
+  if (imgRatio > containerRatio) {
+    // 图片更宽，以宽度为准
+    displayWidth = containerWidth
+    displayHeight = containerWidth / imgRatio
+  } else {
+    // 图片更高，以高度为准
+    displayHeight = containerHeight
+    displayWidth = containerHeight * imgRatio
+  }
+  
+  // 计算图片在容器中的偏移（居中显示）
+  const offsetX = (containerWidth - displayWidth) / 2
+  const offsetY = (containerHeight - displayHeight) / 2
+  
+  // 计算从显示尺寸到原始尺寸的缩放比例
+  const scaleX = naturalWidth / displayWidth
+  const scaleY = naturalHeight / displayHeight
+  
+  return { offsetX, offsetY, displayWidth, displayHeight, scaleX, scaleY }
+}
+
 // 截取分区
 function handleCutArea() {
   const totalUrl = process.currentTotal.value.url
   if (!totalUrl) {
     ElMessage.warning('请先上传整体图片')
+    return
+  }
+  
+  const displayInfo = getImageDisplayInfo()
+  if (!displayInfo) {
+    ElMessage.warning('无法获取图片信息')
     return
   }
   
@@ -169,12 +217,15 @@ function handleCutArea() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     
-    // 计算实际裁剪区域
-    const scaleX = img.width / (imageRef.value?.clientWidth || img.width)
-    const scaleY = img.height / (imageRef.value?.clientHeight || img.height)
+    const { offsetX, offsetY, scaleX, scaleY } = displayInfo
     
-    const actualX = cropBox.value.x * scaleX
-    const actualY = cropBox.value.y * scaleY
+    // cropBox 坐标是相对于容器的，需要减去图片偏移量得到相对于图片的坐标
+    const relativeX = cropBox.value.x - offsetX
+    const relativeY = cropBox.value.y - offsetY
+    
+    // 转换为原始图片上的坐标
+    const actualX = Math.max(0, relativeX * scaleX)
+    const actualY = Math.max(0, relativeY * scaleY)
     const actualWidth = cropBox.value.width * scaleX
     const actualHeight = cropBox.value.height * scaleY
     
@@ -194,17 +245,24 @@ function handleReplaceArea(areaId: number) {
   const totalUrl = process.currentTotal.value.url
   if (!totalUrl) return
   
+  const displayInfo = getImageDisplayInfo()
+  if (!displayInfo) return
+  
   const img = new Image()
   img.onload = () => {
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     
-    const scaleX = img.width / (imageRef.value?.clientWidth || img.width)
-    const scaleY = img.height / (imageRef.value?.clientHeight || img.height)
+    const { offsetX, offsetY, scaleX, scaleY } = displayInfo
     
-    const actualX = cropBox.value.x * scaleX
-    const actualY = cropBox.value.y * scaleY
+    // cropBox 坐标是相对于容器的，需要减去图片偏移量得到相对于图片的坐标
+    const relativeX = cropBox.value.x - offsetX
+    const relativeY = cropBox.value.y - offsetY
+    
+    // 转换为原始图片上的坐标
+    const actualX = Math.max(0, relativeX * scaleX)
+    const actualY = Math.max(0, relativeY * scaleY)
     const actualWidth = cropBox.value.width * scaleX
     const actualHeight = cropBox.value.height * scaleY
     
@@ -1234,7 +1292,7 @@ onMounted(() => {
 
     <!-- 底部操作栏 -->
     <div class="bottom-bar">
-      <!-- 选择页面 -->
+      <!-- 选择页面 (步骤 -1) -->
       <template v-if="process.currentStep.value === -1">
         <!-- 离线模式: 导入按钮 -->
         <button 
@@ -1257,10 +1315,15 @@ onMounted(() => {
         </button>
       </template>
 
-      <!-- 编辑页面 -->
-      <template v-else>
+      <!-- 步骤 1: 图片分区 -->
+      <template v-else-if="process.currentStep.value === 1">
         <div class="bottom-left">
-          <button class="secondary-btn" @click="process.prevStep">
+          <!-- 上一步：仅在弓曲度检查或背面流程时显示 -->
+          <button 
+            v-if="process.showPlane.value || process.currentProcess.value === 'eyesBak'"
+            class="secondary-btn" 
+            @click="process.prevStep"
+          >
             <Icon icon="mdi:arrow-left" />
             上一步
           </button>
@@ -1271,7 +1334,7 @@ onMounted(() => {
             暂存
           </button>
           
-          <!-- 修改意见按钮 (待修改状态时显示) -->
+          <!-- 修改意见按钮 -->
           <el-popover 
             v-if="process.showFeedback.value && process.feedbackList.value.length > 0"
             placement="top" 
@@ -1296,20 +1359,9 @@ onMounted(() => {
             </div>
           </el-popover>
           
-          <!-- 快捷检测项按钮 (仅在步骤2/3显示) -->
-          <button 
-            v-if="process.currentStep.value === 2 || process.currentStep.value === 3" 
-            class="secondary-btn"
-            @click="handleOpenQuickSelector"
-            title="快捷检测项"
-          >
-            <Icon icon="mdi:lightning-bolt" />
-            快捷
-          </button>
-          
-          <!-- 拍照按钮下拉菜单 (仅在步骤1/2显示) -->
+          <!-- 拍照按钮：仅在非弓曲度检查或背面流程时显示 -->
           <div 
-            v-if="process.currentStep.value === 1 || process.currentStep.value === 2" 
+            v-if="!process.showPlane.value || process.currentProcess.value === 'eyesBak'" 
             class="photo-dropdown"
           >
             <button 
@@ -1336,37 +1388,193 @@ onMounted(() => {
         </div>
         
         <div class="bottom-right">
-          <template v-if="process.currentStep.value < 4">
-            <button 
-              class="primary-btn" 
-              @click="process.nextStep"
-              :disabled="process.currentStep.value === 1 && process.currentArea.value.length === 0"
-            >
-              下一步
-              <Icon icon="mdi:arrow-right" />
-            </button>
-          </template>
+          <button 
+            class="primary-btn" 
+            @click="process.nextStep"
+            :disabled="!process.showPlane.value && (process.currentArea.value.length === 0 || !process.currentTotal.value.url)"
+          >
+            下一步
+            <Icon icon="mdi:arrow-right" />
+          </button>
+        </div>
+      </template>
+
+      <!-- 步骤 2: 整体流程 -->
+      <template v-else-if="process.currentStep.value === 2">
+        <div class="bottom-left">
+          <button class="secondary-btn" @click="process.prevStep">
+            <Icon icon="mdi:arrow-left" />
+            上一步
+          </button>
           
-          <template v-else>
-            <!-- 导出按钮 -->
-            <button class="secondary-btn" @click="handleExportProcess">
-              <Icon icon="mdi:download-outline" />
-              导出
-            </button>
-            
-            <!-- 上传按钮 -->
-            <button 
-              class="primary-btn success"
-              :disabled="process.isUploading.value"
-              @click="handleUpload"
-            >
-              <Icon v-if="process.isUploading.value" icon="mdi:loading" class="spin" />
-              <template v-else>
-                {{ process.isEdit.value ? '完成修改并上传' : '完成并上传' }}
-                <Icon icon="mdi:cloud-upload" />
-              </template>
-            </button>
-          </template>
+          <!-- 暂存按钮 -->
+          <button class="secondary-btn" @click="handleSaveTempProcess" title="暂存到本地">
+            <Icon icon="mdi:content-save-outline" />
+            暂存
+          </button>
+          
+          <!-- 修改意见按钮 -->
+          <el-popover 
+            v-if="process.showFeedback.value && process.feedbackList.value.length > 0"
+            placement="top" 
+            :width="Math.min(process.feedbackList.value.length * 320, 960)"
+            trigger="click"
+          >
+            <template #reference>
+              <button class="secondary-btn danger" title="查看修改意见">
+                <Icon icon="mdi:lightbulb-on-outline" />
+                修改意见
+              </button>
+            </template>
+            <div class="feedback-list">
+              <div 
+                v-for="(item, index) in process.feedbackList.value" 
+                :key="index"
+                class="feedback-item"
+              >
+                <div class="feedback-header">第{{ index + 1 }}次审核意见</div>
+                <div class="feedback-content">{{ item }}</div>
+              </div>
+            </div>
+          </el-popover>
+          
+          <!-- 快捷检测项按钮 -->
+          <button 
+            class="secondary-btn"
+            @click="handleOpenQuickSelector"
+            title="快捷检测项"
+          >
+            <Icon icon="mdi:lightning-bolt" />
+            快捷
+          </button>
+        </div>
+        
+        <div class="bottom-right">
+          <button class="primary-btn" @click="process.nextStep">
+            下一步
+            <Icon icon="mdi:arrow-right" />
+          </button>
+        </div>
+      </template>
+
+      <!-- 步骤 3: 分区流程 -->
+      <template v-else-if="process.currentStep.value === 3">
+        <div class="bottom-left">
+          <button class="secondary-btn" @click="process.prevStep">
+            <Icon icon="mdi:arrow-left" />
+            上一步
+          </button>
+          
+          <!-- 暂存按钮 -->
+          <button class="secondary-btn" @click="handleSaveTempProcess" title="暂存到本地">
+            <Icon icon="mdi:content-save-outline" />
+            暂存
+          </button>
+          
+          <!-- 修改意见按钮 -->
+          <el-popover 
+            v-if="process.showFeedback.value && process.feedbackList.value.length > 0"
+            placement="top" 
+            :width="Math.min(process.feedbackList.value.length * 320, 960)"
+            trigger="click"
+          >
+            <template #reference>
+              <button class="secondary-btn danger" title="查看修改意见">
+                <Icon icon="mdi:lightbulb-on-outline" />
+                修改意见
+              </button>
+            </template>
+            <div class="feedback-list">
+              <div 
+                v-for="(item, index) in process.feedbackList.value" 
+                :key="index"
+                class="feedback-item"
+              >
+                <div class="feedback-header">第{{ index + 1 }}次审核意见</div>
+                <div class="feedback-content">{{ item }}</div>
+              </div>
+            </div>
+          </el-popover>
+          
+          <!-- 快捷检测项按钮 -->
+          <button 
+            class="secondary-btn"
+            @click="handleOpenQuickSelector"
+            title="快捷检测项"
+          >
+            <Icon icon="mdi:lightning-bolt" />
+            快捷
+          </button>
+        </div>
+        
+        <div class="bottom-right">
+          <button class="primary-btn" @click="process.nextStep">
+            下一步
+            <Icon icon="mdi:arrow-right" />
+          </button>
+        </div>
+      </template>
+
+      <!-- 步骤 4: 预览导出 -->
+      <template v-else-if="process.currentStep.value === 4">
+        <div class="bottom-left">
+          <button class="secondary-btn" @click="process.prevStep">
+            <Icon icon="mdi:arrow-left" />
+            上一步
+          </button>
+          
+          <!-- 暂存按钮 -->
+          <button class="secondary-btn" @click="handleSaveTempProcess" title="暂存到本地">
+            <Icon icon="mdi:content-save-outline" />
+            暂存
+          </button>
+          
+          <!-- 修改意见按钮 -->
+          <el-popover 
+            v-if="process.showFeedback.value && process.feedbackList.value.length > 0"
+            placement="top" 
+            :width="Math.min(process.feedbackList.value.length * 320, 960)"
+            trigger="click"
+          >
+            <template #reference>
+              <button class="secondary-btn danger" title="查看修改意见">
+                <Icon icon="mdi:lightbulb-on-outline" />
+                修改意见
+              </button>
+            </template>
+            <div class="feedback-list">
+              <div 
+                v-for="(item, index) in process.feedbackList.value" 
+                :key="index"
+                class="feedback-item"
+              >
+                <div class="feedback-header">第{{ index + 1 }}次审核意见</div>
+                <div class="feedback-content">{{ item }}</div>
+              </div>
+            </div>
+          </el-popover>
+        </div>
+        
+        <div class="bottom-right">
+          <!-- 导出按钮 -->
+          <button class="secondary-btn" @click="handleExportProcess">
+            <Icon icon="mdi:download-outline" />
+            导出
+          </button>
+          
+          <!-- 上传按钮 (仅在线模式) -->
+          <button 
+            v-if="process.isOnlineMode.value"
+            class="primary-btn success"
+            :disabled="process.isUploading.value"
+            @click="handleUpload"
+          >
+            <Icon v-if="process.isUploading.value" icon="mdi:loading" class="spin" />
+            <template v-else>
+              {{ process.isEdit.value ? '完成修改并上传' : '完成并上传' }}
+              <Icon icon="mdi:cloud-upload" />
+            </template>
+          </button>
         </div>
       </template>
     </div>

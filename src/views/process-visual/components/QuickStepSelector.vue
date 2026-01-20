@@ -19,11 +19,12 @@ withDefaults(defineProps<Props>(), {
   tableLoading: false
 })
 
-// 定义 emits
+// 定义 emits (包含 select 以兼容旧代码)
 const emit = defineEmits<{
   'update:visible': [value: boolean]
   'select-category': [id: number]
   'add-step': [name: string, desc: string]
+  'select': [item: { name: string; desc: string }]  // 兼容旧代码
 }>()
 
 // 展开的节点
@@ -64,7 +65,11 @@ function handleNodeClick(node: any) {
 
 // 添加检测项
 function handleAddStep(item: any) {
-  emit('add-step', item.name, item.operation_desc || item.desc || '')
+  const name = item.name
+  const desc = item.operation_desc || item.desc || ''
+  emit('add-step', name, desc)
+  // 同时触发 select 事件以兼容旧代码
+  emit('select', { name, desc })
 }
 
 // 截断描述

@@ -8,6 +8,10 @@ import QuickStepSelector from './QuickStepSelector.vue'
 import CameraDialog from './CameraDialog.vue'
 import MultiPhotoDialog from './MultiPhotoDialog.vue'
 import ImgEditor from './ImgEditor.vue'
+import { useProcess } from '../composables/useProcess'
+
+// 使用 process composable 获取快捷检测项数据
+const process = useProcess()
 
 // 类型定义
 interface ProcessStep {
@@ -181,10 +185,23 @@ function deletePic(id: number) {
   }
 }
 
-// 处理快捷选择结果
-function handleQuickSelect(item: { name: string; desc: string }) {
-  addQuickStep(item)
-  showQuickSelector.value = false
+// 打开快捷检测项选择器
+function handleOpenQuickSelector() {
+  showQuickSelector.value = true
+  // 如果没有加载过分类树数据，先加载
+  if (process.quickTreeData.value.length === 0) {
+    process.fetchQuickTestTree()
+  }
+}
+
+// 选择快捷检测项分类
+function handleSelectQuickCategory(categoryId: number) {
+  process.fetchQuickTestData(categoryId)
+}
+
+// 处理添加快捷检测项
+function handleAddQuickStep(name: string, desc: string) {
+  addQuickStep({ name, desc })
 }
 
 // ===== 摄像头和图片编辑相关 =====
@@ -421,7 +438,7 @@ function handleImageEditorSave(dataUrl: string) {
                       <span>检测项设置</span>
                     </div>
                     <div class="header-right">
-                      <button class="add-btn secondary" @click="showQuickSelector = true">
+                      <button class="add-btn secondary" @click="handleOpenQuickSelector">
                         <Icon icon="mdi:lightning-bolt" />
                         快捷新增
                       </button>
@@ -497,7 +514,13 @@ function handleImageEditorSave(dataUrl: string) {
     <!-- 快捷选择弹窗 -->
     <QuickStepSelector 
       v-model:visible="showQuickSelector"
-      @select="handleQuickSelect"
+      :tree-data="process.quickTreeData.value"
+      :table-data="process.quickTableData.value"
+      :tree-loading="process.quickTreeLoading.value"
+      :table-loading="process.quickTableLoading.value"
+      :selected-id="process.selectQuickId.value"
+      @select-category="handleSelectQuickCategory"
+      @add-step="handleAddQuickStep"
     />
 
     <!-- 单张拍照对话框 -->

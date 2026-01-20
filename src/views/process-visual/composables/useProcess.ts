@@ -912,34 +912,46 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       if (currentStep.value < 3) {
         currentStep.value++
       } else if (currentStep.value === 3) {
-        // 完成正面流程，询问是否创建背面检测
-        ElMessageBox.confirm(
-          '是否创建背面检测？',
-          '背面检测',
-          {
-            distinguishCancelAndClose: true,
-            confirmButtonText: '创建',
-            cancelButtonText: '跳过',
-          }
-        )
-          .then(() => {
-            // 创建背面流程 - 切换到 eyesBak，重置步骤
-            currentProcess.value = 'eyesBak'
-            stepsActivate.value = 1 // 背面流程指示器
-            currentStep.value = 1
-            showPlane.value = false
-          })
-          .catch((action) => {
-            if (action === 'cancel') {
-              // 跳过背面，清空背面数据，直接进入导出
-              processJson.value.eyesBak = {
-                total: { url: '', step: [], pic: [] },
-                area: []
-              }
-              currentStep.value = 4
-              stepsActivate.value = 2 // 导出流程指示器
+        // 完成正面流程，检查背面流程是否已有数据
+        const eyesBakData = processJson.value.eyesBak
+        const hasEyesBakData = eyesBakData.total.url || eyesBakData.area.length > 0
+        
+        if (hasEyesBakData) {
+          // 背面已有数据（编辑模式），直接进入背面流程编辑，不再提示
+          currentProcess.value = 'eyesBak'
+          stepsActivate.value = 1
+          currentStep.value = 1
+          showPlane.value = false
+        } else {
+          // 背面无数据，询问是否创建背面检测
+          ElMessageBox.confirm(
+            '是否创建背面检测？',
+            '背面检测',
+            {
+              distinguishCancelAndClose: true,
+              confirmButtonText: '创建',
+              cancelButtonText: '跳过',
             }
-          })
+          )
+            .then(() => {
+              // 创建背面流程 - 切换到 eyesBak，重置步骤
+              currentProcess.value = 'eyesBak'
+              stepsActivate.value = 1 // 背面流程指示器
+              currentStep.value = 1
+              showPlane.value = false
+            })
+            .catch((action) => {
+              if (action === 'cancel') {
+                // 跳过背面，清空背面数据，直接进入导出
+                processJson.value.eyesBak = {
+                  total: { url: '', step: [], pic: [] },
+                  area: []
+                }
+                currentStep.value = 4
+                stepsActivate.value = 2 // 导出流程指示器
+              }
+            })
+        }
       }
     } else if (currentProcess.value === 'eyesBak') {
       // 目检背面流程步骤 (stepsActivate = 1):
