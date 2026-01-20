@@ -89,7 +89,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 6px;
   font-size: 12px;
   color: var(--color-text-secondary);
   user-select: none;
@@ -197,7 +197,6 @@ onMounted(() => {
   font-family: var(--font-mono);
   color: var(--color-text-primary);
   padding: 2px 8px;
-  background: var(--color-bg-hover);
   border-radius: 4px;
 }
 

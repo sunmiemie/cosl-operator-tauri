@@ -16,7 +16,7 @@ const { initConfig, setConfigItem, getConfigPath, config } = useConfig()
 const camera = useCamera()
 
 // 后端地址
-const backendUrl = ref('http://localhost:8080')
+const backendUrl = ref('http://localhost:60034')
 const isSaving = ref(false)
 const saveSuccess = ref(false)
 const configPath = ref('')
@@ -24,6 +24,13 @@ const configPath = ref('')
 // 连接测试状态
 const isTestingConnection = ref(false)
 const connectionStatus = ref<'idle' | 'success' | 'error'>('idle')
+
+// 密码验证
+const ADMIN_PASSWORD = '123456coslX$'  // 管理员密码
+const showPasswordDialog = ref(false)
+const passwordInput = ref('')
+const passwordError = ref('')
+const pendingAction = ref<(() => void) | null>(null)
 
 // 设备设置
 const cameraList = ref<CameraDevice[]>([])
@@ -129,7 +136,42 @@ async function restartCameras() {
 }
 
 // 保存后端地址
-async function saveBackendUrl() {
+// 请求密码验证
+function requirePassword(action: () => void) {
+  pendingAction.value = action
+  passwordInput.value = ''
+  passwordError.value = ''
+  showPasswordDialog.value = true
+}
+
+// 验证密码
+function verifyPassword() {
+  if (passwordInput.value === ADMIN_PASSWORD) {
+    showPasswordDialog.value = false
+    if (pendingAction.value) {
+      pendingAction.value()
+      pendingAction.value = null
+    }
+  } else {
+    passwordError.value = '密码错误'
+  }
+}
+
+// 取消密码验证
+function cancelPasswordDialog() {
+  showPasswordDialog.value = false
+  passwordInput.value = ''
+  passwordError.value = ''
+  pendingAction.value = null
+}
+
+// 保存后端地址（需要密码验证）
+function saveBackendUrl() {
+  requirePassword(doSaveBackendUrl)
+}
+
+// 实际执行保存后端地址
+async function doSaveBackendUrl() {
   isSaving.value = true
   saveSuccess.value = false
   
@@ -719,6 +761,35 @@ const languageOptions = [
       v-model:visible="showXrayCropCalibration"
       :xray-device-index="xrayDevice"
     />
+
+    <!-- 密码验证对话框 -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="showPasswordDialog" class="password-overlay" @click="cancelPasswordDialog">
+          <div class="password-dialog" @click.stop>
+            <div class="password-header">
+              <Icon icon="mdi:lock" class="lock-icon" />
+              <span>需要管理员密码</span>
+            </div>
+            <div class="password-content">
+              <input
+                v-model="passwordInput"
+                type="password"
+                class="password-input"
+                placeholder="请输入管理员密码"
+                @keyup.enter="verifyPassword"
+                autofocus
+              />
+              <p v-if="passwordError" class="password-error">{{ passwordError }}</p>
+            </div>
+            <div class="password-actions">
+              <button class="cancel-btn" @click="cancelPasswordDialog">取消</button>
+              <button class="confirm-btn" @click="verifyPassword">确认</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </ModalLayout>
 </template>
 
@@ -1189,5 +1260,99 @@ const languageOptions = [
 .settings-content::-webkit-scrollbar-thumb {
   background: var(--color-scrollbar);
   border-radius: 3px;
+}
+
+/* 密码验证对话框 */
+.password-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.password-dialog {
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+  padding: 24px;
+  width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.password-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.lock-icon {
+  font-size: 20px;
+  color: var(--color-accent-red);
+}
+
+.password-content {
+  margin-bottom: 20px;
+}
+
+.password-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.password-input:focus {
+  border-color: var(--color-accent-red);
+}
+
+.password-error {
+  color: #ef4444;
+  font-size: 12px;
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.password-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.password-actions button {
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancel-btn {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.cancel-btn:hover {
+  background: var(--color-bg-hover);
+}
+
+.confirm-btn {
+  background: var(--color-accent-red);
+  border: none;
+  color: white;
+}
+
+.confirm-btn:hover {
+  background: #dc2626;
 }
 </style>

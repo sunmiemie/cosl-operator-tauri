@@ -705,12 +705,13 @@ onUnmounted(() => {
 
 .stat-decoration {
   position: absolute;
-  right: -12px;
-  bottom: -12px;
-  width: 70px;
-  height: 70px;
+  right: -18px;
+  bottom: -30px;
+  width: 100px;
+  height: 100px;
   border-radius: 50%;
-  opacity: 0.05;
+  opacity: 0.15;
+  filter: blur(40px);
 }
 
 .new-orders .stat-decoration {
