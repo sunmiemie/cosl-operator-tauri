@@ -1,68 +1,1541 @@
 <script setup lang="ts">
+/**
+ * X-Ray 测试页面
+ * 
+ * 实现完整测试流程：
+ * 1. 设备检测 -> 2. 扫描夹具 -> 3. 扫描电路板 -> 4. 批量下载数据 -> 5. 逐板执行测试
+ * 
+ * 工单状态处理（每块电路板）：
+ * - status=1 新工单: 下载工艺 -> 开始测试
+ * - status=2 待继续: 下载临时数据 -> 继续测试
+ * - status=4 待重做: 下载工艺+反馈+报告 -> 反馈测试
+ * - status=8 疑问工单: 下载工艺+疑问+报告 -> 疑问测试
+ */
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuth } from '@/composables/useAuth'
+import { useScanner } from '@/composables/useScanner'
+import { useCamera } from '@/composables/useCamera'
+import { useLayout } from '@/composables/useLayout'
+import { orderApi, type TestUnit, OrderStatus, OrderType } from '@/services/order'
+import { processApi, type ProcessData, type TempOrderData, type FeedbackData, type QuestionData } from '@/services/process'
+import { reportApi, type TestReport, type ReportData } from '@/services/report'
+
+// 导入公共组件
+import { DeviceCheckOverlay, HistoryReportPanel, DownloadProgress } from '@/components/visual-test'
+
+// 导入测试执行组件
+import XrayTestExecutor from './components/XrayTestExecutor.vue'
+
+// ==================== 类型定义 ====================
+
+// 测试模式
+type TestMode = 'normal' | 'continue' | 'feedback' | 'question'
+
+// 夹具槽位
+interface FixturePosition {
+  id: number
+  status: 0 | 1 | 2 | 3 // 0=空, 1=选中, 2=已绑定, 3=测试完成
+  board?: TestUnit
+  // 工艺/临时/反馈/疑问数据（每个槽位独立）
+  processData?: ProcessData
+  tempData?: TempOrderData
+  feedbackData?: FeedbackData
+  questionData?: QuestionData
+  feedbackReport?: ReportData
+  questionReport?: ReportData
+  testMode?: TestMode
+  isDevTest?: boolean
+}
+
+// ==================== 状态定义 ====================
+
+const { userInfo, getAuthHeaders } = useAuth()
+const scanner = useScanner()
+const camera = useCamera()
+const { enterEditMode, exitEditMode } = useLayout()
+
+// 页面阶段
+type PagePhase = 'detect' | 'ready' | 'testing'
+const phase = ref<PagePhase>('detect')
+
+// 监听 phase 变化，在测试阶段隐藏侧边栏
+watch(phase, (newPhase) => {
+  if (newPhase === 'testing') {
+    enterEditMode()
+  } else {
+    exitEditMode()
+  }
+})
+
+// 设备检测状态
+const deviceCheckStatus = ref<'checking' | 'success' | 'error'>('checking')
+const deviceErrorMsg = ref('')
+const scannerOk = ref(false)
+const cameraOk = ref(false)
+
+// 夹具状态
+const fixtureScanned = ref(false)
+const fixtureId = ref('')
+const positionList = ref<FixturePosition[]>([])
+
+// 已添加的电路板
+const addedBoards = ref<TestUnit[]>([])
+
+// 历史报告
+const historyReports = ref<TestReport[]>([])
+const showHistory = ref(false)
+const isLoadingHistory = ref(false)
+
+// 下载状态
+const isDownloading = ref(false)
+const downloadProgress = ref(0)
+const downloadTotal = ref(0)
+const downloadText = ref('正在下载工艺数据...')
+
+// 测试状态
+const isTesting = ref(false)
+const currentTestIndex = ref(0)  // 当前测试的电路板索引
+const currentTestBoard = ref<FixturePosition | null>(null)  // 当前测试的槽位
+
+// 提示消息
+const toastMessage = ref('')
+const toastType = ref<'error' | 'success' | 'info'>('info')
+const showToast = ref(false)
+
+// ==================== 计算属性 ====================
+
+const showDeviceOverlay = computed(() => phase.value === 'detect')
+
+// 当前选中的位置
+const selectedPosition = computed(() => {
+  return positionList.value.find(p => p.status === 1) || null
+})
+
+// 扫描提示文本
+const scanHintText = computed(() => {
+  if (!fixtureScanned.value) return '请扫描夹具二维码'
+  if (selectedPosition.value) return `槽位 ${selectedPosition.value.id}: 请扫描电路板`
+  return '所有槽位已填满'
+})
+
+const canStartTest = computed(() => {
+  return fixtureScanned.value && addedBoards.value.length > 0
+})
+
+const boundPositionCount = computed(() => {
+  return positionList.value.filter(p => p.status === 2 || p.status === 3).length
+})
+
+const testedCount = computed(() => {
+  return positionList.value.filter(p => p.status === 3).length
+})
+
+// ==================== 设备检测 ====================
+
+async function checkDevices() {
+  deviceCheckStatus.value = 'checking'
+  deviceErrorMsg.value = ''
+  scannerOk.value = false
+  cameraOk.value = false
+
+  try {
+    scannerOk.value = await scanner.checkScanner()
+  } catch {
+    scannerOk.value = false
+  }
+
+  try {
+    const cameras = await camera.getDeviceList()
+    cameraOk.value = cameras.length > 0
+  } catch {
+    cameraOk.value = false
+  }
+
+  if (scannerOk.value && cameraOk.value) {
+    deviceCheckStatus.value = 'success'
+  } else {
+    deviceCheckStatus.value = 'error'
+    const errors = []
+    if (!scannerOk.value) errors.push('扫码枪异常')
+    if (!cameraOk.value) errors.push('摄像头异常')
+    deviceErrorMsg.value = errors.join('，')
+  }
+}
+
+function enterMainInterface() {
+  phase.value = 'ready'
+  startScanner()
+}
+
+// ==================== 扫码处理 ====================
+
+async function startScanner() {
+  await scanner.startScanning(handleScanData)
+}
+
+async function stopScanner() {
+  await scanner.stopScanning()
+}
+
+// 显示提示消息
+function showMessage(msg: string, type: 'error' | 'success' | 'info' = 'info') {
+  toastMessage.value = msg
+  toastType.value = type
+  showToast.value = true
+  setTimeout(() => { showToast.value = false }, 2500)
+}
+
+// 下载进度回调
+function onDownloadProgress(loaded: number, total: number) {
+  downloadProgress.value = loaded
+  downloadTotal.value = total
+}
+
+// 处理扫描数据
+function handleScanData(data: string) {
+  console.log('扫描到:', data, '夹具已扫:', fixtureScanned.value)
+  
+  if (!fixtureScanned.value) {
+    handleFixtureScan(data)
+  } else {
+    // 判断是位置码还是电路板码
+    if (data.length === 1 && /^\d$/.test(data)) {
+      handlePositionScan(parseInt(data))
+    } else {
+      handleBoardScan(data)
+    }
+  }
+}
+
+// 处理夹具扫描
+function handleFixtureScan(data: string) {
+  const lastChar = data[data.length - 1]
+  const slotCount = parseInt(lastChar)
+  
+  if (isNaN(slotCount) || slotCount < 1 || slotCount > 10) {
+    initFixture(data, 4)
+  } else {
+    const id = data.slice(0, -1) || data
+    initFixture(id, slotCount)
+  }
+}
+
+// 初始化夹具
+function initFixture(id: string, slotCount: number) {
+  fixtureId.value = id
+  positionList.value = []
+  
+  // 逐个添加位置（带动画效果），第一个自动选中
+  for (let i = 1; i <= slotCount; i++) {
+    setTimeout(() => {
+      positionList.value.push({ 
+        id: i, 
+        status: i === 1 ? 1 : 0 // 第一个槽位自动选中
+      })
+    }, 80 * i)
+  }
+  
+  fixtureScanned.value = true
+  showMessage(`夹具已识别，共 ${slotCount} 个槽位`, 'success')
+}
+
+// 处理位置扫描
+function handlePositionScan(posId: number) {
+  const pos = positionList.value.find(p => p.id === posId)
+  if (!pos) {
+    showMessage(`槽位 ${posId} 不存在`, 'error')
+    return
+  }
+  
+  if (pos.status === 2) {
+    showMessage(`槽位 ${posId} 已绑定电路板`, 'error')
+    return
+  }
+  
+  if (pos.status === 3) {
+    showMessage(`槽位 ${posId} 已完成测试`, 'info')
+    return
+  }
+  
+  selectSlot(pos)
+}
+
+// 选择槽位
+function selectSlot(pos: FixturePosition) {
+  // 取消之前选中的位置
+  positionList.value.forEach(p => {
+    if (p.status === 1) p.status = 0
+  })
+  pos.status = 1
+}
+
+// 自动选择下一个空槽位
+function selectNextEmptySlot() {
+  const emptySlot = positionList.value.find(p => p.status === 0)
+  if (emptySlot) {
+    emptySlot.status = 1
+  }
+}
+
+// 处理电路板扫描
+async function handleBoardScan(serial: string) {
+  // 检查是否已添加
+  const alreadyAdded = positionList.value.some(p => p.board?.serial === serial)
+  if (alreadyAdded) {
+    showMessage('该电路板已添加', 'error')
+    return
+  }
+  
+  // 检查是否有选中的位置
+  const selectedPos = positionList.value.find(p => p.status === 1)
+  if (!selectedPos) {
+    showMessage('没有可用槽位', 'error')
+    return
+  }
+  
+  // 查询工单
+  const response = await orderApi.getOrderBySerial(serial, getAuthHeaders())
+  if (!response.success || !response.data || response.data.length === 0) {
+    showMessage('未找到该电路板的工单', 'error')
+    return
+  }
+  
+  // 找到 X-Ray 测试工单
+  const xrayOrder = response.data.find(o => o.process_type === 'X-Ray测试')
+  if (!xrayOrder) {
+    showMessage('该电路板无 X-Ray 测试工单', 'error')
+    return
+  }
+  
+  // 绑定到选中的位置
+  selectedPos.board = xrayOrder
+  selectedPos.status = 2
+  selectedPos.isDevTest = xrayOrder.testunit_type === OrderType.Temporary
+  addedBoards.value.push(xrayOrder)
+  
+  // 确定测试模式
+  const status = selectedPos.isDevTest 
+    ? xrayOrder.dev_testunit_status 
+    : xrayOrder.testunit_status
+  const statusStr = String(status)
+  
+  switch (statusStr) {
+    case OrderStatus.New:
+      selectedPos.testMode = 'normal'
+      break
+    case OrderStatus.Testing:
+      selectedPos.testMode = 'continue'
+      break
+    case OrderStatus.Feedback:
+      selectedPos.testMode = 'feedback'
+      break
+    case OrderStatus.Question:
+      selectedPos.testMode = 'question'
+      break
+    default:
+      selectedPos.testMode = 'normal'
+  }
+  
+  showMessage(`槽位 ${selectedPos.id} 已绑定 [${getStatusText(status)}]`, 'success')
+  
+  // 自动选择下一个空槽位
+  await nextTick()
+  selectNextEmptySlot()
+}
+
+// ==================== 夹具操作 ====================
+
+function resetFixture() {
+  fixtureScanned.value = false
+  fixtureId.value = ''
+  positionList.value = []
+  addedBoards.value = []
+  currentTestIndex.value = 0
+  currentTestBoard.value = null
+}
+
+function resetPosition(pos: FixturePosition) {
+  if (pos.board) {
+    const index = addedBoards.value.findIndex(b => 
+      (b.testunit_id && b.testunit_id === pos.board?.testunit_id) ||
+      (b.dev_testunit_id && b.dev_testunit_id === pos.board?.dev_testunit_id)
+    )
+    if (index > -1) {
+      addedBoards.value.splice(index, 1)
+    }
+  }
+  
+  // 重置槽位数据
+  pos.status = 0
+  pos.board = undefined
+  pos.processData = undefined
+  pos.tempData = undefined
+  pos.feedbackData = undefined
+  pos.questionData = undefined
+  pos.feedbackReport = undefined
+  pos.questionReport = undefined
+  pos.testMode = undefined
+  pos.isDevTest = undefined
+  
+  // 如果没有选中的槽位，选中这个
+  const hasSelected = positionList.value.some(p => p.status === 1)
+  if (!hasSelected) {
+    pos.status = 1
+  }
+}
+
+function selectPosition(pos: FixturePosition) {
+  if (pos.status === 2 || pos.status === 3) return
+  selectSlot(pos)
+}
+
+// ==================== 测试流程 ====================
+
+/**
+ * 开始批量测试
+ * 参考原程序 ScanBoard.vue startXrayTest
+ */
+async function startTest() {
+  if (!canStartTest.value) return
+  
+  await stopScanner()
+  
+  // 先批量下载所有工艺数据
+  isDownloading.value = true
+  downloadText.value = '正在下载工艺数据...'
+  
+  const boundPositions = positionList.value.filter(p => p.status === 2)
+  const total = boundPositions.length
+  
+  for (let i = 0; i < total; i++) {
+    const pos = boundPositions[i]
+    if (!pos.board) continue
+    
+    downloadText.value = `正在下载 ${i + 1}/${total}: ${pos.board.serial}`
+    
+    try {
+      await downloadBoardData(pos)
+    } catch (err) {
+      console.error(`下载 ${pos.board.serial} 数据失败:`, err)
+    }
+    
+    // 更新进度
+    downloadProgress.value = Math.round(((i + 1) / total) * 100)
+    downloadTotal.value = 100
+  }
+  
+  isDownloading.value = false
+  
+  // 开始测试
+  phase.value = 'testing'
+  isTesting.value = true
+  currentTestIndex.value = 0
+  
+  // 开始测试第一块电路板
+  startNextBoardTest()
+}
+
+/**
+ * 下载单个电路板的数据
+ * 根据工单状态下载不同的数据
+ */
+async function downloadBoardData(pos: FixturePosition) {
+  const board = pos.board
+  if (!board) return
+  
+  const unitType = board.testunit_type || 0
+  const unitId = unitType === OrderType.Production
+    ? board.testunit_id
+    : board.dev_testunit_id
+  const status = unitType === OrderType.Production
+    ? board.testunit_status
+    : board.dev_testunit_status
+  
+  if (!unitId) return
+  
+  const type: 0 | 1 = unitType === OrderType.Production ? 0 : 1
+  const statusStr = String(status)
+  
+  // 根据状态下载数据
+  if (statusStr === OrderStatus.New) {
+    // 新工单: 下载工艺
+    if (board.process_id) {
+      const result = await processApi.download(board.process_id, getAuthHeaders())
+      if (result.success && result.data) {
+        pos.processData = result.data
+      }
+    }
+  } else if (statusStr === OrderStatus.Testing) {
+    // 待继续: 下载临时数据
+    const result = await processApi.downloadTempOrder(unitId, type, getAuthHeaders())
+    if (result.success && result.data) {
+      pos.tempData = result.data
+    }
+  } else if (statusStr === OrderStatus.Feedback) {
+    // 待重做: 下载工艺 + 反馈 + 报告
+    if (board.process_id) {
+      const processResult = await processApi.download(board.process_id, getAuthHeaders())
+      if (processResult.success && processResult.data) {
+        pos.processData = processResult.data
+      }
+    }
+    const feedbackResult = await processApi.downloadFeedback(unitId, type, getAuthHeaders())
+    if (feedbackResult.success && feedbackResult.data) {
+      pos.feedbackData = feedbackResult.data
+    }
+    const reportResult = await reportApi.download(type, unitId, getAuthHeaders())
+    if (reportResult.success && reportResult.data) {
+      pos.feedbackReport = reportResult.data
+    }
+  } else if (statusStr === OrderStatus.Question) {
+    // 疑问工单: 下载工艺 + 疑问 + 报告
+    if (board.process_id) {
+      const processResult = await processApi.download(board.process_id, getAuthHeaders())
+      if (processResult.success && processResult.data) {
+        pos.processData = processResult.data
+      }
+    }
+    const questionResult = await processApi.downloadQuestion(unitId, type, getAuthHeaders())
+    if (questionResult.success && questionResult.data) {
+      pos.questionData = questionResult.data
+    }
+    const reportResult = await reportApi.download(type, unitId, getAuthHeaders())
+    if (reportResult.success && reportResult.data) {
+      pos.questionReport = reportResult.data
+    }
+  }
+}
+
+/**
+ * 开始测试下一块电路板
+ */
+function startNextBoardTest() {
+  const boundPositions = positionList.value.filter(p => p.status === 2)
+  
+  if (currentTestIndex.value >= boundPositions.length) {
+    // 所有电路板测试完成
+    handleAllTestsComplete()
+    return
+  }
+  
+  currentTestBoard.value = boundPositions[currentTestIndex.value]
+  
+  // 更新工单状态为测试中
+  if (currentTestBoard.value.board) {
+    const board = currentTestBoard.value.board
+    const unitId = board.testunit_type === OrderType.Production
+      ? board.testunit_id
+      : board.dev_testunit_id
+    const mode = board.testunit_type === OrderType.Production ? 0 : 1
+    
+    if (unitId) {
+      orderApi.changeStatus(unitId, mode, undefined, getAuthHeaders())
+    }
+  }
+}
+
+/**
+ * 单块电路板测试完成
+ * 由测试执行组件调用
+ */
+function handleBoardTestComplete() {
+  if (currentTestBoard.value) {
+    currentTestBoard.value.status = 3 // 标记为已完成
+  }
+  
+  currentTestIndex.value++
+  startNextBoardTest()
+}
+
+/**
+ * 所有电路板测试完成
+ */
+function handleAllTestsComplete() {
+  showMessage('所有电路板测试完成！', 'success')
+  // 不自动退出，让用户确认
+}
+
+// 直接退出测试（不保存进度）
+async function exitTest() {
+  isTesting.value = false
+  phase.value = 'ready'
+  currentTestIndex.value = 0
+  currentTestBoard.value = null
+  resetFixture()
+  await startScanner()
+}
+
+// 处理子组件的退出请求（带保存进度选项）
+async function handleRequestExit(saveProgress: () => Promise<boolean>) {
+  let shouldSave = false
+  
+  try {
+    await ElMessageBox.confirm('是否保存当前进度？', '退出确认', {
+      confirmButtonText: '保存并退出',
+      cancelButtonText: '直接退出',
+      distinguishCancelAndClose: true,
+      type: 'warning'
+    })
+    shouldSave = true
+  } catch (action) {
+    if (action === 'close') {
+      return  // 用户关闭弹窗，取消退出
+    }
+    // action === 'cancel' 直接退出，不保存
+  }
+  
+  if (shouldSave) {
+    const saved = await saveProgress()
+    if (saved) {
+      ElMessage.success('进度已保存，下次扫码可继续测试')
+    } else {
+      ElMessage.warning('保存失败，但仍将退出测试')
+    }
+  }
+  
+  exitTest()
+}
+
+// ==================== 历史报告 ====================
+
+async function loadHistoryReports() {
+  if (!fixtureId.value) return
+  
+  isLoadingHistory.value = true
+  try {
+    const response = await reportApi.getXrayHistory(
+      { fixture_id: fixtureId.value },
+      getAuthHeaders()
+    )
+    if (response.success && response.data) {
+      historyReports.value = response.data
+    }
+  } catch (err) {
+    console.error('加载历史报告失败:', err)
+  } finally {
+    isLoadingHistory.value = false
+  }
+}
+
+function handleHistoryToggle(expanded: boolean) {
+  showHistory.value = expanded
+  if (expanded && historyReports.value.length === 0) {
+    loadHistoryReports()
+  }
+}
+
+function handleViewReport(report: TestReport) {
+  console.log('查看报告:', report)
+}
+
+// ==================== 工具函数 ====================
+
+function getStatusText(status?: number): string {
+  const statusStr = String(status)
+  switch (statusStr) {
+    case OrderStatus.New: return '新工单'
+    case OrderStatus.Testing: return '待继续'
+    case OrderStatus.Feedback: return '待重做'
+    case OrderStatus.Question: return '疑问'
+    default: return '未知'
+  }
+}
+
+function getStatusClass(status?: number): string {
+  const statusStr = String(status)
+  switch (statusStr) {
+    case OrderStatus.New: return 'status-new'
+    case OrderStatus.Testing: return 'status-continue'
+    case OrderStatus.Feedback: return 'status-redo'
+    case OrderStatus.Question: return 'status-question'
+    default: return 'status-unknown'
+  }
+}
+
+function getModeText(mode?: TestMode): string {
+  switch (mode) {
+    case 'normal': return '正式测试'
+    case 'continue': return '继续测试'
+    case 'feedback': return '反馈测试'
+    case 'question': return '疑问测试'
+    default: return '测试'
+  }
+}
+
+function getModeClass(mode?: TestMode): string {
+  switch (mode) {
+    case 'normal': return 'mode-normal'
+    case 'continue': return 'mode-continue'
+    case 'feedback': return 'mode-feedback'
+    case 'question': return 'mode-question'
+    default: return ''
+  }
+}
+
+// ==================== 生命周期 ====================
+
+onMounted(() => {
+  checkDevices()
+})
+
+onUnmounted(() => {
+  stopScanner()
+  // 确保离开页面时恢复侧边栏显示
+  exitEditMode()
+})
+
+watch(() => scanner.error.value, (err) => {
+  if (err) {
+    console.error('扫码枪错误:', err)
+  }
+})
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-header">
-      <h1 class="page-title">
-        <Icon icon="mdi:radioactive" class="page-icon" />
-        X-Ray测试
-      </h1>
-      <p class="page-desc">X射线检测工单管理</p>
-    </div>
-    
-    <div class="placeholder-content">
-      <Icon icon="mdi:radioactive" class="placeholder-icon" />
-      <p>X-Ray测试功能开发中...</p>
-    </div>
+  <div class="page-container">
+    <!-- 设备检测遮罩层 -->
+    <DeviceCheckOverlay
+      :visible="showDeviceOverlay"
+      :status="deviceCheckStatus"
+      :scanner-ok="scannerOk"
+      :camera-ok="cameraOk"
+      :error-msg="deviceErrorMsg"
+      accent-color="orange"
+      @enter="enterMainInterface"
+      @recheck="checkDevices"
+      @skip="enterMainInterface"
+    />
+
+    <!-- 下载进度遮罩层 -->
+    <DownloadProgress
+      :visible="isDownloading"
+      :loaded="downloadProgress"
+      :total="downloadTotal"
+      :text="downloadText"
+      accent-color="orange"
+    />
+
+    <!-- 提示消息 -->
+    <Transition name="toast">
+      <div v-if="showToast" class="toast" :class="toastType">
+        <Icon 
+          :icon="toastType === 'error' ? 'mdi:alert-circle' : toastType === 'success' ? 'mdi:check-circle' : 'mdi:information'"
+        />
+        {{ toastMessage }}
+      </div>
+    </Transition>
+
+    <!-- 主内容区 -->
+    <template v-if="phase !== 'detect'">
+      <!-- 页面头部 (测试时隐藏) -->
+      <header v-if="!isTesting" class="page-header">
+        <div class="header-left">
+          <div class="header-icon">
+            <Icon icon="mdi:radioactive" />
+          </div>
+          <div>
+            <h1 class="header-title">X-Ray 测试</h1>
+            <p class="header-subtitle">
+              <span v-if="scanner.isScanning.value" class="scan-status">
+                <span class="scan-dot"></span>
+                {{ scanHintText }}
+              </span>
+              <span v-else>扫码枪未启动</span>
+            </p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button 
+            v-if="fixtureScanned"
+            @click="resetFixture"
+            class="btn btn-ghost"
+          >
+            <Icon icon="mdi:refresh" />
+            重置
+          </button>
+          <button 
+            v-if="canStartTest"
+            @click="startTest"
+            class="btn btn-primary"
+          >
+            <Icon icon="mdi:play" />
+            开始测试 ({{ addedBoards.length }})
+          </button>
+        </div>
+      </header>
+
+      <!-- 准备阶段 -->
+      <template v-if="phase === 'ready'">
+        <div class="main-layout">
+          <!-- 左侧: 夹具槽位 -->
+          <div class="fixture-section">
+            <div class="section-header">
+              <div class="section-title">
+                <Icon icon="mdi:tray-full" />
+                夹具槽位
+              </div>
+              <div v-if="fixtureId" class="fixture-badge">
+                <Icon icon="mdi:barcode" />
+                {{ fixtureId }}
+              </div>
+              <div class="slot-progress">
+                <span class="progress-text">{{ boundPositionCount }}/{{ positionList.length }}</span>
+                <div class="progress-bar-mini">
+                  <div 
+                    class="progress-fill-mini" 
+                    :style="{ width: positionList.length ? `${(boundPositionCount / positionList.length) * 100}%` : '0%' }"
+                  ></div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 状态图例 -->
+            <div v-if="fixtureScanned && addedBoards.length > 0" class="status-legend">
+              <span class="legend-item">
+                <span class="legend-dot status-new"></span>新工单
+              </span>
+              <span class="legend-item">
+                <span class="legend-dot status-continue"></span>待继续
+              </span>
+              <span class="legend-item">
+                <span class="legend-dot status-redo"></span>待重做
+              </span>
+              <span class="legend-item">
+                <span class="legend-dot status-question"></span>疑问
+              </span>
+            </div>
+            
+            <div class="fixture-body">
+              <!-- 未扫描夹具 -->
+              <div v-if="!fixtureScanned" class="empty-state">
+                <div class="empty-icon-wrapper">
+                  <Icon icon="mdi:qrcode-scan" class="empty-icon" />
+                </div>
+                <p class="empty-title">等待扫描夹具</p>
+                <p class="empty-desc">扫描夹具二维码以开始</p>
+              </div>
+              
+              <!-- 槽位列表 - 纵向排列 -->
+              <div v-else class="slot-list">
+                <TransitionGroup name="slot-item">
+                  <div 
+                    v-for="pos in positionList" 
+                    :key="pos.id"
+                    class="slot-row"
+                    :class="{
+                      'is-empty': pos.status === 0,
+                      'is-selected': pos.status === 1,
+                      'is-bound': pos.status === 2,
+                      'is-done': pos.status === 3
+                    }"
+                    @click="selectPosition(pos)"
+                  >
+                    <!-- 槽位序号 -->
+                    <div class="slot-index">
+                      <span>{{ pos.id }}</span>
+                    </div>
+                    
+                    <!-- 槽位内容 -->
+                    <div class="slot-main">
+                      <template v-if="(pos.status === 2 || pos.status === 3) && pos.board">
+                        <div class="board-info-row">
+                          <Icon 
+                            :icon="pos.status === 3 ? 'mdi:check-circle' : 'mdi:circle'"
+                            class="status-icon"
+                            :class="pos.status === 3 ? 'success' : getModeClass(pos.testMode)"
+                          />
+                          <div class="board-details">
+                            <div class="board-serial-row">
+                              <span class="board-serial">{{ pos.board.serial }}</span>
+                              <span 
+                                v-if="pos.testMode"
+                                class="mode-badge"
+                                :class="getModeClass(pos.testMode)"
+                              >
+                                {{ getModeText(pos.testMode) }}
+                              </span>
+                              <span v-if="pos.isDevTest" class="temp-badge">临时</span>
+                            </div>
+                            <span class="board-model">{{ pos.board.boardmodel || '未知型号' }}</span>
+                          </div>
+                        </div>
+                      </template>
+                      <template v-else-if="pos.status === 1">
+                        <div class="waiting-row">
+                          <div class="pulse-ring"></div>
+                          <Icon icon="mdi:barcode-scan" class="waiting-icon" />
+                          <span class="waiting-text">等待扫描电路板...</span>
+                        </div>
+                      </template>
+                      <template v-else>
+                        <div class="empty-row">
+                          <Icon icon="mdi:plus-circle-outline" class="empty-slot-icon" />
+                          <span class="empty-text">点击选择此槽位</span>
+                        </div>
+                      </template>
+                    </div>
+                    
+                    <!-- 操作按钮 -->
+                    <button 
+                      v-if="pos.status === 2"
+                      @click.stop="resetPosition(pos)"
+                      class="slot-action"
+                      title="移除"
+                    >
+                      <Icon icon="mdi:close" />
+                    </button>
+                  </div>
+                </TransitionGroup>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右侧: 信息面板 -->
+          <div class="info-section">
+            <!-- 待测电路板列表 -->
+            <div class="info-card board-card">
+              <div class="card-header">
+                <Icon icon="mdi:clipboard-list" />
+                <span>待测电路板</span>
+                <span class="count-badge">{{ addedBoards.length }}</span>
+              </div>
+              <div class="card-body">
+                <div v-if="addedBoards.length === 0" class="card-empty">
+                  <Icon icon="mdi:package-variant-closed" />
+                  <span>扫描电路板后显示</span>
+                </div>
+                <div v-else class="board-list">
+                  <div 
+                    v-for="(board, index) in addedBoards" 
+                    :key="board.testunit_id || board.dev_testunit_id"
+                    class="board-list-item"
+                  >
+                    <div class="board-num">{{ index + 1 }}</div>
+                    <div class="board-content">
+                      <div class="item-serial-row">
+                        <span class="item-serial">{{ board.serial }}</span>
+                        <span 
+                          class="item-status"
+                          :class="getStatusClass(board.testunit_status || board.dev_testunit_status)"
+                        >
+                          {{ getStatusText(board.testunit_status || board.dev_testunit_status) }}
+                        </span>
+                      </div>
+                      <span class="item-model">{{ board.boardmodel || '未知' }}</span>
+                    </div>
+                    <Icon icon="mdi:check" class="item-check" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 历史报告 -->
+            <HistoryReportPanel
+              :reports="historyReports"
+              :loading="isLoadingHistory"
+              :expanded="showHistory"
+              title="历史报告"
+              @update:expanded="handleHistoryToggle"
+              @view="handleViewReport"
+            />
+          </div>
+        </div>
+      </template>
+
+      <!-- 测试阶段 -->
+      <template v-if="phase === 'testing'">
+        <div class="testing-layout">
+          <div class="testing-bar">
+            <div class="testing-meta">
+              <span class="meta-label">夹具</span>
+              <span class="meta-value">{{ fixtureId }}</span>
+              <span class="meta-divider">·</span>
+              <span class="meta-label">进度</span>
+              <span class="meta-value">{{ testedCount }}/{{ addedBoards.length }}</span>
+            </div>
+            <button @click="exitTest" class="btn btn-ghost">
+              <Icon icon="mdi:close" />
+              退出测试
+            </button>
+          </div>
+          
+          <!-- 当前测试信息 -->
+          <div v-if="currentTestBoard" class="current-test-info">
+            <div class="test-progress-bar">
+              <div 
+                class="test-progress-fill"
+                :style="{ width: `${(testedCount / addedBoards.length) * 100}%` }"
+              ></div>
+            </div>
+            <div class="current-board-info">
+              <div class="current-icon">
+                <Icon icon="mdi:radioactive" />
+              </div>
+              <div class="current-details">
+                <span class="current-serial">{{ currentTestBoard.board?.serial }}</span>
+                <span class="current-meta">
+                  {{ currentTestBoard.board?.boardmodel }} · {{ getModeText(currentTestBoard.testMode) }}
+                  <template v-if="currentTestBoard.isDevTest"> · 临时工单</template>
+                </span>
+              </div>
+              <span 
+                class="current-mode-badge"
+                :class="getModeClass(currentTestBoard.testMode)"
+              >
+                {{ getModeText(currentTestBoard.testMode) }}
+              </span>
+            </div>
+          </div>
+          
+          <div class="testing-main">
+            <!-- X-Ray 测试执行器 -->
+            <XrayTestExecutor
+              v-if="currentTestBoard && currentTestBoard.board"
+              :slot-data="currentTestBoard as any"
+              :fixture-id="fixtureId"
+              :total-boards="addedBoards.length"
+              :current-index="currentTestIndex"
+              @complete="handleBoardTestComplete"
+              @exit="exitTest"
+              @request-exit="handleRequestExit"
+              @error="(msg: string) => showMessage(msg, 'error')"
+            />
+            
+            <!-- 无测试数据时的占位 -->
+            <div v-else class="testing-placeholder">
+              <Icon icon="mdi:radioactive" class="placeholder-icon" />
+              <h3>准备中...</h3>
+              <p>正在加载测试数据</p>
+            </div>
+          </div>
+        </div>
+      </template>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.page {
+/* 页面容器 */
+.page-container {
   height: 100%;
-  color: var(--color-text-primary);
+  display: flex;
+  flex-direction: column;
+  position: relative;
 }
 
-.page-header {
-  margin-bottom: 24px;
-}
-
-.page-title {
+/* 提示消息 */
+.toast {
+  position: absolute;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 0 0 8px 0;
-  font-size: 24px;
-  font-weight: 600;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.page-icon {
-  font-size: 28px;
-  color: var(--color-accent-orange);
+.toast.error { background: rgba(239, 68, 68, 0.9); color: white; }
+.toast.success { background: rgba(34, 197, 94, 0.9); color: white; }
+.toast.info { background: rgba(59, 130, 246, 0.9); color: white; }
+
+.toast-enter-active, .toast-leave-active { transition: all 0.25s ease; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(-0.5rem); }
+
+/* 页面头部 */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
 }
 
-.page-desc {
-  margin: 0;
+.header-left { display: flex; align-items: center; gap: 0.75rem; }
+
+.header-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.625rem;
+  font-size: 1.25rem;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(234, 88, 12, 0.15));
+  color: rgb(251, 146, 60);
+}
+
+.header-title { font-size: 1.125rem; font-weight: 600; }
+
+.header-subtitle { font-size: 0.8125rem; color: var(--color-text-secondary); margin-top: 0.125rem; }
+
+.scan-status { display: inline-flex; align-items: center; gap: 0.375rem; color: rgb(251, 146, 60); }
+
+.scan-dot {
+  width: 6px; height: 6px;
+  background: rgb(251, 146, 60);
+  border-radius: 50%;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.header-actions { display: flex; align-items: center; gap: 0.5rem; }
+
+/* 按钮 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.btn-ghost {
   color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.placeholder-content {
+.btn-ghost:hover { background: rgba(255, 255, 255, 0.1); color: var(--color-text); }
+
+.btn-primary {
+  background: linear-gradient(135deg, rgb(249, 115, 22), rgb(234, 88, 12));
+  color: white;
+  box-shadow: 0 2px 8px rgba(249, 115, 22, 0.25);
+}
+
+.btn-primary:hover { box-shadow: 0 4px 12px rgba(249, 115, 22, 0.35); transform: translateY(-1px); }
+
+/* 主布局 */
+.main-layout { flex: 1; display: flex; gap: 1rem; min-height: 0; }
+
+/* 夹具区域 */
+.fixture-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.section-title { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; font-weight: 500; }
+
+.fixture-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(249, 115, 22, 0.12);
+  color: rgb(251, 146, 60);
+  border-radius: 0.25rem;
+}
+
+.slot-progress { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+.progress-text { font-size: 0.75rem; color: var(--color-text-secondary); }
+.progress-bar-mini { width: 60px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden; }
+.progress-fill-mini { height: 100%; background: linear-gradient(90deg, rgb(34, 197, 94), rgb(74, 222, 128)); border-radius: 2px; transition: width 0.3s; }
+
+/* 状态图例 */
+.status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.legend-item { display: flex; align-items: center; gap: 0.25rem; font-size: 0.6875rem; color: var(--color-text-secondary); }
+
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+.legend-dot.status-new { background: rgb(74, 222, 128); }
+.legend-dot.status-continue { background: rgb(96, 165, 250); }
+.legend-dot.status-redo { background: rgb(248, 113, 113); }
+.legend-dot.status-question { background: rgb(251, 146, 60); }
+
+.fixture-body { flex: 1; overflow: auto; padding: 1rem; }
+
+/* 空状态 */
+.empty-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+.empty-icon-wrapper {
+  width: 5rem; height: 5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.03);
+  animation: breathe 2.5s ease-in-out infinite;
+}
+
+.empty-icon { font-size: 2.5rem; color: var(--color-text-secondary); opacity: 0.4; }
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.8; }
+}
+
+.empty-title { font-size: 1rem; font-weight: 500; margin-bottom: 0.25rem; }
+.empty-desc { font-size: 0.8125rem; color: var(--color-text-secondary); }
+
+/* 槽位列表 */
+.slot-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.slot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.slot-row:hover { background: rgba(255, 255, 255, 0.04); }
+
+.slot-row.is-selected {
+  border-color: rgb(59, 130, 246);
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.slot-row.is-bound {
+  border-color: rgba(249, 115, 22, 0.4);
+  background: rgba(249, 115, 22, 0.06);
+  cursor: default;
+}
+
+.slot-row.is-done {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.06);
+  cursor: default;
+}
+
+.slot-index {
+  width: 2rem; height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.slot-row.is-selected .slot-index { background: rgba(59, 130, 246, 0.2); color: rgb(96, 165, 250); }
+.slot-row.is-bound .slot-index { background: rgba(249, 115, 22, 0.2); color: rgb(251, 146, 60); }
+.slot-row.is-done .slot-index { background: rgba(34, 197, 94, 0.2); color: rgb(74, 222, 128); }
+
+.slot-main { flex: 1; min-width: 0; }
+
+/* 已绑定状态 */
+.board-info-row { display: flex; align-items: center; gap: 0.625rem; }
+
+.status-icon { font-size: 1.125rem; flex-shrink: 0; }
+.status-icon.success { color: rgb(74, 222, 128); }
+.status-icon.mode-normal { color: rgb(74, 222, 128); }
+.status-icon.mode-continue { color: rgb(96, 165, 250); }
+.status-icon.mode-feedback { color: rgb(248, 113, 113); }
+.status-icon.mode-question { color: rgb(251, 146, 60); }
+
+.board-details { display: flex; flex-direction: column; min-width: 0; }
+
+.board-serial-row { display: flex; align-items: center; gap: 0.5rem; }
+.board-serial { font-family: monospace; font-size: 0.875rem; font-weight: 500; }
+
+.mode-badge, .temp-badge {
+  font-size: 0.625rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+}
+
+.mode-badge.mode-normal { background: rgba(34, 197, 94, 0.15); color: rgb(74, 222, 128); }
+.mode-badge.mode-continue { background: rgba(59, 130, 246, 0.15); color: rgb(96, 165, 250); }
+.mode-badge.mode-feedback { background: rgba(239, 68, 68, 0.15); color: rgb(248, 113, 113); }
+.mode-badge.mode-question { background: rgba(249, 115, 22, 0.15); color: rgb(251, 146, 60); }
+.temp-badge { background: rgba(156, 163, 175, 0.15); color: rgb(156, 163, 175); }
+
+.board-model {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 等待扫描状态 */
+.waiting-row { display: flex; align-items: center; gap: 0.625rem; position: relative; }
+
+.pulse-ring {
+  position: absolute;
+  left: -2px;
+  width: 20px; height: 20px;
+  border: 2px solid rgb(59, 130, 246);
+  border-radius: 50%;
+  animation: ring-pulse 1.5s ease-out infinite;
+  opacity: 0;
+}
+
+@keyframes ring-pulse {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.waiting-icon { font-size: 1rem; color: rgb(96, 165, 250); animation: icon-pulse 1s ease-in-out infinite; }
+
+@keyframes icon-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.waiting-text { font-size: 0.8125rem; color: rgb(96, 165, 250); }
+
+/* 空槽位状态 */
+.empty-row { display: flex; align-items: center; gap: 0.5rem; }
+.empty-slot-icon { font-size: 1rem; color: var(--color-text-secondary); opacity: 0.4; }
+.empty-text { font-size: 0.8125rem; color: var(--color-text-secondary); opacity: 0.6; }
+
+/* 槽位操作按钮 */
+.slot-action {
+  width: 1.75rem; height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.375rem;
+  background: rgba(239, 68, 68, 0.1);
+  color: rgb(248, 113, 113);
+  opacity: 0;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.slot-row:hover .slot-action { opacity: 1; }
+.slot-action:hover { background: rgba(239, 68, 68, 0.2); }
+
+/* 槽位动画 */
+.slot-item-enter-active { transition: all 0.3s ease; }
+.slot-item-enter-from { opacity: 0; transform: translateX(-1rem); }
+
+/* 信息面板 */
+.info-section { width: 320px; display: flex; flex-direction: column; gap: 1rem; flex-shrink: 0; }
+
+/* 信息卡片 */
+.info-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.board-card { flex: 1; min-height: 200px; }
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.count-badge {
+  margin-left: auto;
+  min-width: 1.5rem; height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(249, 115, 22, 0.15);
+  color: rgb(251, 146, 60);
+}
+
+.card-body { flex: 1; padding: 0.75rem; overflow: auto; }
+
+.card-empty {
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 80px;
-  background: var(--color-bg-secondary);
-  border: 1px dashed var(--color-border);
-  border-radius: 16px;
+  gap: 0.5rem;
   color: var(--color-text-secondary);
+  font-size: 0.8125rem;
 }
 
-.placeholder-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-  opacity: 0.3;
+.card-empty svg { font-size: 1.75rem; opacity: 0.3; }
+
+/* 电路板列表 */
+.board-list { display: flex; flex-direction: column; gap: 0.375rem; }
+
+.board-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0.375rem;
 }
+
+.board-num {
+  width: 1.25rem; height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background: rgba(249, 115, 22, 0.15);
+  color: rgb(251, 146, 60);
+  border-radius: 0.25rem;
+  flex-shrink: 0;
+}
+
+.board-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.item-serial-row { display: flex; align-items: center; gap: 0.375rem; }
+.item-serial { font-family: monospace; font-size: 0.75rem; font-weight: 500; }
+.item-status {
+  font-size: 0.5625rem;
+  padding: 0.0625rem 0.25rem;
+  border-radius: 0.125rem;
+  font-weight: 500;
+}
+
+.item-status.status-new { background: rgba(34, 197, 94, 0.15); color: rgb(74, 222, 128); }
+.item-status.status-continue { background: rgba(59, 130, 246, 0.15); color: rgb(96, 165, 250); }
+.item-status.status-redo { background: rgba(239, 68, 68, 0.15); color: rgb(248, 113, 113); }
+.item-status.status-question { background: rgba(249, 115, 22, 0.15); color: rgb(251, 146, 60); }
+
+.item-model {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-check { color: rgb(74, 222, 128); font-size: 0.875rem; flex-shrink: 0; }
+
+/* 测试阶段 */
+.testing-layout { flex: 1; display: flex; flex-direction: column; gap: 1rem; }
+
+.testing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.625rem;
+}
+
+.testing-meta { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; }
+.meta-label { color: var(--color-text-secondary); }
+.meta-value { font-weight: 500; }
+.meta-divider { color: var(--color-text-secondary); opacity: 0.4; }
+
+/* 当前测试信息 */
+.current-test-info {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.625rem;
+  overflow: hidden;
+}
+
+.test-progress-bar { height: 3px; background: rgba(255, 255, 255, 0.1); }
+.test-progress-fill { height: 100%; background: linear-gradient(90deg, rgb(249, 115, 22), rgb(234, 88, 12)); transition: width 0.3s; }
+
+.current-board-info { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; }
+
+.current-icon {
+  width: 2.25rem; height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: rgba(249, 115, 22, 0.15);
+  color: rgb(251, 146, 60);
+  font-size: 1.125rem;
+}
+
+.current-details { flex: 1; display: flex; flex-direction: column; }
+.current-serial { font-family: monospace; font-size: 0.9375rem; font-weight: 600; }
+.current-meta { font-size: 0.75rem; color: var(--color-text-secondary); }
+
+.current-mode-badge {
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+}
+
+.testing-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+}
+
+.testing-placeholder { text-align: center; color: var(--color-text-secondary); }
+
+.placeholder-icon { font-size: 4rem; opacity: 0.2; margin-bottom: 1rem; }
+
+.testing-placeholder h3 { font-size: 1.125rem; font-weight: 500; color: var(--color-text); margin-bottom: 0.25rem; }
+.testing-placeholder p { font-size: 0.875rem; }
+
+.debug-info {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0.5rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-family: monospace;
+}
+
+.debug-info p { margin: 0.25rem 0; }
+
+/* 过渡动画 */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

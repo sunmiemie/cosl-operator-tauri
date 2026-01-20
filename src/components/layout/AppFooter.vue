@@ -200,10 +200,6 @@ onMounted(() => {
   border-radius: 4px;
 }
 
-.footer-copyright {
-  opacity: 0.7;
-}
-
 .spin {
   animation: spin 1s linear infinite;
 }

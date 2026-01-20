@@ -34,6 +34,9 @@ parking_lot = "0.12"
 lazy_static = "1.5"
 tokio = { version = "1", features = ["time"] }
 
+# USB HID 扫码枪支持
+rusb = "0.9"
+
 # nokhwa 摄像头库 - 跨平台
 # Windows: 使用 Media Foundation
 # Linux: 使用 Video4Linux

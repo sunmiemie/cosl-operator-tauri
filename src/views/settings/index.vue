@@ -8,6 +8,8 @@ import { useConfig } from '@/composables/useConfig'
 import { useCamera, type CameraDevice } from '@/composables/useCamera'
 import { ThemeMode } from '@/enums'
 import { api } from '@/services/api'
+import { cacheApi, type CacheSizes } from '@/services/process'
+import { ElMessage, ElMessageBox } from 'element-plus'
 // 注意: 如果需要目录选择功能，需要安装 @tauri-apps/plugin-dialog
 // 当前使用输入框手动输入作为临时方案
 
@@ -49,6 +51,11 @@ const autoReUpload = ref(true)
 const language = ref('zh-CN')
 const autoStart = ref(false)
 
+// 缓存管理
+const cacheSizes = ref<CacheSizes>({ process: 0, temp: 0, feedback: 0, report: 0, total: 0 })
+const isLoadingCache = ref(false)
+const isClearingCache = ref(false)
+
 // 摄像头预览
 const previewDevice = ref<string | null>(null)
 const isPreviewOpen = ref(false)
@@ -89,6 +96,9 @@ onMounted(async () => {
   // 加载摄像头列表
   await loadCameraList()
   
+  // 加载缓存大小
+  await loadCacheSizes()
+  
   // 标记配置已加载，此后 watch 才会真正保存
   configLoaded.value = true
   
@@ -110,6 +120,100 @@ async function loadCameraList() {
     console.error('加载摄像头列表失败:', e)
   } finally {
     isLoadingCameras.value = false
+  }
+}
+
+// ==================== 缓存管理 ====================
+
+// 加载缓存大小
+async function loadCacheSizes() {
+  isLoadingCache.value = true
+  try {
+    cacheSizes.value = await cacheApi.getAllSizes()
+  } catch (e) {
+    console.error('加载缓存大小失败:', e)
+  } finally {
+    isLoadingCache.value = false
+  }
+}
+
+// 格式化缓存大小显示
+function formatCacheSize(size: number): string {
+  if (size < 0.01) return '0 B'
+  if (size < 1) return `${(size * 1024).toFixed(0)} KB`
+  return `${size.toFixed(2)} MB`
+}
+
+// 清理指定类型缓存
+async function clearCacheByType(type: 'process' | 'temp' | 'feedback' | 'report') {
+  const typeNames: Record<string, string> = {
+    process: '工艺缓存',
+    temp: '临时工单缓存',
+    feedback: '反馈记录缓存',
+    report: '报告缓存'
+  }
+  
+  try {
+    await ElMessageBox.confirm(
+      `确定要清理${typeNames[type]}吗？清理后需要重新下载数据。`,
+      '清理确认',
+      {
+        confirmButtonText: '确定清理',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return  // 用户取消
+  }
+  
+  isClearingCache.value = true
+  try {
+    const success = await cacheApi.clear(type)
+    if (success) {
+      ElMessage.success(`${typeNames[type]}已清理`)
+      await loadCacheSizes()
+    } else {
+      ElMessage.error('清理失败')
+    }
+  } catch (e) {
+    console.error('清理缓存失败:', e)
+    ElMessage.error('清理缓存失败')
+  } finally {
+    isClearingCache.value = false
+  }
+}
+
+// 清理所有缓存
+async function clearAllCache() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要清理所有缓存吗？清理后需要重新下载所有数据。',
+      '清理确认',
+      {
+        confirmButtonText: '确定清理',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return  // 用户取消
+  }
+  
+  isClearingCache.value = true
+  try {
+    const success = await cacheApi.clearAll()
+    if (success) {
+      ElMessage.success('所有缓存已清理')
+      await loadCacheSizes()
+    } else {
+      ElMessage.error('清理失败')
+    }
+  } catch (e) {
+    console.error('清理缓存失败:', e)
+    ElMessage.error('清理缓存失败')
+  } finally {
+    isClearingCache.value = false
   }
 }
 
@@ -642,6 +746,107 @@ const languageOptions = [
         </div>
       </div>
 
+      <!-- 缓存管理 -->
+      <div class="settings-section">
+        <h3 class="section-title">
+          <Icon icon="mdi:cached" class="section-icon" />
+          缓存管理
+          <button 
+            class="section-action"
+            @click="loadCacheSizes"
+            :disabled="isLoadingCache"
+            title="刷新"
+          >
+            <Icon :icon="isLoadingCache ? 'mdi:loading' : 'mdi:refresh'" :class="{ 'animate-spin': isLoadingCache }" />
+          </button>
+        </h3>
+        
+        <div class="settings-list">
+          <!-- 缓存总大小 -->
+          <div class="settings-item cache-total">
+            <span class="item-label">缓存总大小</span>
+            <span class="cache-size total">{{ formatCacheSize(cacheSizes.total) }}</span>
+          </div>
+          
+          <!-- 各类缓存 -->
+          <div class="settings-item cache-item">
+            <div class="cache-info">
+              <Icon icon="mdi:file-document-outline" class="cache-icon" />
+              <span class="item-label">工艺缓存</span>
+              <span class="cache-size">{{ formatCacheSize(cacheSizes.process) }}</span>
+            </div>
+            <button 
+              class="btn btn-ghost btn-sm"
+              @click="clearCacheByType('process')"
+              :disabled="isClearingCache || cacheSizes.process < 0.01"
+              title="清理工艺缓存"
+            >
+              <Icon icon="mdi:delete-outline" />
+            </button>
+          </div>
+          
+          <div class="settings-item cache-item">
+            <div class="cache-info">
+              <Icon icon="mdi:clock-outline" class="cache-icon" />
+              <span class="item-label">临时工单缓存</span>
+              <span class="cache-size">{{ formatCacheSize(cacheSizes.temp) }}</span>
+            </div>
+            <button 
+              class="btn btn-ghost btn-sm"
+              @click="clearCacheByType('temp')"
+              :disabled="isClearingCache || cacheSizes.temp < 0.01"
+              title="清理临时工单缓存"
+            >
+              <Icon icon="mdi:delete-outline" />
+            </button>
+          </div>
+          
+          <div class="settings-item cache-item">
+            <div class="cache-info">
+              <Icon icon="mdi:message-reply-text-outline" class="cache-icon" />
+              <span class="item-label">反馈记录缓存</span>
+              <span class="cache-size">{{ formatCacheSize(cacheSizes.feedback) }}</span>
+            </div>
+            <button 
+              class="btn btn-ghost btn-sm"
+              @click="clearCacheByType('feedback')"
+              :disabled="isClearingCache || cacheSizes.feedback < 0.01"
+              title="清理反馈记录缓存"
+            >
+              <Icon icon="mdi:delete-outline" />
+            </button>
+          </div>
+          
+          <div class="settings-item cache-item">
+            <div class="cache-info">
+              <Icon icon="mdi:file-chart-outline" class="cache-icon" />
+              <span class="item-label">报告缓存</span>
+              <span class="cache-size">{{ formatCacheSize(cacheSizes.report) }}</span>
+            </div>
+            <button 
+              class="btn btn-ghost btn-sm"
+              @click="clearCacheByType('report')"
+              :disabled="isClearingCache || cacheSizes.report < 0.01"
+              title="清理报告缓存"
+            >
+              <Icon icon="mdi:delete-outline" />
+            </button>
+          </div>
+          
+          <!-- 清理全部 -->
+          <div class="settings-item cache-clear-all">
+            <button 
+              class="btn btn-danger btn-block"
+              @click="clearAllCache"
+              :disabled="isClearingCache || cacheSizes.total < 0.01"
+            >
+              <Icon :icon="isClearingCache ? 'mdi:loading' : 'mdi:delete-sweep'" :class="{ 'animate-spin': isClearingCache }" />
+              清理全部缓存
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- 外观设置 -->
       <div class="settings-section">
         <h3 class="section-title">
@@ -860,6 +1065,91 @@ const languageOptions = [
 
 .settings-item:last-child {
   border-bottom: none;
+}
+
+/* 缓存管理样式 */
+.cache-total {
+  background: var(--color-bg-tertiary);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.cache-total .cache-size.total {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-accent-blue);
+}
+
+.cache-item {
+  padding: 10px 14px;
+}
+
+.cache-item .cache-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.cache-icon {
+  font-size: 16px;
+  color: var(--color-text-secondary);
+}
+
+.cache-size {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  margin-left: auto;
+  padding-right: 8px;
+}
+
+.cache-clear-all {
+  padding: 12px 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-block {
+  width: 100%;
+  justify-content: center;
+}
+
+.btn-danger {
+  background: var(--color-error);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .backend-item {
