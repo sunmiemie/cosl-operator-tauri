@@ -18,6 +18,7 @@ import { useWindow } from '@/composables/useWindow'
 import type { TestUnit } from '@/services/order'
 import type { ProcessData, TempOrderData } from '@/services/process'
 import { reportApi, type TestReport } from '@/services/report'
+import { createBaseReportJson, trimReportJson } from '@/utils/reportTemplate'
 
 // ==================== 类型定义 ====================
 
@@ -555,16 +556,20 @@ async function submitReport() {
   isSubmitting.value = true
   
   try {
-    // 构建报告数据
+    // 构建报告数据 - 使用旧版模板结构
+    const baseJson = createBaseReportJson()
+    baseJson.twoD = frontFinalImage.value
+    baseJson.twoDBak = backFinalImage.value
+    
+    // 按旧版规则删除无关字段
+    trimReportJson(baseJson, 'twoD')
+    
     const reportJson = {
       testunit_id: props.testUnit.testunit_id || props.testUnit.dev_testunit_id,
       testunit_type: 3, // 2D留存测试
       board_id: props.testUnit.board_id,
       board_serialnumber: props.testUnit.serial,
-      json: {
-        twoD: frontFinalImage.value,
-        twoDBak: backFinalImage.value
-      }
+      json: baseJson
     }
     
     // 上传报告
@@ -583,7 +588,7 @@ async function submitReport() {
         serialNumber: props.testUnit.serial || '',
         userId: userInfo.value?.id || 0,
         testType: 3,
-        dev_testunit_status: 2, // 2D留存默认正常
+        dev_testunit_status: 3, // 待审核，与旧版前端保持一致
         file: reportJson,
       }, getAuthHeaders())
     } else {
@@ -592,7 +597,7 @@ async function submitReport() {
         serialNumber: props.testUnit.serial || '',
         userId: userInfo.value?.id || 0,
         testType: 3,
-        testunit_status: 2,
+        testunit_status: 3, // 待审核，与旧版前端保持一致
         file: reportJson,
       }, getAuthHeaders())
     }

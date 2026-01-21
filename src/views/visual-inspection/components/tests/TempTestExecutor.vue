@@ -246,7 +246,7 @@ function getCroppedFrame(): string | null {
 
 // ==================== 初始化 ====================
 
-/** 创建空报告数据 */
+/** 创建空报告数据 - 与旧版临时工单模板结构对齐 */
 function createEmptyReport(): TempReportJson {
   return {
     dev_testunit_id: props.testUnit.dev_testunit_id || 0,
@@ -254,6 +254,16 @@ function createEmptyReport(): TempReportJson {
     board_id: props.testUnit.board_id || 0,
     board_serialnumber: props.testUnit.serial || '',
     json: {
+      // 保持 plane/twoD/twoDBak 字段以对齐旧版结构
+      plane: {
+        size: '',
+        leftPass: 0,
+        rightPass: 0,
+        leftUrl: '',
+        rightUrl: ''
+      },
+      twoD: '',
+      twoDBak: '',
       tempTest: [
         { id: 1, pass: 1, name: '合格项', desc: '', save: [] },
         { id: 2, pass: 2, name: '缺陷项', desc: '', save: [], error: { url: [], desc: '' } },
@@ -510,21 +520,13 @@ async function uploadReport() {
       throw new Error('缺少工单ID')
     }
     
-    // 确定最终状态
-    let finalStatus = 3  // 默认完成
-    for (const item of tempReportJson.value.json.tempTest) {
-      if (item.pass === 3 || item.pass === 4) {
-        finalStatus = 5  // 有疑问
-        break
-      }
-    }
-    
+    // 状态统一为3(待审核)，与旧版前端保持一致
     const result = await reportApi.uploadTempReport({
       dev_testunit_id: unitId,
       serialNumber: tempReportJson.value.board_serialnumber,
       userId: userInfo.value?.id || 0,
       testType: 4,
-      dev_testunit_status: finalStatus,
+      dev_testunit_status: 3, // 待审核
       file: tempReportJson.value as any
     }, getAuthHeaders())
     

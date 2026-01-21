@@ -27,6 +27,7 @@ import {
   type StepItem, type PicItem, type EyesSideData, type AreaData, type TotalData
 } from '@/services/process'
 import { reportApi, type ReportUploadParams, type TestReport } from '@/services/report'
+import { createBaseReportJson, trimReportJson, collectStepLists, stepsToStepList, picsToPicList } from '@/utils/reportTemplate'
 
 // ==================== 类型定义 ====================
 
@@ -330,19 +331,15 @@ async function initTest() {
 }
 
 function initReportJson() {
+  // 使用完整的旧版模板结构
+  const baseJson = createBaseReportJson()
+  
   reportJson.value = {
     testunit_id: props.testUnit.testunit_id || props.testUnit.dev_testunit_id || 0,
     testunit_type: 4,
     board_id: props.testUnit.board_id || 0,
     board_serialnumber: props.testUnit.serial || '',
-    json: {
-      threeD: {
-        eyes: {
-          total: { stepList: [], stepNote: [], picList: [], picNote: [] },
-          area: []
-        }
-      }
-    }
+    json: baseJson as any
   }
 }
 
@@ -717,28 +714,13 @@ async function handleTestComplete() {
 function generateReport() {
   if (!localJson.value || !reportJson.value) return
   
-  // 辅助函数：收集 step 中的 error/question/warn 项
-  const collectStepLists = (steps: any[]) => {
-    const errorList: any[] = []
-    const questionList: any[] = []
-    const warnList: any[] = []
-    
-    steps.forEach(s => {
-      if (s.error) errorList.push(s)
-      if (s.question) questionList.push(s)
-      if (s.warn) warnList.push(s)
-    })
-    
-    return { errorList, questionList, warnList }
-  }
-  
-  // 辅助函数：生成带汇总的 section 数据
+  // 辅助函数：生成带汇总的 section 数据 (使用导入的 collectStepLists)
   const buildSection = (data: any) => {
     const totalLists = collectStepLists(data.total.step)
     const totalReport: any = {
-      stepList: data.total.step.map((s: any) => ({ id: s.id, name: s.name, pass: s.pass })),
+      stepList: stepsToStepList(data.total.step),
       stepNote: data.total.stepNote || [],
-      picList: data.total.pic.map((p: any) => ({ id: p.id, name: p.name, save: p.save })),
+      picList: picsToPicList(data.total.pic),
       picNote: data.total.picNote || []
     }
     if (totalLists.errorList.length > 0) totalReport.errorList = totalLists.errorList
@@ -750,9 +732,9 @@ function generateReport() {
       area: data.area.map((a: any) => {
         const generalLists = collectStepLists(a.general.step)
         const generalReport: any = {
-          stepList: a.general.step.map((s: any) => ({ id: s.id, name: s.name, pass: s.pass })),
+          stepList: stepsToStepList(a.general.step),
           stepNote: a.general.stepNote || [],
-          picList: a.general.pic.map((p: any) => ({ id: p.id, name: p.name, save: p.save })),
+          picList: picsToPicList(a.general.pic),
           picNote: a.general.picNote || []
         }
         if (generalLists.errorList.length > 0) generalReport.errorList = generalLists.errorList
@@ -767,9 +749,9 @@ function generateReport() {
             const detailReport: any = {
               id: d.id,
               name: d.name,
-              stepList: d.step.map((s: any) => ({ id: s.id, name: s.name, pass: s.pass })),
+              stepList: stepsToStepList(d.step),
               stepNote: d.stepNote || [],
-              picList: d.pic.map((p: any) => ({ id: p.id, name: p.name, save: p.save })),
+              picList: picsToPicList(d.pic),
               picNote: d.picNote || []
             }
             if (detailLists.errorList.length > 0) detailReport.errorList = detailLists.errorList
@@ -786,14 +768,17 @@ function generateReport() {
   // 正面数据
   const eyes = localJson.value.eyes
   if (eyes) {
-    reportJson.value.json.threeD.eyes = buildSection(eyes)
+    (reportJson.value.json as any).threeD.eyes = buildSection(eyes)
   }
   
   // 背面数据
   const eyesBak = localJson.value.eyesBak
   if (eyesBak && hasBackSide.value) {
-    reportJson.value.json.threeD.eyesBak = buildSection(eyesBak)
+    (reportJson.value.json as any).threeD.eyesBak = buildSection(eyesBak)
   }
+  
+  // 按旧版规则删除无关字段
+  trimReportJson(reportJson.value.json, 'threeD', Boolean(hasBackSide.value))
 }
 
 // 保存临时进度

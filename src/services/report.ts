@@ -47,56 +47,127 @@ export interface ReportData {
   json: ReportJson
 }
 
-// 报告 JSON 结构
-export interface ReportJson {
-  plane?: {
-    size: string
-    leftPass?: number
-    rightPass?: number
-    leftUrl: string
-    rightUrl: string
+// 步骤列表项 (与旧版一致)
+export interface StepListItem {
+  id: number
+  name: string
+  pass: number
+}
+
+// 图片列表项 (与旧版一致)
+export interface PicListItem {
+  id: number
+  name: string
+  save: string[]
+}
+
+// 异常项
+export interface ErrorItem {
+  id: number
+  name: string
+  pass: number
+  error: {
+    url: string | string[]
+    desc: string
   }
+}
+
+// 疑问项
+export interface QuestionItem {
+  id: number
+  name: string
+  pass: number
+  question: {
+    url: string | string[]
+    desc: string
+  }
+}
+
+// 警告项
+export interface WarnItem {
+  id: number
+  name: string
+  pass: number
+  warn: {
+    url: string | string[]
+    desc: string
+  }
+}
+
+// 弓曲度检测数据 (与旧版一致)
+export interface PlaneData {
+  size: string
+  leftPass?: number
+  rightPass?: number
+  leftUrl: string
+  rightUrl: string
+  noteList?: string[]
+  errorList?: Array<{ name: string; error: { desc: string; url: string } }>
+}
+
+// 报告 JSON 结构 (与旧版前端完全一致)
+export interface ReportJson {
+  plane?: PlaneData
   twoD?: string
   twoDBak?: string
   threeD?: {
-    eyes: ReportSection
+    eyes?: ReportSection
     eyesBak?: ReportSection
   }
   xray?: ReportSection
   tempTest?: TempTestItem[]
 }
 
-// 报告区域数据
+// 总体/通用/点位检测数据 (与旧版一致)
+export interface ReportTotalData {
+  stepList: StepListItem[]
+  stepNote: string[]
+  picList: PicListItem[]
+  picNote: string[]
+  errorList?: ErrorItem[]
+  questionList?: QuestionItem[]
+  warnList?: WarnItem[]
+}
+
+// 报告区域数据 (与旧版一致)
 export interface ReportSection {
-  total: {
-    stepList: unknown[]
-    stepNote: string[]
-    picList: string[]
-    picNote: string[]
-  }
+  total: ReportTotalData
   area: ReportArea[]
 }
 
-// 报告区域
+// 报告区域 (与旧版一致，包含 general 和 detail)
 export interface ReportArea {
   id: number
-  name: string
-  stepList?: unknown[]
-  stepNote?: string[]
-  picList?: string[]
-  picNote?: string[]
-  points?: ReportPoint[]
+  general: ReportGeneralData
+  detail: ReportPointData[]
 }
 
-// 报告点位
-export interface ReportPoint {
+// 通用检测数据 (与旧版一致)
+export interface ReportGeneralData {
+  stepList: StepListItem[]
+  stepNote: string[]
+  picList: PicListItem[]
+  picNote: string[]
+  errorList?: ErrorItem[]
+  questionList?: QuestionItem[]
+  warnList?: WarnItem[]
+}
+
+// 点位检测数据 (与旧版一致)
+export interface ReportPointData {
   id: number
   name: string
-  stepList?: unknown[]
-  stepNote?: string[]
-  picList?: string[]
-  picNote?: string[]
+  stepList: StepListItem[]
+  stepNote: string[]
+  picList: PicListItem[]
+  picNote: string[]
+  errorList?: ErrorItem[]
+  questionList?: QuestionItem[]
+  warnList?: WarnItem[]
 }
+
+// 兼容旧接口 - ReportPoint
+export interface ReportPoint extends ReportPointData {}
 
 // 临时测试项
 export interface TempTestItem {

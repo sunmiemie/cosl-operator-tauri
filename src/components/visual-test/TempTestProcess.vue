@@ -28,13 +28,23 @@ export interface TempTestItem {
   warn?: { url: string[]; desc: string }
 }
 
-/** 临时工单报告 JSON 结构 */
+/** 临时工单报告 JSON 结构 (与旧版一致) */
 export interface TempReportJson {
   dev_testunit_id: number | string
   testunit_type: number
   board_id: number | string
   board_serialnumber: string
   json: {
+    // 以下字段与旧版模板结构保持一致
+    plane?: {
+      size: string
+      leftPass: number
+      rightPass: number
+      leftUrl: string
+      rightUrl: string
+    }
+    twoD?: string
+    twoDBak?: string
     tempTest: TempTestItem[]
   }
 }

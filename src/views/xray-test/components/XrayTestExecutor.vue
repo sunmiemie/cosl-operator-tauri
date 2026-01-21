@@ -27,6 +27,7 @@ import {
   type StepItem, type PicItem, type XrayData, type AreaData, type TotalData, type ProcessJson
 } from '@/services/process'
 import { reportApi, type ReportUploadParams, type ReportData, type TestReport } from '@/services/report'
+import { createBaseReportJson, trimReportJson, collectStepLists, stepsToStepList, picsToPicList } from '@/utils/reportTemplate'
 
 // ==================== 类型定义 ====================
 
@@ -521,17 +522,15 @@ function normalizePics(pics: PicItem[]) {
 
 function initReportJson() {
   const board = props.slotData.board
+  // 使用完整的旧版模板结构
+  const baseJson = createBaseReportJson()
+  
   reportJson.value = {
     testunit_id: board.testunit_id || board.dev_testunit_id || 0,
     testunit_type: 5,
     board_id: board.board_id || 0,
     board_serialnumber: board.serial || '',
-    json: {
-      xray: {
-        total: { stepList: [], stepNote: [], picList: [], picNote: [] },
-        area: []
-      }
-    }
+    json: baseJson as any
   } as ReportData
 }
 
@@ -840,27 +839,12 @@ async function handleTestComplete() {
 function generateReport() {
   if (!processJson.value || !reportJson.value) return
   
-  // 辅助函数：收集 step 中的 error/question/warn 项
-  const collectStepLists = (steps: any[]) => {
-    const errorList: any[] = []
-    const questionList: any[] = []
-    const warnList: any[] = []
-    
-    steps.forEach(s => {
-      if (s.error) errorList.push(s)
-      if (s.question) questionList.push(s)
-      if (s.warn) warnList.push(s)
-    })
-    
-    return { errorList, questionList, warnList }
-  }
-  
-  // 处理 total 部分
+  // 处理 total 部分 (使用导入的 collectStepLists)
   const totalLists = collectStepLists(processJson.value.total.step)
   const totalReport: any = {
-    stepList: processJson.value.total.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
+    stepList: stepsToStepList(processJson.value.total.step),
     stepNote: processJson.value.total.stepNote || [],
-    picList: processJson.value.total.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+    picList: picsToPicList(processJson.value.total.pic),
     picNote: processJson.value.total.picNote || []
   }
   if (totalLists.errorList.length > 0) totalReport.errorList = totalLists.errorList
@@ -874,9 +858,9 @@ function generateReport() {
       // 处理 general 部分
       const generalLists = collectStepLists(a.general.step)
       const generalReport: any = {
-        stepList: a.general.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
+        stepList: stepsToStepList(a.general.step),
         stepNote: a.general.stepNote || [],
-        picList: a.general.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+        picList: picsToPicList(a.general.pic),
         picNote: a.general.picNote || []
       }
       if (generalLists.errorList.length > 0) generalReport.errorList = generalLists.errorList
@@ -892,9 +876,9 @@ function generateReport() {
           const detailReport: any = {
             id: d.id,
             name: d.name,
-            stepList: d.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
+            stepList: stepsToStepList(d.step),
             stepNote: d.stepNote || [],
-            picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+            picList: picsToPicList(d.pic),
             picNote: d.picNote || []
           }
           if (detailLists.errorList.length > 0) detailReport.errorList = detailLists.errorList
@@ -906,6 +890,9 @@ function generateReport() {
       }
     })
   }
+  
+  // 按旧版规则删除无关字段
+  trimReportJson(reportJson.value.json, 'xray')
 }
 
 // 保存临时进度

@@ -18,6 +18,7 @@ import { useWindow } from '@/composables/useWindow'
 import type { TestUnit } from '@/services/order'
 import type { ProcessData, TempOrderData } from '@/services/process'
 import { reportApi, type TestReport } from '@/services/report'
+import { createBaseReportJson, trimReportJson } from '@/utils/reportTemplate'
 
 // ==================== 类型定义 ====================
 
@@ -360,22 +361,22 @@ async function submitReport() {
       }
     }
     
-    // 构建完整报告
+    // 构建完整报告 - 使用旧版模板结构
+    const baseJson = createBaseReportJson()
+    baseJson.plane = planeResult as any
+    
+    // 按旧版规则删除无关字段
+    trimReportJson(baseJson, 'plane')
+    
     const reportJson = {
       testunit_id: props.testUnit.testunit_id || props.testUnit.dev_testunit_id,
       testunit_type: 2, // 弓曲度测试
       board_id: props.testUnit.board_id,
       board_serialnumber: props.testUnit.serial,
-      json: {
-        plane: planeResult
-      }
+      json: baseJson
     }
     
-    // 判断测试结果状态
-    const hasError = leftPass.value === 2 || rightPass.value === 2
-    const testStatus = hasError ? 3 : 2 // 3=异常, 2=正常
-    
-    // 上传报告
+    // 上传报告 - 状态统一为3(待审核)，与旧版前端保持一致
     const unitId = props.isDevTest 
       ? props.testUnit.dev_testunit_id 
       : props.testUnit.testunit_id
@@ -392,8 +393,8 @@ async function submitReport() {
         serialNumber: props.testUnit.serial || '',
         userId: userInfo.value?.id || 0,
         testType: 2,
-        dev_testunit_status: testStatus,
-        file: reportJson,
+        dev_testunit_status: 3, // 待审核
+        file: reportJson as any,
       }, getAuthHeaders())
     } else {
       // 正式工单上传
@@ -402,8 +403,8 @@ async function submitReport() {
         serialNumber: props.testUnit.serial || '',
         userId: userInfo.value?.id || 0,
         testType: 2,
-        testunit_status: testStatus,
-        file: reportJson,
+        testunit_status: 3, // 待审核
+        file: reportJson as any,
       }, getAuthHeaders())
     }
     
@@ -953,7 +954,8 @@ function getReportStatusClass(status?: number | string): string {
   justify-content: space-between;
   padding: 0.75rem 1rem;
   background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
 }
 
 .status-info {
@@ -1141,12 +1143,17 @@ function getReportStatusClass(status?: number | string): string {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0.5rem 0;
 }
 
 .overview-bar {
   padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
 }
 
 .overview-img {
@@ -1158,7 +1165,7 @@ function getReportStatusClass(status?: number | string): string {
   flex: 1;
   display: flex;
   gap: 1rem;
-  padding: 1rem;
+  padding: 0.5rem 0;
   min-height: 0;
 }
 
@@ -1413,7 +1420,8 @@ function getReportStatusClass(status?: number | string): string {
   justify-content: space-between;
   padding: 0.75rem 1rem;
   background: var(--color-bg-secondary);
-  border-top: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
 }
 
 /* 结果预览 */
