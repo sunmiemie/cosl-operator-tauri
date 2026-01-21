@@ -1110,7 +1110,8 @@ function getReportStatusClass(status?: number | string): string {
   justify-content: space-between;
   padding: 0.75rem 1rem;
   background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
 }
 
 .status-info {
@@ -1302,6 +1303,7 @@ function getReportStatusClass(status?: number | string): string {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: 0.5rem 0;
 }
 
 .overview-bar {
@@ -1310,7 +1312,8 @@ function getReportStatusClass(status?: number | string): string {
   gap: 1rem;
   padding: 0.5rem 1rem;
   background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem 0.75rem 0 0;
 }
 
 .side-badge {
@@ -1340,6 +1343,9 @@ function getReportStatusClass(status?: number | string): string {
   padding: 0.5rem 1rem;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
+  border-right: 1px solid var(--color-border);
+  border-radius: 0 0 0.75rem 0.75rem;
 }
 
 .photos-header {
@@ -1467,7 +1473,7 @@ function getReportStatusClass(status?: number | string): string {
   flex: 1;
   display: flex;
   gap: 1rem;
-  padding: 1rem;
+  padding: 0.5rem 0;
   min-height: 0;
 }
 
@@ -1653,7 +1659,8 @@ function getReportStatusClass(status?: number | string): string {
   justify-content: space-between;
   padding: 0.75rem 1rem;
   background: var(--color-bg-secondary);
-  border-top: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
 }
 
 /* 结果预览 */
