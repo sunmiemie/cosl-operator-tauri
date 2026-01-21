@@ -102,6 +102,13 @@ const routes: RouteRecordRaw[] = [
     name: 'ModalSettings',
     component: () => import('@/views/settings/index.vue'),
     meta: { title: '设置', requiresAuth: true }
+  },
+  // 报告预览窗口
+  {
+    path: '/report-preview',
+    name: 'ReportPreview',
+    component: () => import('@/views/report-preview/index.vue'),
+    meta: { title: '报告详情', requiresAuth: true }
   }
 ]
 

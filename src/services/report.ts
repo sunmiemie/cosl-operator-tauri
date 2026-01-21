@@ -152,9 +152,12 @@ interface HistoryReportResponse {
 }
 
 // API 响应
+// 报告下载响应 - 后端直接返回 {code, data} 格式
 interface ApiReportResponse {
   code?: number
   msg?: string
+  data?: ReportData
+  // 兼容原程序的嵌套格式 {result: {data}}
   result?: {
     code?: number
     data?: ReportData
@@ -337,16 +340,24 @@ export const reportApi = {
         queryParams
       )
       
-      if (response.success && response.data?.result?.data) {
-        return { success: true, data: response.data.result.data }
+      if (response.success && response.data) {
+        // 优先检查直接格式 {code, data}，兼容嵌套格式 {result: {data}}
+        const reportData = response.data.data ?? response.data.result?.data
+        if (reportData) {
+          return { success: true, data: reportData }
+        }
       }
       return { success: false, error: response.error }
     }
     
     const response = await http.get<ApiReportResponse>(endpoint, headers, queryParams)
     
-    if (response.success && response.data?.result?.data) {
-      return { success: true, data: response.data.result.data }
+    if (response.success && response.data) {
+      // 优先检查直接格式 {code, data}，兼容嵌套格式 {result: {data}}
+      const reportData = response.data.data ?? response.data.result?.data
+      if (reportData) {
+        return { success: true, data: reportData }
+      }
     }
     return { success: false, error: response.error }
   },
@@ -365,13 +376,14 @@ export const reportApi = {
       mode: String(params.mode)
     }
     
-    if (params.mode === 0 && params.boardId !== undefined) {
+    if (params.mode === 0 && params.boardId !== undefined && params.boardId !== null) {
       queryParams.boardId = String(params.boardId)
     } else if (params.mode === 1) {
-      if (params.prodBoardId !== undefined) {
+      // mode=1: 优先传 prodBoardId，其次传 tempBoardId
+      if (params.prodBoardId !== undefined && params.prodBoardId !== null) {
         queryParams.prodBoardId = String(params.prodBoardId)
       }
-      if (params.tempBoardId !== undefined) {
+      if (params.tempBoardId !== undefined && params.tempBoardId !== null) {
         queryParams.tempBoardId = String(params.tempBoardId)
       }
     }

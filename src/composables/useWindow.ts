@@ -481,11 +481,33 @@ export function useWindow() {
     }
   }
 
+  /**
+   * 打开报告预览窗口
+   * @param mode 报告类型: 0=正式报告, 1=临时报告
+   * @param unitId 工单ID
+   */
+  const openReportPreview = async (mode: 0 | 1, unitId: number) => {
+    const label = `report-preview-${unitId}`
+    return createWindow({
+      title: '报告详情',
+      label: label,
+      url: `/report-preview?mode=${mode}&unitId=${unitId}`,
+      width: 800,
+      height: 700,
+      alwaysOnTop: true,
+      resizable: true,
+      decorations: false,  // 无边框窗口
+      minWidth: 600,
+      minHeight: 500,
+    })
+  }
+
   return {
     createWebviewWindow,
     createWindow,
     createModalWindow,
     openSettingsWindow,
+    openReportPreview,
     getWindowByLabel,
     getCurrentWindow,
     closeWindow,

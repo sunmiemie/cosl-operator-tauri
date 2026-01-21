@@ -17,7 +17,9 @@ export interface TestUnit {
   dev_testunit_status?: number
   testunit_type?: number
   version?: string
-  board_id?: number
+  board_id?: number            // 生产工单的电路板 ID
+  prod_board_id?: number       // 临时工单关联的生产电路板 ID
+  temp_board_id?: number       // 临时工单关联的临时电路板 ID
 }
 
 // 工单状态枚举 (与后端保持一致，使用字符串)

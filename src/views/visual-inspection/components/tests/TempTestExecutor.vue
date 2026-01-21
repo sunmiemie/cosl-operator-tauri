@@ -13,11 +13,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useConfig } from '@/composables/useConfig'
-import { TempTestProcess, ReportPreviewDialog } from '@/components/visual-test'
+import { useWindow } from '@/composables/useWindow'
+import { TempTestProcess } from '@/components/visual-test'
 import type { TempReportJson } from '@/components/visual-test/TempTestProcess.vue'
 import type { TestUnit } from '@/services/order'
 import { processApi } from '@/services/process'
-import { reportApi, type ReportData, type TestReport } from '@/services/report'
+import { reportApi, type TestReport } from '@/services/report'
 
 // ==================== 类型定义 ====================
 
@@ -64,10 +65,9 @@ const viewerUrl = ref('')
 const historyReportList = ref<TestReport[]>([])
 const isLoadingHistory = ref(false)
 const showHistoryDropdown = ref(false)
-const reportPreviewVisible = ref(false)
-const reportPreviewData = ref<ReportData | null>(null)
-const reportPreviewMode = ref<'prod' | 'temp'>('temp')  // 临时工单默认temp模式
-const isLoadingReport = ref(false)
+
+// 窗口管理
+const { openReportPreview } = useWindow()
 
 // ==================== 计算属性 ====================
 
@@ -478,13 +478,27 @@ async function loadHistoryReports() {
   
   isLoadingHistory.value = true
   try {
-    const boardId = props.testUnit.board_id
+    // 临时工单：使用 prod_board_id 或 temp_board_id
+    const prodBoardId = props.testUnit.prod_board_id
+    const tempBoardId = props.testUnit.temp_board_id
     
-    // 临时工单：查询 mode=1
+    // 调试日志
+    console.log('[历史报告] testUnit 数据:', JSON.stringify({
+      testunit_type: props.testUnit.testunit_type,
+      prod_board_id: prodBoardId,
+      temp_board_id: tempBoardId,
+    }))
+    
+    if (!prodBoardId && !tempBoardId) {
+      console.warn('[历史报告] 临时工单缺少 prod_board_id 和 temp_board_id')
+      historyReportList.value = []
+      return
+    }
+    
     const result = await reportApi.getHistoryList({
       mode: 1,
-      prodBoardId: boardId,
-      tempBoardId: boardId
+      prodBoardId: prodBoardId,
+      tempBoardId: tempBoardId
     }, getAuthHeaders())
     
     if (result.success && result.data) {
@@ -505,36 +519,22 @@ function handleHistoryDropdownOpen(visible: boolean) {
   }
 }
 
-/** 查看历史报告 */
+/** 查看历史报告 - 打开独立窗口 */
 async function handleViewHistoryReport(report: TestReport) {
-  isLoadingReport.value = true
-  reportPreviewVisible.value = true
+  // report.mode: 0=正式报告, 1=临时报告 (临时工单默认 mode=1)
+  const reportMode = ((report as any).mode ?? 1) as 0 | 1
+  const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
+  
+  if (!unitId) {
+    ElMessage.error('报告ID无效')
+    return
+  }
   
   try {
-    // report.mode: 0=正式报告, 1=临时报告
-    const reportMode = (report as any).mode ?? 1
-    const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
-    
-    if (!unitId) {
-      ElMessage.error('报告ID无效')
-      return
-    }
-    
-    const result = await reportApi.download(reportMode, unitId, getAuthHeaders())
-    
-    if (result.success && result.data) {
-      reportPreviewData.value = result.data
-      reportPreviewMode.value = reportMode === 1 ? 'temp' : 'prod'
-    } else {
-      ElMessage.error('获取报告详情失败')
-      reportPreviewVisible.value = false
-    }
+    await openReportPreview(reportMode, unitId)
   } catch (err) {
-    console.error('获取报告详情失败:', err)
-    ElMessage.error('获取报告详情失败')
-    reportPreviewVisible.value = false
-  } finally {
-    isLoadingReport.value = false
+    console.error('打开报告窗口失败:', err)
+    ElMessage.error('打开报告窗口失败')
   }
 }
 
@@ -843,14 +843,6 @@ function getReportStatusClass(status?: number | string): string {
       </div>
     </div>
   </Teleport>
-  
-  <!-- 报告预览对话框 -->
-  <ReportPreviewDialog
-    v-model:visible="reportPreviewVisible"
-    :data="reportPreviewData"
-    :mode="reportPreviewMode"
-    :loading="isLoadingReport"
-  />
 </template>
 
 <style scoped>

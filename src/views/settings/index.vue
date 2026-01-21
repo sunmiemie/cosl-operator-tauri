@@ -1115,7 +1115,7 @@ const languageOptions = [
 }
 
 .btn-danger {
-  background: var(--color-error);
+  background: var(--color-accent-red);
   color: white;
   border: none;
   padding: 8px 16px;
@@ -1130,7 +1130,7 @@ const languageOptions = [
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: #dc2626;
+  filter: brightness(1.15);
 }
 
 .btn-danger:disabled {

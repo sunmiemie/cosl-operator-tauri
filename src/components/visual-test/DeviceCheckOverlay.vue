@@ -169,7 +169,7 @@ const accentClass = computed(() => {
   align-items: center;
   justify-content: center;
   /* 降低不透明度，增加模糊，让背后内容隐约可见 */
-  background: rgba(15, 15, 20, 0.20);
+  background: rgba(15, 15, 20, 0.10);
   backdrop-filter: blur(8px) saturate(120%);
 }
 
@@ -192,7 +192,7 @@ const accentClass = computed(() => {
 /* 装饰光晕 */
 .glow-effect {
   position: absolute;
-  top: -50%;
+  top: -5%;
   left: 50%;
   transform: translateX(-50%);
   width: 200px;

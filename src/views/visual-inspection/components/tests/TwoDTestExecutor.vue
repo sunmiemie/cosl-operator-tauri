@@ -14,10 +14,10 @@ import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useConfig } from '@/composables/useConfig'
-import { ReportPreviewDialog } from '@/components/visual-test'
+import { useWindow } from '@/composables/useWindow'
 import type { TestUnit } from '@/services/order'
 import type { ProcessData, TempOrderData } from '@/services/process'
-import { reportApi, type ReportData, type TestReport } from '@/services/report'
+import { reportApi, type TestReport } from '@/services/report'
 
 // ==================== 类型定义 ====================
 
@@ -101,10 +101,9 @@ const showToast = ref(false)
 const historyReportList = ref<TestReport[]>([])
 const isLoadingHistory = ref(false)
 const showHistoryDropdown = ref(false)
-const reportPreviewVisible = ref(false)
-const reportPreviewData = ref<ReportData | null>(null)
-const reportPreviewMode = ref<'prod' | 'temp'>('prod')
-const isLoadingReport = ref(false)
+
+// 窗口管理
+const { openReportPreview } = useWindow()
 
 // ==================== 计算属性 ====================
 
@@ -719,35 +718,21 @@ function handleHistoryDropdownOpen(visible: boolean) {
   }
 }
 
-/** 查看历史报告 */
+/** 查看历史报告 - 打开独立窗口 */
 async function handleViewHistoryReport(report: TestReport) {
-  isLoadingReport.value = true
-  reportPreviewVisible.value = true
+  const reportMode = ((report as any).mode ?? 0) as 0 | 1
+  const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
+  
+  if (!unitId) {
+    ElMessage.error('报告ID无效')
+    return
+  }
   
   try {
-    const reportMode = (report as any).mode ?? 0
-    const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
-    
-    if (!unitId) {
-      ElMessage.error('报告ID无效')
-      return
-    }
-    
-    const result = await reportApi.download(reportMode, unitId, getAuthHeaders())
-    
-    if (result.success && result.data) {
-      reportPreviewData.value = result.data
-      reportPreviewMode.value = reportMode === 1 ? 'temp' : 'prod'
-    } else {
-      ElMessage.error('获取报告详情失败')
-      reportPreviewVisible.value = false
-    }
+    await openReportPreview(reportMode, unitId)
   } catch (err) {
-    console.error('获取报告详情失败:', err)
-    ElMessage.error('获取报告详情失败')
-    reportPreviewVisible.value = false
-  } finally {
-    isLoadingReport.value = false
+    console.error('打开报告窗口失败:', err)
+    ElMessage.error('打开报告窗口失败')
   }
 }
 
@@ -1078,14 +1063,6 @@ function getReportStatusClass(status?: number | string): string {
         </button>
       </div>
     </div>
-    
-    <!-- 报告预览对话框 -->
-    <ReportPreviewDialog
-      v-model:visible="reportPreviewVisible"
-      :data="reportPreviewData"
-      :mode="reportPreviewMode"
-      :loading="isLoadingReport"
-    />
   </div>
 </template>
 
