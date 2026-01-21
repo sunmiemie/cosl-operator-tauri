@@ -7,7 +7,7 @@
  * - 使用 TempTestProcess 作为检测面板
  * - 数据结构：tempReportJson.json.tempTest[]
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -23,15 +23,19 @@ import { reportApi, type TestReport } from '@/services/report'
 // ==================== 类型定义 ====================
 
 type TestMode = 'normal' | 'continue' | 'feedback' | 'question'
+type DeviceType = 'micro' | 'xray'
 
 // Props
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   testUnit: TestUnit
   mode: TestMode
   isDevTest: boolean
   tempReportData?: TempReportJson  // 继续测试时的已保存数据
   feedbackList?: number[]          // 打回模式下需要重检的项目ID列表
-}>()
+  deviceType?: DeviceType          // 摄像头类型：micro=显微镜, xray=X-Ray
+}>(), {
+  deviceType: 'micro'
+})
 
 // Emits
 const emit = defineEmits<{
@@ -46,6 +50,15 @@ const emit = defineEmits<{
 const { userInfo, getAuthHeaders } = useAuth()
 const camera = useCamera()
 const { config, initConfig } = useConfig()
+
+// X-Ray 裁剪相关
+const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
+let cropAnimationId: number | null = null
+
+// 判断是否使用 X-Ray 摄像头并启用裁剪
+const isXrayWithCrop = computed(() => {
+  return props.deviceType === 'xray' && config.value.xrayCropArea?.enabled === true
+})
 
 // 测试步骤: 1=检测中, 2=预览报告
 const testStep = ref(1)
@@ -106,19 +119,26 @@ onMounted(async () => {
   await initConfig()
   await initTest()
   
-  // 启动显微镜摄像头（带异常处理）
-  const microDevice = config.value.microDevice
-  if (microDevice >= 0) {
+  // 根据设备类型选择摄像头
+  const deviceIndex = props.deviceType === 'xray' 
+    ? config.value.xrayDevice 
+    : config.value.microDevice
+  const deviceName = props.deviceType === 'xray' ? 'X-Ray' : '显微镜'
+  
+  if (deviceIndex >= 0) {
     try {
-      const success = await camera.startCamera(microDevice)
+      const success = await camera.startCamera(deviceIndex)
       if (!success) {
-        console.warn('[临时测试] 摄像头启动返回失败')
+        console.warn(`[临时测试] ${deviceName}摄像头启动返回失败`)
+      } else if (isXrayWithCrop.value) {
+        // X-Ray 且启用裁剪时启动裁剪绘制循环
+        startCropLoop()
       }
     } catch (err) {
-      console.error('[临时测试] 摄像头启动异常:', err)
+      console.error(`[临时测试] ${deviceName}摄像头启动异常:`, err)
     }
   } else {
-    console.warn('[临时测试] 未配置显微镜摄像头设备索引')
+    console.warn(`[临时测试] 未配置${deviceName}摄像头设备索引`)
   }
   
   // 新测试时，上传初始临时数据让后端有记录
@@ -128,12 +148,101 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
+  // 停止裁剪绘制循环
+  stopCropLoop()
+  
   try {
     await camera.stopCamera()
   } catch (err) {
     console.warn('[临时测试] 停止摄像头时出现异常:', err)
   }
 })
+
+// 监听摄像头激活状态，在激活后启动裁剪循环
+watch(() => camera.isActive.value, (isActive) => {
+  if (isActive && isXrayWithCrop.value) {
+    startCropLoop()
+  } else {
+    stopCropLoop()
+  }
+})
+
+// ==================== X-Ray 裁剪逻辑 ====================
+
+/** 启动裁剪绘制循环 */
+function startCropLoop() {
+  if (cropAnimationId) return
+  cropAnimationId = requestAnimationFrame(drawCroppedFrame)
+}
+
+/** 停止裁剪绘制循环 */
+function stopCropLoop() {
+  if (cropAnimationId) {
+    cancelAnimationFrame(cropAnimationId)
+    cropAnimationId = null
+  }
+}
+
+/** 绘制裁剪后的画面到 canvas */
+function drawCroppedFrame() {
+  if (!isXrayWithCrop.value) {
+    cropAnimationId = null
+    return
+  }
+  
+  const canvas = cropCanvasRef.value
+  const cropConfig = config.value.xrayCropArea
+  const frameData = camera.currentFrame.value
+  
+  if (canvas && cropConfig && frameData) {
+    const img = new Image()
+    img.onload = () => {
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // 计算裁剪区域
+        const wMin = Math.min(cropConfig.w[0], cropConfig.w[1])
+        const wMax = Math.max(cropConfig.w[0], cropConfig.w[1])
+        const hMin = Math.min(cropConfig.h[0], cropConfig.h[1])
+        const hMax = Math.max(cropConfig.h[0], cropConfig.h[1])
+        
+        let sw = wMax - wMin
+        let sh = hMax - hMin
+        
+        // 如果裁剪区域无效，显示整个画面
+        if (sw <= 0 || sh <= 0) {
+          canvas.width = img.width
+          canvas.height = img.height
+          ctx.drawImage(img, 0, 0)
+        } else {
+          const sx = Math.max(0, Math.min(wMin, img.width))
+          const sy = Math.max(0, img.height - Math.min(hMax, img.height))
+          sw = Math.min(sw, img.width - sx)
+          sh = Math.min(sh, img.height - sy)
+          
+          canvas.width = sw
+          canvas.height = sh
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+        }
+      }
+    }
+    img.src = frameData
+  }
+  
+  cropAnimationId = requestAnimationFrame(drawCroppedFrame)
+}
+
+/** 获取当前画面（X-Ray 时自动应用裁剪） */
+function getCroppedFrame(): string | null {
+  const frameData = camera.currentFrame.value
+  if (!frameData) return null
+  
+  // 如果使用 X-Ray 裁剪 canvas，从 canvas 获取图片数据
+  if (isXrayWithCrop.value && cropCanvasRef.value) {
+    return cropCanvasRef.value.toDataURL('image/jpeg', 0.9)
+  }
+  
+  return frameData
+}
 
 // ==================== 初始化 ====================
 
@@ -224,9 +333,9 @@ function normalizeReportData() {
 
 // ==================== 拍照保存 ====================
 
-/** 从摄像头获取图片数据 */
+/** 从摄像头获取图片数据（X-Ray 时自动应用裁剪） */
 async function captureImage(): Promise<string | null> {
-  const frame = camera.currentFrame.value
+  const frame = getCroppedFrame()
   if (!frame) {
     ElMessage.warning('无法获取摄像头画面')
     return null
@@ -372,11 +481,18 @@ async function handleNext() {
 
 /** 返回测试 */
 async function backToTest() {
-  // 重新启动摄像头（带异常处理）
-  const microDevice = config.value.microDevice
-  if (microDevice >= 0) {
+  // 根据设备类型选择摄像头重新启动
+  const deviceIndex = props.deviceType === 'xray' 
+    ? config.value.xrayDevice 
+    : config.value.microDevice
+  
+  if (deviceIndex >= 0) {
     try {
-      await camera.startCamera(microDevice)
+      await camera.startCamera(deviceIndex)
+      // X-Ray 且启用裁剪时重新启动裁剪循环
+      if (isXrayWithCrop.value) {
+        startCropLoop()
+      }
     } catch (err) {
       console.warn('[临时测试] 重新启动摄像头时出现异常:', err)
     }
@@ -656,12 +772,19 @@ function getReportStatusClass(status?: number | string): string {
         <div class="camera-section">
           <div class="camera-header">
             <Icon icon="mdi:television" class="section-icon" />
-            <span>实时画面</span>
+            <span>{{ deviceType === 'xray' ? 'X-Ray 实时画面' : '实时画面' }}</span>
+            <span v-if="isXrayWithCrop" class="crop-badge">裁剪已启用</span>
           </div>
           <div class="camera-view">
-            <canvas id="videoCanvas" />
+            <!-- X-Ray 裁剪模式使用 canvas -->
+            <canvas 
+              v-if="isXrayWithCrop && camera.currentFrame.value"
+              ref="cropCanvasRef"
+              class="crop-canvas"
+            />
+            <!-- 普通模式直接显示图片 -->
             <img 
-              v-if="camera.currentFrame.value" 
+              v-else-if="camera.currentFrame.value" 
               :src="camera.currentFrame.value" 
               alt="摄像头画面"
             />
@@ -1146,6 +1269,24 @@ function getReportStatusClass(status?: number | string): string {
 
 .camera-view canvas {
   display: none;
+}
+
+/* X-Ray 裁剪 canvas 样式 */
+.camera-view .crop-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* 裁剪标记 */
+.crop-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-accent-orange);
+  color: white;
+  margin-left: auto;
 }
 
 .camera-placeholder {

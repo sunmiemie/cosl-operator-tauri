@@ -12,7 +12,7 @@
  * 
  * 布局: 摄像头 55% / 测试面板 45%
  */
-import { ref, computed, onMounted, onUnmounted, reactive, Teleport } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, Teleport, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -70,6 +70,15 @@ const emit = defineEmits<{
 const { userInfo, getAuthHeaders } = useAuth()
 const camera = useCamera()
 const { config, initConfig } = useConfig()
+
+// X-Ray 裁剪相关
+const cropCanvasRef = ref<HTMLCanvasElement | null>(null)
+let cropAnimationId: number | null = null
+
+// 判断是否启用 X-Ray 裁剪
+const isXrayCropEnabled = computed(() => {
+  return config.value.xrayCropArea?.enabled === true
+})
 
 // 测试步骤: 1=选择, 2=整体, 3=区域, 4=结果
 const testStep = ref(2)
@@ -245,6 +254,9 @@ onMounted(async () => {
       const success = await camera.startCamera(xrayDevice)
       if (!success) {
         console.warn('[X-Ray] 摄像头启动返回失败，可能无法正常显示实时画面')
+      } else if (isXrayCropEnabled.value) {
+        // 启用裁剪时启动裁剪绘制循环
+        startCropLoop()
       }
     } catch (err) {
       console.error('[X-Ray] 摄像头启动异常:', err)
@@ -263,6 +275,9 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
+  // 停止裁剪绘制循环
+  stopCropLoop()
+  
   // 安全停止摄像头（带异常处理）
   try {
     await camera.stopCamera()
@@ -270,6 +285,129 @@ onUnmounted(async () => {
     console.warn('[X-Ray] 停止摄像头时出现异常:', err)
   }
 })
+
+// 监听摄像头激活状态，在激活后启动裁剪循环
+watch(() => camera.isActive.value, (isActive) => {
+  if (isActive && isXrayCropEnabled.value) {
+    startCropLoop()
+  } else {
+    stopCropLoop()
+  }
+})
+
+// ==================== X-Ray 裁剪逻辑 ====================
+
+/**
+ * 启动裁剪绘制循环
+ */
+function startCropLoop() {
+  if (cropAnimationId) return
+  cropAnimationId = requestAnimationFrame(drawCroppedFrame)
+}
+
+/**
+ * 停止裁剪绘制循环
+ */
+function stopCropLoop() {
+  if (cropAnimationId) {
+    cancelAnimationFrame(cropAnimationId)
+    cropAnimationId = null
+  }
+}
+
+/**
+ * 绘制裁剪后的画面到 canvas
+ */
+function drawCroppedFrame() {
+  if (!isXrayCropEnabled.value) {
+    cropAnimationId = null
+    return
+  }
+  
+  const canvas = cropCanvasRef.value
+  const cropConfig = config.value.xrayCropArea
+  const frameData = camera.currentFrame.value
+  
+  if (canvas && cropConfig && frameData) {
+    const img = new Image()
+    img.onload = () => {
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        // 计算裁剪区域
+        const wMin = Math.min(cropConfig.w[0], cropConfig.w[1])
+        const wMax = Math.max(cropConfig.w[0], cropConfig.w[1])
+        const hMin = Math.min(cropConfig.h[0], cropConfig.h[1])
+        const hMax = Math.max(cropConfig.h[0], cropConfig.h[1])
+        
+        let sw = wMax - wMin
+        let sh = hMax - hMin
+        
+        // 如果裁剪区域无效，显示整个画面
+        if (sw <= 0 || sh <= 0) {
+          canvas.width = img.width
+          canvas.height = img.height
+          ctx.drawImage(img, 0, 0)
+        } else {
+          const sx = Math.max(0, Math.min(wMin, img.width))
+          const sy = Math.max(0, img.height - Math.min(hMax, img.height))
+          sw = Math.min(sw, img.width - sx)
+          sh = Math.min(sh, img.height - sy)
+          
+          canvas.width = sw
+          canvas.height = sh
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh)
+        }
+      }
+    }
+    img.src = frameData
+  }
+  
+  cropAnimationId = requestAnimationFrame(drawCroppedFrame)
+}
+
+/**
+ * 获取当前画面（自动应用裁剪）
+ * @returns 裁剪后的图片 base64 或原始画面
+ */
+function getCroppedFrame(): string | null {
+  const frameData = camera.currentFrame.value
+  if (!frameData) return null
+  
+  const cropConfig = config.value.xrayCropArea
+  if (!cropConfig?.enabled) {
+    return frameData
+  }
+  
+  // 使用 canvas 裁剪图片
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return frameData
+  
+  // 同步裁剪（使用已加载的图片数据）
+  const img = new Image()
+  img.src = frameData
+  
+  // 计算裁剪区域
+  const wMin = Math.min(cropConfig.w[0], cropConfig.w[1])
+  const wMax = Math.max(cropConfig.w[0], cropConfig.w[1])
+  const hMin = Math.min(cropConfig.h[0], cropConfig.h[1])
+  const hMax = Math.max(cropConfig.h[0], cropConfig.h[1])
+  
+  let sw = wMax - wMin
+  let sh = hMax - hMin
+  
+  // 如果裁剪区域无效，返回原始画面
+  if (sw <= 0 || sh <= 0) {
+    return frameData
+  }
+  
+  // 如果使用裁剪 canvas 的数据
+  if (cropCanvasRef.value) {
+    return cropCanvasRef.value.toDataURL('image/jpeg', 0.9)
+  }
+  
+  return frameData
+}
 
 async function initTest() {
   isLoading.value = true
@@ -556,7 +694,7 @@ function validatePics(pics: PicItem[]): boolean {
 // ==================== 拍照逻辑 ====================
 
 async function handleStepSave(stepId: number) {
-  const frame = camera.currentFrame.value
+  const frame = getCroppedFrame()
   if (!frame) {
     ElMessage.error('无法获取摄像头画面')
     return
@@ -578,7 +716,7 @@ async function handleStepSave(stepId: number) {
 }
 
 async function handleStepSaveQuestion(stepId: number) {
-  const frame = camera.currentFrame.value
+  const frame = getCroppedFrame()
   if (!frame) {
     ElMessage.error('无法获取摄像头画面')
     return
@@ -600,7 +738,7 @@ async function handleStepSaveQuestion(stepId: number) {
 }
 
 async function handleStepSaveWarn(stepId: number) {
-  const frame = camera.currentFrame.value
+  const frame = getCroppedFrame()
   if (!frame) {
     ElMessage.error('无法获取摄像头画面')
     return
@@ -622,7 +760,7 @@ async function handleStepSaveWarn(stepId: number) {
 }
 
 async function handlePicSave(picId: number) {
-  const frame = camera.currentFrame.value
+  const frame = getCroppedFrame()
   if (!frame) {
     ElMessage.error('无法获取摄像头画面')
     return
@@ -1339,10 +1477,18 @@ function addNote() {
         <div class="camera-header">
           <Icon icon="mdi:television" class="section-icon" />
           <span>X-Ray 实时画面</span>
+          <span v-if="isXrayCropEnabled" class="crop-badge">裁剪已启用</span>
         </div>
         <div class="camera-view">
+          <!-- 启用裁剪时使用 canvas 显示 -->
+          <canvas 
+            v-if="isXrayCropEnabled && camera.currentFrame.value"
+            ref="cropCanvasRef"
+            class="crop-canvas"
+          />
+          <!-- 未启用裁剪时直接显示图片 -->
           <img 
-            v-if="camera.currentFrame.value" 
+            v-else-if="camera.currentFrame.value" 
             :src="camera.currentFrame.value" 
             alt="X-Ray画面"
           />
@@ -1844,8 +1990,22 @@ function addNote() {
   object-fit: contain;
 }
 
-.camera-view canvas {
-  display: none;
+/* 裁剪 canvas 样式 */
+.camera-view .crop-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* 裁剪标记 */
+.crop-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-accent-orange);
+  color: white;
+  margin-left: auto;
 }
 
 .camera-placeholder {

@@ -1061,10 +1061,11 @@ watch(() => scanner.error.value, (err) => {
       <template v-if="phase === 'testing'">
         <div class="testing-layout">
           <div class="testing-main">
-            <!-- 临时工单检测 (isDevTest=true) -->
+            <!-- 临时工单检测 (isDevTest=true) - 使用 X-Ray 摄像头 -->
             <TempTestExecutor v-if="currentTestBoard && currentTestBoard.board && currentTestBoard.isDevTest"
               :test-unit="currentTestBoard.board as any" :mode="(currentTestBoard.testMode as any) || 'normal'"
               :is-dev-test="true" :temp-report-data="(currentTestBoard.tempData as any) || undefined"
+              device-type="xray"
               @complete="handleBoardTestComplete" @exit="exitTest" @request-exit="handleRequestExit"
               @error="(msg: string) => showMessage(msg, 'error')" />
 
@@ -1308,7 +1309,7 @@ watch(() => scanner.error.value, (err) => {
 .progress-bar-mini {
   width: 60px;
   height: 4px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-border);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -2076,7 +2077,12 @@ watch(() => scanner.error.value, (err) => {
   gap: 0.5rem;
   margin: 0 auto;
 }
-
+.board-list-item {
+  width: 100%;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
 .board-row {
   display: flex;
   align-items: center;
