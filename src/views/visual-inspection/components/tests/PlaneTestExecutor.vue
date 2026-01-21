@@ -433,17 +433,24 @@ onMounted(async () => {
   // 初始化配置
   await initConfig()
   
-  // 启动弓曲度摄像头
+  // 启动弓曲度摄像头（带异常处理）
   const planeDevice = config.value.planeDevice
   if (planeDevice >= 0) {
-    await camera.startCamera(planeDevice)
-    
-    // 定时刷新 Canvas
-    frameInterval = window.setInterval(() => {
-      if (testStep.value === 1) {
-        drawFrame()
+    try {
+      const success = await camera.startCamera(planeDevice)
+      if (success) {
+        // 定时刷新 Canvas
+        frameInterval = window.setInterval(() => {
+          if (testStep.value === 1) {
+            drawFrame()
+          }
+        }, 33) // ~30fps
+      } else {
+        console.warn('[弓曲度] 摄像头启动返回失败')
       }
-    }, 33) // ~30fps
+    } catch (err) {
+      console.error('[弓曲度] 摄像头启动异常:', err)
+    }
   } else {
     showMessage('未配置弓曲度摄像头，请在设置中配置', 'error')
   }
@@ -454,11 +461,15 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
+onUnmounted(async () => {
   if (frameInterval) {
     clearInterval(frameInterval)
   }
-  camera.stopCamera()
+  try {
+    await camera.stopCamera()
+  } catch (err) {
+    console.warn('[弓曲度] 停止摄像头时出现异常:', err)
+  }
 })
 
 // 加载临时数据

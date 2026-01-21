@@ -238,12 +238,20 @@ onMounted(async () => {
   await initConfig()
   await initTest()
   
-  // 启动 X-Ray 摄像头
+  // 启动 X-Ray 摄像头（带异常处理）
   const xrayDevice = config.value.xrayDevice
   if (xrayDevice >= 0) {
-    await camera.startCamera(xrayDevice)
+    try {
+      const success = await camera.startCamera(xrayDevice)
+      if (!success) {
+        console.warn('[X-Ray] 摄像头启动返回失败，可能无法正常显示实时画面')
+      }
+    } catch (err) {
+      console.error('[X-Ray] 摄像头启动异常:', err)
+      // 不阻断测试流程，但记录错误
+    }
   } else {
-    console.warn('未配置 X-Ray 摄像头')
+    console.warn('[X-Ray] 未配置 X-Ray 摄像头设备索引')
   }
   
   // 新测试时，上传初始临时数据让后端 TempTestUnit 有记录
@@ -254,8 +262,13 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
-  camera.stopCamera()
+onUnmounted(async () => {
+  // 安全停止摄像头（带异常处理）
+  try {
+    await camera.stopCamera()
+  } catch (err) {
+    console.warn('[X-Ray] 停止摄像头时出现异常:', err)
+  }
 })
 
 async function initTest() {
@@ -689,31 +702,71 @@ async function handleTestComplete() {
 function generateReport() {
   if (!processJson.value || !reportJson.value) return
   
+  // 辅助函数：收集 step 中的 error/question/warn 项
+  const collectStepLists = (steps: any[]) => {
+    const errorList: any[] = []
+    const questionList: any[] = []
+    const warnList: any[] = []
+    
+    steps.forEach(s => {
+      if (s.error) errorList.push(s)
+      if (s.question) questionList.push(s)
+      if (s.warn) warnList.push(s)
+    })
+    
+    return { errorList, questionList, warnList }
+  }
+  
+  // 处理 total 部分
+  const totalLists = collectStepLists(processJson.value.total.step)
+  const totalReport: any = {
+    stepList: processJson.value.total.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
+    stepNote: processJson.value.total.stepNote || [],
+    picList: processJson.value.total.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+    picNote: processJson.value.total.picNote || []
+  }
+  if (totalLists.errorList.length > 0) totalReport.errorList = totalLists.errorList
+  if (totalLists.questionList.length > 0) totalReport.questionList = totalLists.questionList
+  if (totalLists.warnList.length > 0) totalReport.warnList = totalLists.warnList
+  
   // 使用 as any 避免复杂类型检查 - 生成的报告格式与原程序一致
   (reportJson.value.json as any).xray = {
-    total: {
-      stepList: processJson.value.total.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-      stepNote: processJson.value.total.stepNote || [],
-      picList: processJson.value.total.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-      picNote: processJson.value.total.picNote || []
-    },
-    area: processJson.value.area.map(a => ({
-      id: a.id,
-      general: {
+    total: totalReport,
+    area: processJson.value.area.map(a => {
+      // 处理 general 部分
+      const generalLists = collectStepLists(a.general.step)
+      const generalReport: any = {
         stepList: a.general.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
         stepNote: a.general.stepNote || [],
         picList: a.general.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
         picNote: a.general.picNote || []
-      },
-      detail: a.detail.map(d => ({
-        id: d.id,
-        name: d.name,
-        stepList: d.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-        stepNote: d.stepNote || [],
-        picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-        picNote: d.picNote || []
-      }))
-    }))
+      }
+      if (generalLists.errorList.length > 0) generalReport.errorList = generalLists.errorList
+      if (generalLists.questionList.length > 0) generalReport.questionList = generalLists.questionList
+      if (generalLists.warnList.length > 0) generalReport.warnList = generalLists.warnList
+      
+      return {
+        id: a.id,
+        general: generalReport,
+        detail: a.detail.map(d => {
+          // 处理 detail 部分
+          const detailLists = collectStepLists(d.step)
+          const detailReport: any = {
+            id: d.id,
+            name: d.name,
+            stepList: d.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
+            stepNote: d.stepNote || [],
+            picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+            picNote: d.picNote || []
+          }
+          if (detailLists.errorList.length > 0) detailReport.errorList = detailLists.errorList
+          if (detailLists.questionList.length > 0) detailReport.questionList = detailLists.questionList
+          if (detailLists.warnList.length > 0) detailReport.warnList = detailLists.warnList
+          
+          return detailReport
+        })
+      }
+    })
   }
 }
 

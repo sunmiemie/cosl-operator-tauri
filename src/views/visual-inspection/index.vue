@@ -21,6 +21,7 @@ import { useLayout } from '@/composables/useLayout'
 import { orderApi, type TestUnit, OrderStatus, OrderType } from '@/services/order'
 import { processApi, type ProcessData, type TempOrderData, type FeedbackData, type QuestionData } from '@/services/process'
 import { reportApi, type ReportData } from '@/services/report'
+import { startWorktime, stopWorktime } from '@/services/worktime'
 
 // 导入公共组件
 import {
@@ -365,8 +366,8 @@ async function startEyesTest(item: TestUnit) {
     nextTestUnit.value = null
   }
   
-  // 开始计时
-  // TODO: 实现 worktime_counts
+  // 开始工时计时
+  startWorktime()
 }
 
 /**
@@ -607,7 +608,10 @@ async function handleTestComplete() {
   await loadWaitingOrders()
   await startScanner()
   
-  // TODO: stop_worktime_counts
+  // 停止工时计时并上传
+  if (userInfo.value?.id) {
+    await stopWorktime(userInfo.value.id, getAuthHeaders())
+  }
 }
 
 /**

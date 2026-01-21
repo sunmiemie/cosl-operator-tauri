@@ -509,4 +509,60 @@ const accentClass = computed(() => {
     transform: translateY(10px) scale(0.98);
   }
 }
+
+/* ==================== 亮色主题适配 ==================== */
+:global(html.light) .device-overlay {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+:global(html.light) .content-card {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--color-border);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+:global(html.light) .ring-bg {
+  color: rgba(0, 0, 0, 0.1);
+}
+
+:global(html.light) .status-text {
+  color: var(--color-text-primary);
+}
+
+:global(html.light) .device-item {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--color-accent-red);
+}
+
+:global(html.light) .device-item.is-ok {
+  color: var(--color-accent-green);
+}
+
+:global(html.light) .error-msg {
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--color-accent-red);
+  border-color: rgba(239, 68, 68, 0.15);
+}
+
+:global(html.light) .btn-secondary {
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+
+:global(html.light) .btn-secondary:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent-blue);
+}
+
+:global(html.light) .btn-ghost {
+  color: var(--color-text-secondary);
+}
+
+:global(html.light) .btn-ghost:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
 </style>

@@ -106,12 +106,19 @@ onMounted(async () => {
   await initConfig()
   await initTest()
   
-  // 启动显微镜摄像头
+  // 启动显微镜摄像头（带异常处理）
   const microDevice = config.value.microDevice
   if (microDevice >= 0) {
-    await camera.startCamera(microDevice)
+    try {
+      const success = await camera.startCamera(microDevice)
+      if (!success) {
+        console.warn('[临时测试] 摄像头启动返回失败')
+      }
+    } catch (err) {
+      console.error('[临时测试] 摄像头启动异常:', err)
+    }
   } else {
-    console.warn('未配置显微镜摄像头')
+    console.warn('[临时测试] 未配置显微镜摄像头设备索引')
   }
   
   // 新测试时，上传初始临时数据让后端有记录
@@ -120,8 +127,12 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
-  camera.stopCamera()
+onUnmounted(async () => {
+  try {
+    await camera.stopCamera()
+  } catch (err) {
+    console.warn('[临时测试] 停止摄像头时出现异常:', err)
+  }
 })
 
 // ==================== 初始化 ====================
@@ -346,8 +357,12 @@ async function handleNext() {
       { confirmButtonText: '继续', cancelButtonText: '取消' }
     )
     
-    // 停止摄像头
-    camera.stopCamera()
+    // 停止摄像头（带异常处理）
+    try {
+      await camera.stopCamera()
+    } catch (err) {
+      console.warn('[临时测试] 停止摄像头时出现异常:', err)
+    }
     testStep.value = 2
     
   } catch {
@@ -357,10 +372,14 @@ async function handleNext() {
 
 /** 返回测试 */
 async function backToTest() {
-  // 重新启动摄像头
+  // 重新启动摄像头（带异常处理）
   const microDevice = config.value.microDevice
   if (microDevice >= 0) {
-    await camera.startCamera(microDevice)
+    try {
+      await camera.startCamera(microDevice)
+    } catch (err) {
+      console.warn('[临时测试] 重新启动摄像头时出现异常:', err)
+    }
   }
   testStep.value = 1
 }

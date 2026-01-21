@@ -621,16 +621,23 @@ let frameInterval: number | null = null
 onMounted(async () => {
   await initConfig()
   
-  // 启动显微镜摄像头
+  // 启动显微镜摄像头（带异常处理）
   const microDevice = config.value.microDevice
   if (microDevice >= 0) {
-    await camera.startCamera(microDevice)
-    
-    frameInterval = window.setInterval(() => {
-      if (testStep.value === 1 && !isCropMode.value) {
-        drawFrame()
+    try {
+      const success = await camera.startCamera(microDevice)
+      if (success) {
+        frameInterval = window.setInterval(() => {
+          if (testStep.value === 1 && !isCropMode.value) {
+            drawFrame()
+          }
+        }, 33)
+      } else {
+        console.warn('[2D留存] 摄像头启动返回失败')
       }
-    }, 33)
+    } catch (err) {
+      console.error('[2D留存] 摄像头启动异常:', err)
+    }
   } else {
     showMessage('未配置显微镜摄像头，请在设置中配置', 'error')
   }
@@ -641,11 +648,15 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
+onUnmounted(async () => {
   if (frameInterval) {
     clearInterval(frameInterval)
   }
-  camera.stopCamera()
+  try {
+    await camera.stopCamera()
+  } catch (err) {
+    console.warn('[2D留存] 停止摄像头时出现异常:', err)
+  }
 })
 
 function loadTempData() {

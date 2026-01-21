@@ -254,12 +254,20 @@ onMounted(async () => {
   await initConfig()
   await initTest()
   
-  // 启动显微镜摄像头
+  // 启动显微镜摄像头（带异常处理）
   const microDevice = config.value.microDevice
   if (microDevice >= 0) {
-    await camera.startCamera(microDevice)
+    try {
+      const success = await camera.startCamera(microDevice)
+      if (!success) {
+        console.warn('[3D检测] 摄像头启动返回失败，可能无法正常显示实时画面')
+      }
+    } catch (err) {
+      console.error('[3D检测] 摄像头启动异常:', err)
+      // 不阻断测试流程，但记录错误
+    }
   } else {
-    console.warn('未配置显微镜摄像头')
+    console.warn('[3D检测] 未配置显微镜摄像头设备索引')
   }
   
   // 新测试时，上传初始临时数据让后端 TempTestUnit 有记录
@@ -269,8 +277,13 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
-  camera.stopCamera()
+onUnmounted(async () => {
+  // 安全停止摄像头（带异常处理）
+  try {
+    await camera.stopCamera()
+  } catch (err) {
+    console.warn('[3D检测] 停止摄像头时出现异常:', err)
+  }
 })
 
 async function initTest() {
@@ -704,64 +717,82 @@ async function handleTestComplete() {
 function generateReport() {
   if (!localJson.value || !reportJson.value) return
   
-  // 简化版报告生成 - 实际项目中需要按原程序完整实现
+  // 辅助函数：收集 step 中的 error/question/warn 项
+  const collectStepLists = (steps: any[]) => {
+    const errorList: any[] = []
+    const questionList: any[] = []
+    const warnList: any[] = []
+    
+    steps.forEach(s => {
+      if (s.error) errorList.push(s)
+      if (s.question) questionList.push(s)
+      if (s.warn) warnList.push(s)
+    })
+    
+    return { errorList, questionList, warnList }
+  }
+  
+  // 辅助函数：生成带汇总的 section 数据
+  const buildSection = (data: any) => {
+    const totalLists = collectStepLists(data.total.step)
+    const totalReport: any = {
+      stepList: data.total.step.map((s: any) => ({ id: s.id, name: s.name, pass: s.pass })),
+      stepNote: data.total.stepNote || [],
+      picList: data.total.pic.map((p: any) => ({ id: p.id, name: p.name, save: p.save })),
+      picNote: data.total.picNote || []
+    }
+    if (totalLists.errorList.length > 0) totalReport.errorList = totalLists.errorList
+    if (totalLists.questionList.length > 0) totalReport.questionList = totalLists.questionList
+    if (totalLists.warnList.length > 0) totalReport.warnList = totalLists.warnList
+    
+    return {
+      total: totalReport,
+      area: data.area.map((a: any) => {
+        const generalLists = collectStepLists(a.general.step)
+        const generalReport: any = {
+          stepList: a.general.step.map((s: any) => ({ id: s.id, name: s.name, pass: s.pass })),
+          stepNote: a.general.stepNote || [],
+          picList: a.general.pic.map((p: any) => ({ id: p.id, name: p.name, save: p.save })),
+          picNote: a.general.picNote || []
+        }
+        if (generalLists.errorList.length > 0) generalReport.errorList = generalLists.errorList
+        if (generalLists.questionList.length > 0) generalReport.questionList = generalLists.questionList
+        if (generalLists.warnList.length > 0) generalReport.warnList = generalLists.warnList
+        
+        return {
+          id: a.id,
+          general: generalReport,
+          detail: a.detail.map((d: any) => {
+            const detailLists = collectStepLists(d.step)
+            const detailReport: any = {
+              id: d.id,
+              name: d.name,
+              stepList: d.step.map((s: any) => ({ id: s.id, name: s.name, pass: s.pass })),
+              stepNote: d.stepNote || [],
+              picList: d.pic.map((p: any) => ({ id: p.id, name: p.name, save: p.save })),
+              picNote: d.picNote || []
+            }
+            if (detailLists.errorList.length > 0) detailReport.errorList = detailLists.errorList
+            if (detailLists.questionList.length > 0) detailReport.questionList = detailLists.questionList
+            if (detailLists.warnList.length > 0) detailReport.warnList = detailLists.warnList
+            
+            return detailReport
+          })
+        }
+      })
+    }
+  }
+  
+  // 正面数据
   const eyes = localJson.value.eyes
   if (eyes) {
-    reportJson.value.json.threeD.eyes = {
-      total: {
-        stepList: eyes.total.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-        stepNote: eyes.total.stepNote || [],
-        picList: eyes.total.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-        picNote: eyes.total.picNote || []
-      },
-      area: eyes.area.map(a => ({
-        id: a.id,
-        general: {
-          stepList: a.general.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-          stepNote: a.general.stepNote || [],
-          picList: a.general.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-          picNote: a.general.picNote || []
-        },
-        detail: a.detail.map(d => ({
-          id: d.id,
-          name: d.name,
-          stepList: d.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-          stepNote: d.stepNote || [],
-          picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-          picNote: d.picNote || []
-        }))
-      }))
-    }
+    reportJson.value.json.threeD.eyes = buildSection(eyes)
   }
   
   // 背面数据
   const eyesBak = localJson.value.eyesBak
   if (eyesBak && hasBackSide.value) {
-    reportJson.value.json.threeD.eyesBak = {
-      total: {
-        stepList: eyesBak.total.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-        stepNote: eyesBak.total.stepNote || [],
-        picList: eyesBak.total.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-        picNote: eyesBak.total.picNote || []
-      },
-      area: eyesBak.area.map(a => ({
-        id: a.id,
-        general: {
-          stepList: a.general.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-          stepNote: a.general.stepNote || [],
-          picList: a.general.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-          picNote: a.general.picNote || []
-        },
-        detail: a.detail.map(d => ({
-          id: d.id,
-          name: d.name,
-          stepList: d.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-          stepNote: d.stepNote || [],
-          picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
-          picNote: d.picNote || []
-        }))
-      }))
-    }
+    reportJson.value.json.threeD.eyesBak = buildSection(eyesBak)
   }
 }
 
