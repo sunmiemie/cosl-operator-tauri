@@ -43,8 +43,9 @@ function formatDateTime(dateStr?: string): string {
   return `${month}-${day} ${hours}:${minutes}`
 }
 
-function getStatusClass(status?: number): string {
-  switch (status) {
+function getStatusClass(status?: number | string): string {
+  const s = String(status)
+  switch (s) {
     case OrderStatus.New: return 'status-new'
     case OrderStatus.Testing: return 'status-continue'
     case OrderStatus.Feedback: return 'status-redo'
@@ -53,8 +54,9 @@ function getStatusClass(status?: number): string {
   }
 }
 
-function getStatusText(status?: number): string {
-  switch (status) {
+function getStatusText(status?: number | string): string {
+  const s = String(status)
+  switch (s) {
     case OrderStatus.New: return '新工单'
     case OrderStatus.Testing: return '待继续'
     case OrderStatus.Feedback: return '待重做'
@@ -140,7 +142,7 @@ function getTestTypeClass(type?: string): string {
                   class="status-tag"
                   :class="getStatusClass(item.testunit_status || item.dev_testunit_status)"
                 >
-                  {{ getStatusText(item.dev_testunit_id || item.dev_testunit_status) }}
+                  {{ getStatusText(item.testunit_status || item.dev_testunit_status) }}
                 </span>
               </td>
               <td>

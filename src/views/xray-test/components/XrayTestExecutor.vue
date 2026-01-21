@@ -12,7 +12,7 @@
  * 
  * 布局: 摄像头 55% / 测试面板 45%
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, Teleport } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -102,6 +102,27 @@ const reportPreviewVisible = ref(false)
 const reportPreviewData = ref<ReportData | null>(null)
 const reportPreviewMode = ref<'prod' | 'temp'>('prod')
 const isLoadingReport = ref(false)
+
+// 快捷导航
+interface QuickTreeNode {
+  label: string
+  index?: number
+  disabled?: boolean
+  children?: QuickTreeNode[]
+}
+const quickTreeData = ref<QuickTreeNode[]>([])
+const showQuickNav = ref(false)
+
+// 备注
+const noteVisible = ref(false)
+const noteForm = reactive({
+  value: '',
+  type: '' as 'total' | 'area' | '',
+  stepType: '' as 'step' | 'pic' | '',
+  areaType: '' as 'total' | 'detail' | '',
+  areaId: 0,
+  pointId: 0
+})
 
 // ==================== 计算属性 ====================
 
@@ -680,13 +701,17 @@ function generateReport() {
       id: a.id,
       general: {
         stepList: a.general.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-        picList: a.general.pic.map(p => ({ id: p.id, name: p.name, save: p.save }))
+        stepNote: a.general.stepNote || [],
+        picList: a.general.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+        picNote: a.general.picNote || []
       },
       detail: a.detail.map(d => ({
         id: d.id,
         name: d.name,
         stepList: d.step.map(s => ({ id: s.id, name: s.name, pass: s.pass })),
-        picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save }))
+        stepNote: d.stepNote || [],
+        picList: d.pic.map(p => ({ id: p.id, name: p.name, save: p.save })),
+        picNote: d.picNote || []
       }))
     }))
   }
@@ -864,6 +889,295 @@ function getReportStatusClass(status?: number | string): string {
   if (s === '3') return 'status-fail'
   return ''
 }
+
+// ==================== 快捷导航 ====================
+
+/** 生成快捷导航树数据 */
+function generateQuickTreeData() {
+  if (!processJson.value) return
+  
+  quickTreeData.value = []
+  
+  // 根节点
+  const root: QuickTreeNode = {
+    label: 'X-Ray检测',
+    children: []
+  }
+  quickTreeData.value.push(root)
+  
+  // 整体检测
+  root.children!.push({
+    label: '整体检测',
+    children: [
+      { label: '检测', disabled: true },
+      { label: '留存', disabled: true }
+    ]
+  })
+  
+  // 区域检测
+  const areas = processJson.value.area
+  if (areas) {
+    for (let i = 0; i < areas.length; i++) {
+      const areaNode: QuickTreeNode = {
+        label: `区域${i + 1}`,
+        index: i,
+        children: [
+          {
+            label: '通用检测',
+            children: [
+              { label: '检测', disabled: true },
+              { label: '留存', disabled: true }
+            ]
+          },
+          {
+            label: '具体检测',
+            children: []
+          }
+        ]
+      }
+      
+      // 点位
+      for (let j = 0; j < areas[i].detail.length; j++) {
+        areaNode.children![1].children!.push({
+          label: areas[i].detail[j].name,
+          index: j,
+          children: [
+            { label: '检测', disabled: true },
+            { label: '留存', disabled: true }
+          ]
+        })
+      }
+      
+      root.children!.push(areaNode)
+    }
+  }
+}
+
+/** 判断快捷导航禁用状态 */
+function judgeQuickStatus() {
+  if (!processJson.value) return
+  
+  const xrayData = processJson.value
+  
+  // 检查整体
+  if (xrayData.total) {
+    const stepDisabled = checkStepIncomplete(xrayData.total.step)
+    const picDisabled = checkPicIncomplete(xrayData.total.pic)
+    if (quickTreeData.value[0]?.children?.[0]?.children) {
+      quickTreeData.value[0].children[0].children[0].disabled = stepDisabled
+      quickTreeData.value[0].children[0].children[1].disabled = picDisabled
+    }
+  }
+  
+  // 检查区域
+  if (xrayData.area) {
+    for (let i = 0; i < xrayData.area.length; i++) {
+      const area = xrayData.area[i]
+      // 通用检测
+      const generalStepDisabled = checkStepIncomplete(area.general?.step)
+      const generalPicDisabled = checkPicIncomplete(area.general?.pic)
+      if (quickTreeData.value[0]?.children?.[i + 1]?.children?.[0]?.children) {
+        quickTreeData.value[0].children[i + 1].children![0].children![0].disabled = generalStepDisabled
+        quickTreeData.value[0].children[i + 1].children![0].children![1].disabled = generalPicDisabled
+      }
+      
+      // 具体检测
+      for (let j = 0; j < area.detail.length; j++) {
+        const detail = area.detail[j]
+        const detailStepDisabled = checkStepIncomplete(detail.step)
+        const detailPicDisabled = checkPicIncomplete(detail.pic)
+        if (quickTreeData.value[0]?.children?.[i + 1]?.children?.[1]?.children?.[j]?.children) {
+          quickTreeData.value[0].children[i + 1].children![1].children![j].children![0].disabled = detailStepDisabled
+          quickTreeData.value[0].children[i + 1].children![1].children![j].children![1].disabled = detailPicDisabled
+        }
+      }
+    }
+  }
+}
+
+/** 检查检测项是否未完成 */
+function checkStepIncomplete(steps?: StepItem[]): boolean {
+  if (!steps || steps.length === 0) return true
+  
+  for (const step of steps) {
+    if (step.pass === 0) return true
+    if (step.pass === 2 && (!step.error?.url || step.error.url.length === 0 || !step.error?.desc)) return true
+    if (step.pass === 3 && (!step.question?.url || step.question.url.length === 0 || !step.question?.desc)) return true
+    if (step.pass === 4) {
+      if (!step.error?.url || step.error.url.length === 0 || !step.error?.desc) return true
+      if (!step.question?.url || step.question.url.length === 0 || !step.question?.desc) return true
+    }
+    if (step.warn && (!step.warn.url || step.warn.url.length === 0 || !step.warn.desc)) return true
+  }
+  return false
+}
+
+/** 检查留存项是否未完成 */
+function checkPicIncomplete(pics?: PicItem[]): boolean {
+  if (!pics || pics.length === 0) return true
+  
+  for (const pic of pics) {
+    if (!pic.save || pic.save.length === 0) return true
+  }
+  return false
+}
+
+/** 跳转到指定步骤 */
+function goToStep(node: any) {
+  if (!processJson.value) return
+  
+  const level = node.level
+  const label = node.data.label
+  
+  if (level === 3) {
+    // 整体检测 - 检测/留存
+    testStep.value = 2
+    currentArea.value = 0
+    areaMethods.value = 'step'
+    pointMethods.value = 'step'
+    currentPoint.value = 0
+    pointCount.value = 0
+    
+    if (label === '检测') {
+      totalMethods.value = 'step'
+    } else {
+      totalMethods.value = 'pic'
+    }
+  } else if (level === 4) {
+    // 区域通用检测 - 检测/留存
+    testStep.value = 3
+    totalMethods.value = 'pic'
+    pointMethods.value = 'step'
+    currentPoint.value = 0
+    
+    const areaIndex = node.parent?.parent?.data?.index ?? 0
+    currentArea.value = areaIndex + 1
+    pointCount.value = processJson.value.area[areaIndex]?.detail?.length || 0
+    
+    if (label === '检测') {
+      areaMethods.value = 'step'
+    } else {
+      areaMethods.value = 'pic'
+    }
+  } else if (level === 5) {
+    // 具体点位检测 - 检测/留存
+    testStep.value = 3
+    totalMethods.value = 'pic'
+    areaMethods.value = 'detail'
+    
+    const areaIndex = node.parent?.parent?.parent?.data?.index ?? 0
+    const pointIndex = node.parent?.data?.index ?? 0
+    currentArea.value = areaIndex + 1
+    currentPoint.value = pointIndex + 1
+    pointCount.value = processJson.value.area[areaIndex]?.detail?.length || 0
+    
+    if (label === '检测') {
+      pointMethods.value = 'step'
+    } else {
+      pointMethods.value = 'pic'
+    }
+  }
+  
+  showQuickNav.value = false
+}
+
+/** 打开快捷导航 */
+function handleQuickNavOpen() {
+  generateQuickTreeData()
+  judgeQuickStatus()
+  showQuickNav.value = true
+}
+
+// ==================== 备注功能 ====================
+
+/** 打开备注编辑 */
+function openNoteEdit(areaId: number, pointId: number) {
+  // 根据当前状态判断备注类型
+  if (testStep.value === 2) {
+    // 整体检测
+    noteForm.type = 'total'
+    noteForm.stepType = totalMethods.value === 'step' ? 'step' : 'pic'
+  } else {
+    // 区域检测
+    noteForm.type = 'area'
+    if (areaMethods.value === 'step' || areaMethods.value === 'pic') {
+      noteForm.areaType = 'total'
+      noteForm.stepType = areaMethods.value === 'step' ? 'step' : 'pic'
+    } else {
+      noteForm.areaType = 'detail'
+      noteForm.stepType = pointMethods.value === 'step' ? 'step' : 'pic'
+    }
+  }
+  
+  noteForm.areaId = areaId
+  noteForm.pointId = pointId
+  noteVisible.value = true
+}
+
+/** 关闭备注编辑 */
+function closeNoteEdit() {
+  noteForm.value = ''
+  noteForm.type = ''
+  noteForm.stepType = ''
+  noteForm.areaType = ''
+  noteForm.areaId = 0
+  noteForm.pointId = 0
+  noteVisible.value = false
+}
+
+/** 添加备注 */
+function addNote() {
+  if (!noteForm.value.trim()) {
+    ElMessage.warning('请输入备注内容')
+    return
+  }
+  
+  if (!processJson.value) return
+  
+  if (noteForm.type === 'total') {
+    // 整体备注
+    if (noteForm.stepType === 'step') {
+      if (!processJson.value.total.stepNote) processJson.value.total.stepNote = []
+      processJson.value.total.stepNote.push(noteForm.value)
+    } else {
+      if (!processJson.value.total.picNote) processJson.value.total.picNote = []
+      processJson.value.total.picNote.push(noteForm.value)
+    }
+  } else if (noteForm.type === 'area') {
+    const areaIndex = (noteForm.areaId || currentArea.value) - 1
+    if (areaIndex < 0 || areaIndex >= processJson.value.area.length) return
+    
+    const area = processJson.value.area[areaIndex]
+    
+    if (noteForm.areaType === 'total') {
+      // 区域通用备注
+      if (!area.general) area.general = { step: [], pic: [] }
+      if (noteForm.stepType === 'step') {
+        if (!area.general.stepNote) area.general.stepNote = []
+        area.general.stepNote.push(noteForm.value)
+      } else {
+        if (!area.general.picNote) area.general.picNote = []
+        area.general.picNote.push(noteForm.value)
+      }
+    } else {
+      // 点位备注
+      const pointIndex = (noteForm.pointId || currentPoint.value) - 1
+      if (pointIndex < 0 || pointIndex >= area.detail.length) return
+      
+      const detail = area.detail[pointIndex]
+      if (noteForm.stepType === 'step') {
+        if (!detail.stepNote) detail.stepNote = []
+        detail.stepNote.push(noteForm.value)
+      } else {
+        if (!detail.picNote) detail.picNote = []
+        detail.picNote.push(noteForm.value)
+      }
+    }
+  }
+  
+  ElMessage.success('备注添加成功')
+  closeNoteEdit()
+}
 </script>
 
 <template>
@@ -1014,20 +1328,146 @@ function getReportStatusClass(status?: number | string): string {
 
     <!-- 底部操作栏 -->
     <div class="executor-footer">
-      <button 
-        class="btn btn-outline" 
-        @click="handlePrevious"
-        :disabled="testStep === 2 && totalMethods === 'step'"
-      >
-        <Icon icon="mdi:arrow-left" />
-        上一步
-      </button>
+      <div class="footer-left">
+        <!-- 快捷导航 -->
+        <div class="quick-nav-dropdown">
+          <button class="btn btn-ghost quick-nav-btn" @click="handleQuickNavOpen">
+            <Icon icon="mdi:format-list-bulleted" />
+          </button>
+          
+          <!-- 下拉面板 -->
+          <div v-if="showQuickNav" class="quick-nav-panel">
+            <div class="quick-nav-header">
+              <span>快捷导航</span>
+              <button class="btn-icon" @click="showQuickNav = false">
+                <Icon icon="mdi:close" />
+              </button>
+            </div>
+            <div class="quick-nav-content">
+              <template v-for="(side, sideIdx) in quickTreeData" :key="sideIdx">
+                <div class="nav-group">
+                  <div class="nav-group-title">{{ side.label }}</div>
+                  <template v-for="(item, itemIdx) in side.children" :key="itemIdx">
+                    <!-- 整体检测 -->
+                    <template v-if="item.label === '整体检测'">
+                      <div class="nav-item-group">
+                        <span class="nav-item-title">{{ item.label }}</span>
+                        <div class="nav-item-actions">
+                          <button 
+                            v-for="(child, cIdx) in item.children" 
+                            :key="cIdx"
+                            class="nav-btn"
+                            :class="{ disabled: child.disabled }"
+                            :disabled="child.disabled"
+                            @click="goToStep({ level: 3, data: child, parent: { data: item, parent: { data: side } } })"
+                          >
+                            {{ child.label }}
+                          </button>
+                        </div>
+                      </div>
+                    </template>
+                    <!-- 区域检测 -->
+                    <template v-else>
+                      <div class="nav-area-group">
+                        <div class="nav-area-title">{{ item.label }}</div>
+                        <template v-for="(sub, subIdx) in item.children" :key="subIdx">
+                          <!-- 通用检测 -->
+                          <template v-if="sub.label === '通用检测'">
+                            <div class="nav-item-group sub">
+                              <span class="nav-item-title">{{ sub.label }}</span>
+                              <div class="nav-item-actions">
+                                <button 
+                                  v-for="(child, cIdx) in sub.children" 
+                                  :key="cIdx"
+                                  class="nav-btn"
+                                  :class="{ disabled: child.disabled }"
+                                  :disabled="child.disabled"
+                                  @click="goToStep({ level: 4, data: child, parent: { data: sub, parent: { data: item, parent: { data: side } } } })"
+                                >
+                                  {{ child.label }}
+                                </button>
+                              </div>
+                            </div>
+                          </template>
+                          <!-- 具体检测 -->
+                          <template v-else>
+                            <div class="nav-detail-group">
+                              <div class="nav-detail-title">{{ sub.label }}</div>
+                              <div v-for="(point, pIdx) in sub.children" :key="pIdx" class="nav-item-group point">
+                                <span class="nav-item-title">{{ point.label }}</span>
+                                <div class="nav-item-actions">
+                                  <button 
+                                    v-for="(child, cIdx) in point.children" 
+                                    :key="cIdx"
+                                    class="nav-btn"
+                                    :class="{ disabled: child.disabled }"
+                                    :disabled="child.disabled"
+                                    @click="goToStep({ level: 5, data: child, parent: { data: point, parent: { data: sub, parent: { data: item, parent: { data: side } } } } })"
+                                  >
+                                    {{ child.label }}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                        </template>
+                      </div>
+                    </template>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+        
+        <button 
+          class="btn btn-outline" 
+          @click="handlePrevious"
+          :disabled="testStep === 2 && totalMethods === 'step'"
+        >
+          <Icon icon="mdi:arrow-left" />
+          上一步
+        </button>
+      </div>
       
-      <button class="btn btn-primary" @click="handleNext">
-        下一步
-        <Icon icon="mdi:arrow-right" />
-      </button>
+      <div class="footer-right">
+        <!-- 备注按钮 -->
+        <button class="btn btn-ghost" @click="openNoteEdit(currentArea, currentPoint)">
+          <Icon icon="mdi:note-edit" />
+          备注
+        </button>
+        
+        <button class="btn btn-primary" @click="handleNext">
+          下一步
+          <Icon icon="mdi:arrow-right" />
+        </button>
+      </div>
     </div>
+    
+    <!-- 备注对话框 -->
+    <Teleport to="body">
+      <div v-if="noteVisible" class="note-dialog-overlay" @click.self="closeNoteEdit">
+        <div class="note-dialog">
+          <div class="note-dialog-header">
+            <span>添加备注</span>
+            <button class="btn-icon" @click="closeNoteEdit">
+              <Icon icon="mdi:close" />
+            </button>
+          </div>
+          <div class="note-dialog-body">
+            <textarea 
+              v-model="noteForm.value"
+              placeholder="请输入备注内容..."
+              rows="6"
+            ></textarea>
+          </div>
+          <div class="note-dialog-footer">
+            <button class="btn btn-ghost" @click="closeNoteEdit">取消</button>
+            <button class="btn btn-primary" @click="addNote">添加</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
     
     <!-- 报告预览对话框 -->
     <ReportPreviewDialog
@@ -1402,7 +1842,7 @@ function getReportStatusClass(status?: number | string): string {
 .executor-footer {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background: var(--color-bg-secondary);
@@ -1857,6 +2297,243 @@ function getReportStatusClass(status?: number | string): string {
 
 .btn-outline:hover:not(:disabled) {
   background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* 快捷导航 */
+.quick-nav-dropdown {
+  position: relative;
+}
+
+.quick-nav-btn {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.25rem;
+}
+
+.quick-nav-panel {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 200;
+  width: 360px;
+  max-height: 500px;
+  margin-bottom: 0.5rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.quick-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 500;
+}
+
+.quick-nav-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+
+.nav-group {
+  margin-bottom: 1rem;
+}
+
+.nav-group:last-child {
+  margin-bottom: 0;
+}
+
+.nav-group-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgb(96, 165, 250);
+  padding: 0.5rem 0.75rem;
+  background: rgba(96, 165, 250, 0.1);
+  border-radius: 0.375rem;
+  margin-bottom: 0.5rem;
+}
+
+.nav-item-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg-tertiary);
+  border-radius: 0.375rem;
+  margin-bottom: 0.375rem;
+}
+
+.nav-item-group.sub {
+  margin-left: 1rem;
+}
+
+.nav-item-group.point {
+  margin-left: 2rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.nav-item-title {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+.nav-item-actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.nav-btn {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: rgb(96, 165, 250);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.nav-btn.disabled,
+.nav-btn:disabled {
+  color: var(--color-text-secondary);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nav-area-group {
+  margin-bottom: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--color-border);
+}
+
+.nav-area-title {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  padding: 0.375rem 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.nav-detail-group {
+  margin-left: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 1px dashed var(--color-border);
+}
+
+.nav-detail-title {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  padding: 0.25rem 0.5rem;
+  font-style: italic;
+}
+
+/* 备注对话框 */
+.note-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.note-dialog {
+  width: 90%;
+  max-width: 500px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.note-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  background: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 500;
+}
+
+.note-dialog-body {
+  padding: 1.25rem;
+}
+
+.note-dialog-body textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 0.875rem;
+  resize: none;
+}
+
+.note-dialog-body textarea:focus {
+  outline: none;
+  border-color: rgb(96, 165, 250);
+}
+
+.note-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  background: var(--color-bg-tertiary);
+  border-top: 1px solid var(--color-border);
+}
+
+.btn-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-icon:hover {
+  background: rgba(255, 255, 255, 0.1);
   color: var(--color-text-primary);
 }
 </style>
