@@ -10,12 +10,14 @@
  */
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useConfig } from '@/composables/useConfig'
+import { ReportPreviewDialog } from '@/components/visual-test'
 import type { TestUnit } from '@/services/order'
 import type { ProcessData, TempOrderData } from '@/services/process'
-import { reportApi } from '@/services/report'
+import { reportApi, type ReportData, type TestReport } from '@/services/report'
 
 // ==================== 类型定义 ====================
 
@@ -94,6 +96,15 @@ const isSubmitting = ref(false)
 const toastMessage = ref('')
 const toastType = ref<'error' | 'success' | 'info'>('info')
 const showToast = ref(false)
+
+// 历史报告
+const historyReportList = ref<TestReport[]>([])
+const isLoadingHistory = ref(false)
+const showHistoryDropdown = ref(false)
+const reportPreviewVisible = ref(false)
+const reportPreviewData = ref<ReportData | null>(null)
+const reportPreviewMode = ref<'prod' | 'temp'>('prod')
+const isLoadingReport = ref(false)
 
 // ==================== 计算属性 ====================
 
@@ -467,6 +478,97 @@ function loadTempData() {
 watch(planeLine, () => {
   drawFrame()
 })
+
+// ==================== 历史报告 ====================
+
+/** 获取历史报告列表 */
+async function loadHistoryReports() {
+  if (!props.testUnit) return
+  
+  isLoadingHistory.value = true
+  try {
+    const boardId = props.testUnit.board_id
+    
+    // 正式工单：查询 mode=0
+    const result = await reportApi.getHistoryList({
+      mode: 0,
+      boardId: boardId
+    }, getAuthHeaders())
+    
+    if (result.success && result.data) {
+      historyReportList.value = result.data
+    }
+  } catch (err) {
+    console.error('获取历史报告失败:', err)
+  } finally {
+    isLoadingHistory.value = false
+  }
+}
+
+/** 历史下拉展开时触发 */
+function handleHistoryDropdownOpen(visible: boolean) {
+  showHistoryDropdown.value = visible
+  if (visible && historyReportList.value.length === 0) {
+    loadHistoryReports()
+  }
+}
+
+/** 查看历史报告 */
+async function handleViewHistoryReport(report: TestReport) {
+  isLoadingReport.value = true
+  reportPreviewVisible.value = true
+  
+  try {
+    const reportMode = (report as any).mode ?? 0
+    const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
+    
+    if (!unitId) {
+      ElMessage.error('报告ID无效')
+      return
+    }
+    
+    const result = await reportApi.download(reportMode, unitId, getAuthHeaders())
+    
+    if (result.success && result.data) {
+      reportPreviewData.value = result.data
+      reportPreviewMode.value = reportMode === 1 ? 'temp' : 'prod'
+    } else {
+      ElMessage.error('获取报告详情失败')
+      reportPreviewVisible.value = false
+    }
+  } catch (err) {
+    console.error('获取报告详情失败:', err)
+    ElMessage.error('获取报告详情失败')
+    reportPreviewVisible.value = false
+  } finally {
+    isLoadingReport.value = false
+  }
+}
+
+/** 格式化日期 */
+function formatReportDate(dateStr?: string): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${month}-${day}`
+}
+
+/** 获取报告状态文本 */
+function getReportStatusText(status?: number | string): string {
+  const s = String(status)
+  if (s === '2') return '正常'
+  if (s === '3') return '异常'
+  return '未知'
+}
+
+/** 获取报告状态类 */
+function getReportStatusClass(status?: number | string): string {
+  const s = String(status)
+  if (s === '2') return 'status-pass'
+  if (s === '3') return 'status-fail'
+  return ''
+}
 </script>
 
 <template>
@@ -491,6 +593,45 @@ watch(planeLine, () => {
             {{ props.testUnit.boardmodel }} · S/N: {{ props.testUnit.serial }}
             · 厚度: {{ processSize }}mm
           </span>
+        </div>
+      </div>
+      
+      <!-- 历史报告下拉 -->
+      <div class="history-dropdown">
+        <button 
+          class="btn btn-ghost history-btn"
+          @click="handleHistoryDropdownOpen(!showHistoryDropdown)"
+        >
+          <Icon icon="mdi:history" />
+          历史报告
+          <Icon :icon="showHistoryDropdown ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+        </button>
+        
+        <!-- 下拉列表 -->
+        <div v-if="showHistoryDropdown" class="history-dropdown-panel">
+          <div v-if="isLoadingHistory" class="history-loading">
+            <Icon icon="mdi:loading" class="loading-icon" />
+            加载中...
+          </div>
+          <div v-else-if="historyReportList.length === 0" class="history-empty">
+            暂无历史报告
+          </div>
+          <div v-else class="history-list">
+            <div 
+              v-for="report in historyReportList" 
+              :key="(report as any).unit_id || report.id"
+              class="history-item"
+              @click="handleViewHistoryReport(report)"
+            >
+              <div class="history-info">
+                <span class="history-model">{{ (report as any).model || report.boardmodel || '未知型号' }}</span>
+                <span class="history-date">{{ formatReportDate((report as any).date || report.report_time) }}</span>
+              </div>
+              <div class="history-status" :class="getReportStatusClass((report as any).status)">
+                {{ getReportStatusText((report as any).status) }}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       
@@ -755,6 +896,14 @@ watch(planeLine, () => {
         </div>
       </Transition>
     </Teleport>
+    
+    <!-- 报告预览对话框 -->
+    <ReportPreviewDialog
+      v-model:visible="reportPreviewVisible"
+      :data="reportPreviewData"
+      :mode="reportPreviewMode"
+      :loading="isLoadingReport"
+    />
   </div>
 </template>
 
@@ -850,6 +999,105 @@ watch(planeLine, () => {
 .info-meta {
   font-size: 0.75rem;
   color: var(--color-text-secondary);
+}
+
+/* 历史报告下拉 */
+.history-dropdown {
+  position: relative;
+}
+
+.history-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: rgb(74, 222, 128);
+  font-size: 0.8125rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.history-btn:hover {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.history-dropdown-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.history-loading,
+.history-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.history-list {
+  padding: 0.5rem;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.history-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.history-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.history-model {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.history-date {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.history-status {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.history-status.status-pass {
+  background: rgba(34, 197, 94, 0.2);
+  color: rgb(74, 222, 128);
+}
+
+.history-status.status-fail {
+  background: rgba(239, 68, 68, 0.2);
+  color: rgb(248, 113, 113);
 }
 
 /* 步骤指示器 */

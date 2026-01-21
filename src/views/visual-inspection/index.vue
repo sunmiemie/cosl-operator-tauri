@@ -34,6 +34,7 @@ import {
 import ThreeDTestExecutor from './components/tests/ThreeDTestExecutor.vue'
 import TwoDTestExecutor from './components/tests/TwoDTestExecutor.vue'
 import PlaneTestExecutor from './components/tests/PlaneTestExecutor.vue'
+import TempTestExecutor from './components/tests/TempTestExecutor.vue'
 
 // ==================== 类型定义 ====================
 
@@ -339,6 +340,8 @@ async function startEyesTest(item: TestUnit) {
       // 新临时工单: 直接开始（无需下载工艺）
       testMode.value = 'normal'
       await changeStatusAndStart(unitId, 1)
+      // 临时工单直接进入测试阶段
+      phase.value = 'testing'
     } else if (statusStr === OrderStatus.Testing) {
       // 待继续
       testMode.value = 'continue'
@@ -377,27 +380,20 @@ async function downloadTestProcess(processId: number, unitId: number) {
   downloadTotal.value = 0
   
   try {
-    // 检查工艺是否已存在
-    const existResult = await processApi.checkExist(processId, getAuthHeaders())
+    console.log('[目检] 下载工艺, process_id:', processId)
     
-    if (existResult.success && existResult.data?.code === 0) {
-      // 工艺已存在，直接加载
-      const loadResult = await processApi.loadExist(processId, getAuthHeaders())
-      if (loadResult.success && loadResult.data) {
-        processJson.value = loadResult.data
-      }
+    // 使用带缓存的下载方法
+    const downloadResult = await processApi.downloadWithCache(
+      processId, 
+      getAuthHeaders(),
+      onDownloadProgress
+    )
+    
+    if (downloadResult.success && downloadResult.data) {
+      processJson.value = downloadResult.data
+      console.log('[目检] 工艺下载成功:', downloadResult.data)
     } else {
-      // 下载工艺
-      const downloadResult = await processApi.download(
-        processId, 
-        getAuthHeaders(),
-        onDownloadProgress
-      )
-      if (downloadResult.success && downloadResult.data) {
-        processJson.value = downloadResult.data
-      } else {
-        throw new Error(downloadResult.error || '下载工艺失败')
-      }
+      throw new Error(downloadResult.error || '下载工艺失败')
     }
     
     // 更新工单状态
@@ -440,9 +436,20 @@ async function downloadTempOrder(unitId: number, type: 0 | 1) {
     )
     
     if (downloadResult.success && downloadResult.data) {
+      console.log('[Visual] 下载临时数据成功:', downloadResult.data)
+      
       // 无论是临时工单还是正式工单，都将临时数据存入 tempReportJson
       // 测试执行器会根据 mode='continue' 使用 tempData 恢复进度
       tempReportJson.value = downloadResult.data
+      
+      // 检查数据结构
+      if (downloadResult.data.data?.json?.tempTest) {
+        console.log('[Visual] 找到 data.json.tempTest, 长度:', downloadResult.data.data.json.tempTest.length)
+      } else if (downloadResult.data.json?.tempTest) {
+        console.log('[Visual] 找到 json.tempTest, 长度:', downloadResult.data.json?.tempTest?.length)
+      } else {
+        console.log('[Visual] 未找到 tempTest 数据')
+      }
       
       // 如果临时数据中包含 data 字段（工艺工作状态），同时设置 processJson
       // 这样执行器可以同时访问原始工艺和保存的进度
@@ -478,21 +485,12 @@ async function downloadFeedBack(processId: number | undefined, unitId: number, t
   downloadText.value = '正在下载数据...'
   
   try {
-    // 如果是正式工单，先下载工艺
+    // 如果是正式工单，先下载工艺（使用缓存）
     if (type === 0 && processId) {
       downloadText.value = '正在下载工艺...'
-      const existResult = await processApi.checkExist(processId, getAuthHeaders())
-      
-      if (existResult.data?.code === 0) {
-        const loadResult = await processApi.loadExist(processId, getAuthHeaders())
-        if (loadResult.success && loadResult.data) {
-          processJson.value = loadResult.data
-        }
-      } else {
-        const downloadResult = await processApi.download(processId, getAuthHeaders(), onDownloadProgress)
-        if (downloadResult.success && downloadResult.data) {
-          processJson.value = downloadResult.data
-        }
+      const downloadResult = await processApi.downloadWithCache(processId, getAuthHeaders(), onDownloadProgress)
+      if (downloadResult.success && downloadResult.data) {
+        processJson.value = downloadResult.data
       }
     }
     
@@ -535,21 +533,12 @@ async function downloadQuestion(processId: number | undefined, unitId: number, t
   downloadText.value = '正在下载数据...'
   
   try {
-    // 如果是正式工单，先下载工艺
+    // 如果是正式工单，先下载工艺（使用缓存）
     if (type === 0 && processId) {
       downloadText.value = '正在下载工艺...'
-      const existResult = await processApi.checkExist(processId, getAuthHeaders())
-      
-      if (existResult.data?.code === 0) {
-        const loadResult = await processApi.loadExist(processId, getAuthHeaders())
-        if (loadResult.success && loadResult.data) {
-          processJson.value = loadResult.data
-        }
-      } else {
-        const downloadResult = await processApi.download(processId, getAuthHeaders(), onDownloadProgress)
-        if (downloadResult.success && downloadResult.data) {
-          processJson.value = downloadResult.data
-        }
+      const downloadResult = await processApi.downloadWithCache(processId, getAuthHeaders(), onDownloadProgress)
+      if (downloadResult.success && downloadResult.data) {
+        processJson.value = downloadResult.data
       }
     }
     
@@ -907,31 +896,25 @@ watch(() => scanner.error.value, (err) => {
       <!-- 测试阶段 -->
       <template v-if="phase === 'testing'">
         <div class="testing-layout">
-          <!-- 测试信息条 -->
-          <div class="testing-bar">
-            <div class="testing-info">
-              <div class="info-icon">
-                <Icon :icon="getTypeIcon(currentTestUnit?.process_type)" />
-              </div>
-              <div class="info-content">
-                <span class="info-model">{{ currentTestUnit?.boardmodel }}</span>
-                <span class="info-meta">
-                  {{ currentTestUnit?.serial }} · {{ currentTestUnit?.process_type }}
-                  · {{ getModeText() }}
-                </span>
-              </div>
-            </div>
-            <button @click="exitTest" class="btn btn-ghost">
-              <Icon icon="mdi:close" />
-              退出测试
-            </button>
-          </div>
-
-          <!-- 测试主区域 -->
+          <!-- 测试主区域 (退出按钮已移至各测试组件内部) -->
           <div class="testing-main">
-            <!-- 3D 检测 (testType=4) -->
+            <!-- 临时工单检测 (isDevTest=true) -->
+            <TempTestExecutor
+              v-if="isDevTest && currentTestUnit"
+              :test-unit="currentTestUnit"
+              :mode="testMode"
+              :is-dev-test="true"
+              :temp-report-data="tempReportJson || undefined"
+              :feedback-list="feedbackJson ? (feedbackJson as any[]).map((f: any) => f.id) : undefined"
+              @complete="handleTestComplete"
+              @exit="exitTest"
+              @request-exit="handleRequestExit"
+              @error="(msg) => showMessage(msg, 'error')"
+            />
+            
+            <!-- 3D 检测 (testType=4, 正常工单) -->
             <ThreeDTestExecutor
-              v-if="testType === 4 && currentTestUnit"
+              v-else-if="testType === 4 && currentTestUnit"
               :test-unit="currentTestUnit"
               :mode="testMode"
               :is-dev-test="isDevTest"

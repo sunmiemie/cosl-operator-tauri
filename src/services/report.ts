@@ -27,6 +27,10 @@ export interface TestReport {
   status?: number
   // 历史报告额外字段
   model?: string
+  boardmodel?: string   // 历史报告列表返回
+  serial?: string       // 历史报告列表返回
+  report_time?: string  // 历史报告列表返回
+  report_result?: number | string  // 历史报告列表返回
   type?: string
   date?: string
   mode?: number

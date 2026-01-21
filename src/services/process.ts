@@ -339,6 +339,16 @@ export const processApi = {
       result = await http.get<ProcessData>('/test/addprocess/download/', headers, queryParams)
     }
     
+    console.log('[processApi.download] 原始响应:', result)
+    console.log('[processApi.download] result.data:', result.data)
+    
+    // 处理后端可能返回的包装结构 { code: 0, data: {...} }
+    const responseData = result.data as unknown as { code?: number; data?: ProcessData }
+    if (responseData && responseData.data && typeof responseData.code !== 'undefined') {
+      console.log('[processApi.download] 检测到包装结构，提取 data 字段')
+      result.data = responseData.data
+    }
+    
     // 下载成功后保存到本地缓存
     if (result.success && result.data) {
       try {
@@ -394,22 +404,31 @@ export const processApi = {
     onProgress?: ProgressCallback,
     forceDownload = false
   ): Promise<ApiResponse<ProcessData>> {
+    console.log(`[processApi.downloadWithCache] 开始下载工艺 ${processId}, forceDownload=${forceDownload}`)
+    
     // 如果不是强制下载，先检查本地缓存
     if (!forceDownload) {
       const existResult = await this.checkExist(processId)
+      console.log(`[processApi.downloadWithCache] 缓存检查结果:`, existResult)
+      
       if (existResult.success && existResult.data?.exists) {
-        console.log(`工艺 ${processId} 存在本地缓存，直接读取`)
+        console.log(`[processApi.downloadWithCache] 工艺 ${processId} 存在本地缓存，直接读取`)
         const loadResult = await this.loadExist(processId)
         if (loadResult.success && loadResult.data) {
+          console.log(`[processApi.downloadWithCache] 从缓存加载成功`)
           return loadResult
         }
         // 缓存读取失败，继续下载
-        console.warn('读取缓存失败，重新下载')
+        console.warn('[processApi.downloadWithCache] 读取缓存失败，重新下载')
+      } else {
+        console.log(`[processApi.downloadWithCache] 本地无缓存，从服务器下载`)
       }
     }
     
     // 从服务器下载（download 方法会自动缓存）
-    return this.download(processId, headers, onProgress)
+    const result = await this.download(processId, headers, onProgress)
+    console.log(`[processApi.downloadWithCache] 下载结果:`, result.success ? '成功' : result.error)
+    return result
   },
 
   /**

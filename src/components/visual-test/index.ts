@@ -12,7 +12,10 @@ export { default as ResultSelector } from './ResultSelector.vue'
 export { default as ReportPreview } from './ReportPreview.vue'
 export { default as StepProcess } from './StepProcess.vue'
 export { default as PicProcess } from './PicProcess.vue'
+export { default as TempTestProcess } from './TempTestProcess.vue'
+export { default as ReportPreviewDialog } from './ReportPreviewDialog.vue'
 
 // 导出类型
 export type { StepItem } from './StepProcess.vue'
 export type { PicItem } from './PicProcess.vue'
+export type { TempTestItem, TempReportJson } from './TempTestProcess.vue'

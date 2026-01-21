@@ -12,20 +12,20 @@
  * 
  * 布局: 摄像头 55% / 测试面板 45%
  */
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useConfig } from '@/composables/useConfig'
-import { StepProcess, PicProcess } from '@/components/visual-test'
+import { StepProcess, PicProcess, ReportPreviewDialog } from '@/components/visual-test'
 import type { TestUnit } from '@/services/order'
 import { 
   processApi,
   type ProcessData, type ProcessJson, type TempOrderData, type FeedbackData, type QuestionData,
   type StepItem, type PicItem, type EyesSideData, type AreaData, type TotalData
 } from '@/services/process'
-import { reportApi, type ReportUploadParams } from '@/services/report'
+import { reportApi, type ReportUploadParams, type ReportData, type TestReport } from '@/services/report'
 
 // ==================== 类型定义 ====================
 
@@ -94,6 +94,15 @@ const reportJson = ref<{
     }
   }
 } | null>(null)
+
+// 历史报告
+const historyReportList = ref<TestReport[]>([])
+const isLoadingHistory = ref(false)
+const showHistoryDropdown = ref(false)
+const reportPreviewVisible = ref(false)
+const reportPreviewData = ref<ReportData | null>(null)
+const reportPreviewMode = ref<'prod' | 'temp'>('prod')
+const isLoadingReport = ref(false)
 
 // ==================== 计算属性 ====================
 
@@ -508,7 +517,8 @@ function validateSteps(steps: StepItem[]): boolean {
 
 function validatePics(pics: PicItem[]): boolean {
   for (const pic of pics) {
-    if (pic.save.length === 0) {
+    const saveCount = Array.isArray(pic.save) ? pic.save.length : 0
+    if (saveCount === 0) {
       ElMessage.warning('请完成所有拍照留存项')
       return false
     }
@@ -598,6 +608,11 @@ async function handlePicSave(picId: number) {
   const pic = findPic(picId)
   if (!pic) return
   
+  // 确保 save 是数组
+  if (!Array.isArray(pic.save)) {
+    pic.save = []
+  }
+  
   if (pic.save.length >= 5) {
     ElMessage.warning('最多添加5张图片')
     return
@@ -644,7 +659,7 @@ async function handleTestComplete() {
       userId: userInfo.value?.id || 0,
       testType: 4,
       testunit_status: 3,
-      file: reportJson.value!
+      file: reportJson.value as any
     }
     
     const result = await reportApi.uploadReport(uploadParams, getAuthHeaders())
@@ -757,9 +772,130 @@ async function saveTempProgress(): Promise<boolean> {
   }
 }
 
-// 暂停退出 - 将退出逻辑委托给父组件处理
-function handlePauseExit() {
+// 暂停退出 - 根据模式处理退出逻辑
+async function handlePauseExit() {
+  // 打回/疑问模式不允许暂存
+  if (props.mode === 'feedback' || props.mode === 'question') {
+    const message = props.mode === 'feedback' 
+      ? '重新检测无法暂存，是否退出？' 
+      : '疑问工单检测无法暂存，是否退出？'
+    
+    try {
+      await ElMessageBox.alert(message, '确认退出测试', {
+        confirmButtonText: '直接退出'
+      })
+      emit('exit')
+    } catch {
+      // 用户取消
+    }
+    return
+  }
+  
+  // 正常模式: 委托给父组件处理保存逻辑
   emit('request-exit', saveTempProgress)
+}
+
+// ==================== 历史报告 ====================
+
+/** 获取历史报告列表 */
+async function loadHistoryReports() {
+  if (!props.testUnit) return
+  
+  isLoadingHistory.value = true
+  try {
+    const boardId = props.testUnit.board_id
+    const isTemp = props.testUnit.testunit_type === 1
+    
+    let result
+    if (isTemp) {
+      // 临时工单：查询 mode=1
+      result = await reportApi.getHistoryList({
+        mode: 1,
+        prodBoardId: boardId,
+        tempBoardId: boardId
+      }, getAuthHeaders())
+    } else {
+      // 正式工单：查询 mode=0
+      result = await reportApi.getHistoryList({
+        mode: 0,
+        boardId: boardId
+      }, getAuthHeaders())
+    }
+    
+    if (result.success && result.data) {
+      historyReportList.value = result.data
+    }
+  } catch (err) {
+    console.error('获取历史报告失败:', err)
+  } finally {
+    isLoadingHistory.value = false
+  }
+}
+
+/** 历史下拉展开时触发 */
+function handleHistoryDropdownOpen(visible: boolean) {
+  showHistoryDropdown.value = visible
+  if (visible && historyReportList.value.length === 0) {
+    loadHistoryReports()
+  }
+}
+
+/** 查看历史报告 */
+async function handleViewHistoryReport(report: TestReport) {
+  isLoadingReport.value = true
+  reportPreviewVisible.value = true
+  
+  try {
+    // report.mode: 0=正式报告, 1=临时报告
+    const reportMode = (report as any).mode ?? 0
+    const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
+    
+    if (!unitId) {
+      ElMessage.error('报告ID无效')
+      return
+    }
+    
+    const result = await reportApi.download(reportMode, unitId, getAuthHeaders())
+    
+    if (result.success && result.data) {
+      reportPreviewData.value = result.data
+      reportPreviewMode.value = reportMode === 1 ? 'temp' : 'prod'
+    } else {
+      ElMessage.error('获取报告详情失败')
+      reportPreviewVisible.value = false
+    }
+  } catch (err) {
+    console.error('获取报告详情失败:', err)
+    ElMessage.error('获取报告详情失败')
+    reportPreviewVisible.value = false
+  } finally {
+    isLoadingReport.value = false
+  }
+}
+
+/** 格式化日期 */
+function formatReportDate(dateStr?: string): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${month}-${day}`
+}
+
+/** 获取报告状态文本 */
+function getReportStatusText(status?: number | string): string {
+  const s = String(status)
+  if (s === '2') return '正常'
+  if (s === '3') return '异常'
+  return '未知'
+}
+
+/** 获取报告状态类 */
+function getReportStatusClass(status?: number | string): string {
+  const s = String(status)
+  if (s === '2') return 'status-pass'
+  if (s === '3') return 'status-fail'
+  return ''
 }
 </script>
 
@@ -775,37 +911,86 @@ function handlePauseExit() {
     
     <!-- 顶部信息栏 -->
     <div class="executor-header">
-      <div class="header-info">
-        <div class="info-icon">
-          <Icon icon="mdi:cube-scan" />
+      <div class="header-left">
+        <div class="header-info">
+          <div class="info-icon">
+            <Icon icon="mdi:cube-scan" />
+          </div>
+          <div class="info-content">
+            <span class="info-title">3D检测</span>
+            <span class="info-meta">
+              {{ props.testUnit.boardmodel }} · S/N: {{ props.testUnit.serial }}
+            </span>
+          </div>
         </div>
-        <div class="info-content">
-          <span class="info-title">3D检测</span>
-          <span class="info-meta">
-            {{ props.testUnit.boardmodel }} · S/N: {{ props.testUnit.serial }}
-          </span>
+        
+        <div class="step-indicator">
+          <Icon icon="mdi:progress-clock" class="step-icon" />
+          <span class="step-title">{{ currentStepTitle }}</span>
         </div>
       </div>
       
-      <div class="step-indicator">
-        <Icon icon="mdi:progress-clock" class="step-icon" />
-        <span class="step-title">{{ currentStepTitle }}</span>
-      </div>
-      
-      <!-- 参考图预览 -->
-      <div class="reference-preview" v-if="currentReferenceImage">
-        <img :src="currentReferenceImage" alt="参考图" />
-      </div>
-      
-      <!-- 进度指示 -->
-      <div class="progress-indicator">
-        <span v-if="threeDStep <= 2">正面</span>
-        <span v-else>背面</span>
-        <span class="separator">|</span>
-        <span v-if="currentArea > 0">区域 {{ currentArea }}/{{ areaCount }}</span>
-        <span v-else>整体</span>
-        <span v-if="currentPoint > 0" class="separator">|</span>
-        <span v-if="currentPoint > 0">点位 {{ currentPoint }}/{{ pointCount }}</span>
+      <div class="header-right">
+        <!-- 参考图预览 -->
+        <div class="reference-preview" v-if="currentReferenceImage">
+          <img :src="currentReferenceImage" alt="参考图" />
+        </div>
+        
+        <!-- 进度指示 -->
+        <div class="progress-indicator">
+          <span v-if="threeDStep <= 2">正面</span>
+          <span v-else>背面</span>
+          <span class="separator">|</span>
+          <span v-if="currentArea > 0">区域 {{ currentArea }}/{{ areaCount }}</span>
+          <span v-else>整体</span>
+          <span v-if="currentPoint > 0" class="separator">|</span>
+          <span v-if="currentPoint > 0">点位 {{ currentPoint }}/{{ pointCount }}</span>
+        </div>
+        
+        <!-- 历史报告下拉 -->
+        <div class="history-dropdown">
+          <button 
+            class="btn btn-ghost history-btn"
+            @click="handleHistoryDropdownOpen(!showHistoryDropdown)"
+          >
+            <Icon icon="mdi:history" />
+            历史报告
+            <Icon :icon="showHistoryDropdown ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+          </button>
+          
+          <!-- 下拉列表 -->
+          <div v-if="showHistoryDropdown" class="history-dropdown-panel">
+            <div v-if="isLoadingHistory" class="history-loading">
+              <Icon icon="mdi:loading" class="loading-icon" />
+              加载中...
+            </div>
+            <div v-else-if="historyReportList.length === 0" class="history-empty">
+              暂无历史报告
+            </div>
+            <div v-else class="history-list">
+              <div 
+                v-for="report in historyReportList" 
+                :key="(report as any).unit_id || report.id"
+                class="history-item"
+                @click="handleViewHistoryReport(report)"
+              >
+                <div class="history-info">
+                  <span class="history-model">{{ (report as any).model || report.boardmodel || '未知型号' }}</span>
+                  <span class="history-date">{{ formatReportDate((report as any).date || (report as any).report_time) }}</span>
+                </div>
+                <div class="history-status" :class="getReportStatusClass((report as any).status)">
+                  {{ getReportStatusText((report as any).status) }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 退出按钮 -->
+        <button @click="handlePauseExit" class="btn btn-ghost header-exit-btn">
+          <Icon icon="mdi:close" />
+          退出测试
+        </button>
       </div>
     </div>
 
@@ -867,12 +1052,7 @@ function handlePauseExit() {
 
     <!-- 底部操作栏 -->
     <div class="executor-footer">
-      <button class="btn btn-secondary" @click="handlePauseExit">
-        <Icon icon="mdi:pause" />
-        暂停退出
-      </button>
-      
-      <div class="footer-center">
+      <div class="footer-left">
         <button 
           class="btn btn-outline" 
           @click="handlePrevious"
@@ -888,6 +1068,14 @@ function handlePauseExit() {
         <Icon icon="mdi:arrow-right" />
       </button>
     </div>
+    
+    <!-- 报告预览对话框 -->
+    <ReportPreviewDialog
+      v-model:visible="reportPreviewVisible"
+      :data="reportPreviewData"
+      :mode="reportPreviewMode"
+      :loading="isLoadingReport"
+    />
   </div>
 </template>
 
@@ -939,11 +1127,130 @@ function handlePauseExit() {
 .executor-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 0.75rem;
+  flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.header-exit-btn {
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.header-exit-btn:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* 历史报告下拉 */
+.history-dropdown {
+  position: relative;
+}
+
+.history-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: rgb(74, 222, 128);
+  font-size: 0.8125rem;
+}
+
+.history-btn:hover {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.history-dropdown-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.history-loading,
+.history-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.history-list {
+  padding: 0.5rem;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.history-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.history-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.history-model {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.history-date {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.history-status {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.history-status.status-pass {
+  background: rgba(34, 197, 94, 0.2);
+  color: rgb(74, 222, 128);
+}
+
+.history-status.status-fail {
+  background: rgba(239, 68, 68, 0.2);
+  color: rgb(248, 113, 113);
 }
 
 .header-info {
@@ -1143,7 +1450,7 @@ function handlePauseExit() {
   border-radius: 0.75rem;
 }
 
-.footer-center {
+.footer-left {
   display: flex;
   gap: 0.75rem;
 }

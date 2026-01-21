@@ -146,6 +146,16 @@ class HttpClient {
       
       if (contentType?.includes('application/json')) {
         data = await response.json()
+      } else if (contentType?.includes('application/octet-stream') || 
+                 contentType?.includes('text/plain')) {
+        // 处理文件下载响应 - 尝试解析为 JSON
+        const text = await response.text()
+        try {
+          data = JSON.parse(text)
+          console.log('[HTTP] 解析 octet-stream 响应为 JSON 成功')
+        } catch {
+          console.warn('[HTTP] octet-stream 响应不是有效 JSON:', text.substring(0, 100))
+        }
       }
 
       if (!response.ok) {

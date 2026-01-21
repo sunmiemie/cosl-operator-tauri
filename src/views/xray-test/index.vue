@@ -27,6 +27,7 @@ import { DeviceCheckOverlay, HistoryReportPanel, DownloadProgress } from '@/comp
 
 // 导入测试执行组件
 import XrayTestExecutor from './components/XrayTestExecutor.vue'
+import TempTestExecutor from '../visual-inspection/components/tests/TempTestExecutor.vue'
 
 // ==================== 类型定义 ====================
 
@@ -460,31 +461,65 @@ async function downloadBoardData(pos: FixturePosition) {
   
   // 根据状态下载数据
   if (statusStr === OrderStatus.New) {
-    // 新工单: 下载工艺
+    // 新工单: 下载工艺（带缓存）
     if (board.process_id) {
-      const result = await processApi.download(board.process_id, getAuthHeaders())
+      downloadText.value = `正在下载工艺: ${board.serial}`
+      console.log('[X-Ray] 下载工艺, process_id:', board.process_id)
+      const result = await processApi.downloadWithCache(
+        board.process_id, 
+        getAuthHeaders(),
+        onDownloadProgress
+      )
+      console.log('[X-Ray] 下载结果完整对象:', result)
       if (result.success && result.data) {
         pos.processData = result.data
+        console.log('[X-Ray] 工艺已保存到 pos.processData')
+      } else {
+        console.error('[X-Ray] 工艺下载失败:', result.error)
       }
+    } else {
+      console.warn('[X-Ray] 工单没有 process_id:', board)
     }
   } else if (statusStr === OrderStatus.Testing) {
-    // 待继续: 下载临时数据
-    const result = await processApi.downloadTempOrder(unitId, type, getAuthHeaders())
-    if (result.success && result.data) {
-      pos.tempData = result.data
-    }
-  } else if (statusStr === OrderStatus.Feedback) {
-    // 待重做: 下载工艺 + 反馈 + 报告
+    // 待继续: 下载工艺 + 临时数据
     if (board.process_id) {
-      const processResult = await processApi.download(board.process_id, getAuthHeaders())
+      downloadText.value = `正在下载工艺: ${board.serial}`
+      console.log('[X-Ray] 待继续工单，下载工艺, process_id:', board.process_id)
+      const processResult = await processApi.downloadWithCache(
+        board.process_id, 
+        getAuthHeaders(),
+        onDownloadProgress
+      )
       if (processResult.success && processResult.data) {
         pos.processData = processResult.data
       }
     }
-    const feedbackResult = await processApi.downloadFeedback(unitId, type, getAuthHeaders())
+    downloadText.value = `正在下载临时数据: ${board.serial}`
+    console.log('[X-Ray] 下载临时数据, unitId:', unitId)
+    const result = await processApi.downloadTempOrder(unitId, type, getAuthHeaders(), onDownloadProgress)
+    if (result.success && result.data) {
+      pos.tempData = result.data
+      console.log('[X-Ray] 临时数据下载成功')
+    }
+  } else if (statusStr === OrderStatus.Feedback) {
+    // 待重做: 下载工艺 + 反馈 + 报告
+    if (board.process_id) {
+      downloadText.value = `正在下载工艺: ${board.serial}`
+      const processResult = await processApi.downloadWithCache(
+        board.process_id, 
+        getAuthHeaders(),
+        onDownloadProgress
+      )
+      if (processResult.success && processResult.data) {
+        pos.processData = processResult.data
+      }
+    }
+    downloadText.value = `正在下载反馈数据: ${board.serial}`
+    const feedbackResult = await processApi.downloadFeedback(unitId, type, getAuthHeaders(), onDownloadProgress)
     if (feedbackResult.success && feedbackResult.data) {
       pos.feedbackData = feedbackResult.data
     }
+    downloadText.value = `正在下载报告: ${board.serial}`
     const reportResult = await reportApi.download(type, unitId, getAuthHeaders())
     if (reportResult.success && reportResult.data) {
       pos.feedbackReport = reportResult.data
@@ -492,15 +527,22 @@ async function downloadBoardData(pos: FixturePosition) {
   } else if (statusStr === OrderStatus.Question) {
     // 疑问工单: 下载工艺 + 疑问 + 报告
     if (board.process_id) {
-      const processResult = await processApi.download(board.process_id, getAuthHeaders())
+      downloadText.value = `正在下载工艺: ${board.serial}`
+      const processResult = await processApi.downloadWithCache(
+        board.process_id, 
+        getAuthHeaders(),
+        onDownloadProgress
+      )
       if (processResult.success && processResult.data) {
         pos.processData = processResult.data
       }
     }
-    const questionResult = await processApi.downloadQuestion(unitId, type, getAuthHeaders())
+    downloadText.value = `正在下载疑问数据: ${board.serial}`
+    const questionResult = await processApi.downloadQuestion(unitId, type, getAuthHeaders(), onDownloadProgress)
     if (questionResult.success && questionResult.data) {
       pos.questionData = questionResult.data
     }
+    downloadText.value = `正在下载报告: ${board.serial}`
     const reportResult = await reportApi.download(type, unitId, getAuthHeaders())
     if (reportResult.success && reportResult.data) {
       pos.questionReport = reportResult.data
@@ -510,8 +552,9 @@ async function downloadBoardData(pos: FixturePosition) {
 
 /**
  * 开始测试下一块电路板
+ * 参考 visual-inspection 的 changeStatusAndStart 逻辑
  */
-function startNextBoardTest() {
+async function startNextBoardTest() {
   const boundPositions = positionList.value.filter(p => p.status === 2)
   
   if (currentTestIndex.value >= boundPositions.length) {
@@ -522,16 +565,20 @@ function startNextBoardTest() {
   
   currentTestBoard.value = boundPositions[currentTestIndex.value]
   
-  // 更新工单状态为测试中
-  if (currentTestBoard.value.board) {
+  // 更新工单状态为测试中（仅新工单需要更新状态）
+  if (currentTestBoard.value.board && currentTestBoard.value.testMode === 'normal') {
     const board = currentTestBoard.value.board
     const unitId = board.testunit_type === OrderType.Production
       ? board.testunit_id
       : board.dev_testunit_id
-    const mode = board.testunit_type === OrderType.Production ? 0 : 1
+    const mode: 0 | 1 = board.testunit_type === OrderType.Production ? 0 : 1
     
     if (unitId) {
-      orderApi.changeStatus(unitId, mode, undefined, getAuthHeaders())
+      console.log('[X-Ray] 更新工单状态为测试中, unitId:', unitId, 'mode:', mode)
+      const result = await orderApi.changeStatus(unitId, mode, undefined, getAuthHeaders())
+      if (!result.success) {
+        console.warn('[X-Ray] 更新工单状态失败:', result.error)
+      }
     }
   }
 }
@@ -947,52 +994,23 @@ watch(() => scanner.error.value, (err) => {
       <!-- 测试阶段 -->
       <template v-if="phase === 'testing'">
         <div class="testing-layout">
-          <div class="testing-bar">
-            <div class="testing-meta">
-              <span class="meta-label">夹具</span>
-              <span class="meta-value">{{ fixtureId }}</span>
-              <span class="meta-divider">·</span>
-              <span class="meta-label">进度</span>
-              <span class="meta-value">{{ testedCount }}/{{ addedBoards.length }}</span>
-            </div>
-            <button @click="exitTest" class="btn btn-ghost">
-              <Icon icon="mdi:close" />
-              退出测试
-            </button>
-          </div>
-          
-          <!-- 当前测试信息 -->
-          <div v-if="currentTestBoard" class="current-test-info">
-            <div class="test-progress-bar">
-              <div 
-                class="test-progress-fill"
-                :style="{ width: `${(testedCount / addedBoards.length) * 100}%` }"
-              ></div>
-            </div>
-            <div class="current-board-info">
-              <div class="current-icon">
-                <Icon icon="mdi:radioactive" />
-              </div>
-              <div class="current-details">
-                <span class="current-serial">{{ currentTestBoard.board?.serial }}</span>
-                <span class="current-meta">
-                  {{ currentTestBoard.board?.boardmodel }} · {{ getModeText(currentTestBoard.testMode) }}
-                  <template v-if="currentTestBoard.isDevTest"> · 临时工单</template>
-                </span>
-              </div>
-              <span 
-                class="current-mode-badge"
-                :class="getModeClass(currentTestBoard.testMode)"
-              >
-                {{ getModeText(currentTestBoard.testMode) }}
-              </span>
-            </div>
-          </div>
-          
           <div class="testing-main">
-            <!-- X-Ray 测试执行器 -->
+            <!-- 临时工单检测 (isDevTest=true) -->
+            <TempTestExecutor
+              v-if="currentTestBoard && currentTestBoard.board && currentTestBoard.isDevTest"
+              :test-unit="currentTestBoard.board as any"
+              :mode="(currentTestBoard.testMode as any) || 'normal'"
+              :is-dev-test="true"
+              :temp-report-data="(currentTestBoard.tempData as any) || undefined"
+              @complete="handleBoardTestComplete"
+              @exit="exitTest"
+              @request-exit="handleRequestExit"
+              @error="(msg: string) => showMessage(msg, 'error')"
+            />
+            
+            <!-- X-Ray 测试执行器 (正常工单) -->
             <XrayTestExecutor
-              v-if="currentTestBoard && currentTestBoard.board"
+              v-else-if="currentTestBoard && currentTestBoard.board"
               :slot-data="currentTestBoard as any"
               :fixture-id="fixtureId"
               :total-boards="addedBoards.length"
@@ -1511,9 +1529,7 @@ watch(() => scanner.error.value, (err) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
+  width: 100%;
 }
 
 .testing-placeholder { text-align: center; color: var(--color-text-secondary); }

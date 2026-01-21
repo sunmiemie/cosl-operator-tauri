@@ -73,6 +73,14 @@ function getTypeClass(type?: string): string {
     default: return ''
   }
 }
+
+function getTestTypeClass(type?: string): string {
+  switch (type) {
+    case '临时': return 'type-temp'
+    case '正式': return 'type-formal'
+    default: return ''
+  }
+}
 </script>
 
 <template>
@@ -110,6 +118,7 @@ function getTypeClass(type?: string): string {
               <th>序列号</th>
               <th>测试类型</th>
               <th>状态</th>
+              <th>类型</th>
             </tr>
           </thead>
           <tbody>
@@ -131,7 +140,12 @@ function getTypeClass(type?: string): string {
                   class="status-tag"
                   :class="getStatusClass(item.testunit_status || item.dev_testunit_status)"
                 >
-                  {{ getStatusText(item.testunit_status || item.dev_testunit_status) }}
+                  {{ getStatusText(item.dev_testunit_id || item.dev_testunit_status) }}
+                </span>
+              </td>
+              <td>
+                <span class="type-tag" :class="getTestTypeClass(item.dev_testunit_id ? '临时' : '正式')">
+                  {{ item.dev_testunit_id ? '临时' : '正式' }}
                 </span>
               </td>
             </tr>
@@ -351,5 +365,15 @@ function getTypeClass(type?: string): string {
 .status-unknown {
   background: rgba(107, 114, 128, 0.15);
   color: rgb(156, 163, 175);
+}
+
+.type-temp {
+  background: rgba(249, 115, 22, 0.15);
+  color: rgb(251, 146, 60);
+}
+
+.type-formal {
+  background: rgba(34, 197, 94, 0.15);
+  color: rgb(74, 222, 128);
 }
 </style>

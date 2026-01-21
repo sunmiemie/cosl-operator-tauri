@@ -7,10 +7,13 @@
  * 功能:
  * - 显示需要拍摄的图片列表
  * - 支持拍照保存和删除
+ * - 支持图片编辑（标注、绘制）
  * - 显示参考示例图
  */
 import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessageBox } from 'element-plus'
+import ImgEditor from '@/views/process-visual/components/ImgEditor.vue'
 
 // ==================== 类型定义 ====================
 
@@ -43,6 +46,12 @@ const emit = defineEmits<{
 const previewVisible = ref(false)
 const previewUrl = ref('')
 
+// 图片编辑
+const editorVisible = ref(false)
+const editingPic = ref<PicItem | null>(null)
+const editingIndex = ref(-1)
+const editingUrl = ref('')
+
 // 计算属性 - 本地图片数据
 const localPics = computed({
   get: () => props.picData,
@@ -52,9 +61,16 @@ const localPics = computed({
 // ==================== 方法 ====================
 
 // 删除图片
-function deleteImage(pic: PicItem, index: number) {
-  if (confirm('确定删除该图片吗？')) {
+async function deleteImage(pic: PicItem, index: number) {
+  try {
+    await ElMessageBox.confirm('确定删除该图片吗？', '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     pic.save.splice(index, 1)
+  } catch {
+    // 用户取消
   }
 }
 
@@ -62,6 +78,31 @@ function deleteImage(pic: PicItem, index: number) {
 function previewImage(url: string) {
   previewUrl.value = url
   previewVisible.value = true
+}
+
+// 编辑图片
+function editImage(pic: PicItem, index: number) {
+  editingPic.value = pic
+  editingIndex.value = index
+  editingUrl.value = pic.save[index]
+  editorVisible.value = true
+}
+
+// 保存编辑后的图片
+function handleEditorSave(dataUrl: string) {
+  if (editingPic.value && editingIndex.value >= 0) {
+    // 替换原图片
+    editingPic.value.save[editingIndex.value] = dataUrl
+  }
+  closeEditor()
+}
+
+// 关闭编辑器
+function closeEditor() {
+  editorVisible.value = false
+  editingPic.value = null
+  editingIndex.value = -1
+  editingUrl.value = ''
 }
 
 // 拍照
@@ -128,7 +169,12 @@ function getCompletedCount(): number {
             >
               <img :src="img" @click="previewImage(img)" />
               <span class="image-index">{{ index + 1 }}</span>
-              <button class="delete-btn" @click="deleteImage(pic, index)">
+              <!-- 编辑按钮 -->
+              <button class="edit-btn" @click.stop="editImage(pic, index)" title="编辑图片">
+                <Icon icon="mdi:pencil" />
+              </button>
+              <!-- 删除按钮 -->
+              <button class="delete-btn" @click.stop="deleteImage(pic, index)" title="删除图片">
                 <Icon icon="mdi:close" />
               </button>
             </div>
@@ -167,6 +213,29 @@ function getCompletedCount(): number {
           <button class="close-btn" @click="previewVisible = false">
             <Icon icon="mdi:close" />
           </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 图片编辑器弹窗 -->
+    <Teleport to="body">
+      <div v-if="editorVisible" class="editor-overlay">
+        <div class="editor-container">
+          <div class="editor-header">
+            <span class="editor-title">
+              <Icon icon="mdi:image-edit" />
+              图片编辑
+            </span>
+            <button class="editor-close-btn" @click="closeEditor">
+              <Icon icon="mdi:close" />
+            </button>
+          </div>
+          <div class="editor-body">
+            <ImgEditor 
+              :img-url="editingUrl" 
+              @save="handleEditorSave" 
+            />
+          </div>
         </div>
       </div>
     </Teleport>
@@ -235,10 +304,10 @@ function getCompletedCount(): number {
 
 .pic-reference {
   position: relative;
-  width: 5rem;
-  height: 5rem;
+  width: 6.5rem;
+  height: 6.5rem;
   flex-shrink: 0;
-  border-radius: 0.375rem;
+  border-radius: 0.5rem;
   border: 1px solid var(--color-border);
   overflow: hidden;
   cursor: pointer;
@@ -266,10 +335,10 @@ function getCompletedCount(): number {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 0.125rem;
+  padding: 0.25rem;
   background: rgba(0, 0, 0, 0.6);
-  color: var(--color-text-secondary);
-  font-size: 0.625rem;
+  color: white;
+  font-size: 0.75rem;
   text-align: center;
 }
 
@@ -305,14 +374,14 @@ function getCompletedCount(): number {
 .pic-gallery {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.375rem;
+  gap: 0.5rem;
 }
 
 .saved-image {
   position: relative;
-  width: 3.125rem;
-  height: 3.125rem;
-  border-radius: 0.25rem;
+  width: 5.5rem;
+  height: 5.5rem;
+  border-radius: 0.5rem;
   border: 1px solid var(--color-border);
   overflow: hidden;
   cursor: pointer;
@@ -326,54 +395,65 @@ function getCompletedCount(): number {
 
 .image-index {
   position: absolute;
-  top: 0.125rem;
-  left: 0.125rem;
-  width: 1rem;
-  height: 1rem;
+  top: 0.25rem;
+  left: 0.25rem;
+  width: 1.25rem;
+  height: 1.25rem;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.6);
   border-radius: 50%;
   color: white;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
 }
 
+.saved-image .edit-btn,
 .saved-image .delete-btn {
   position: absolute;
-  top: 0.125rem;
-  right: 0.125rem;
-  width: 1rem;
-  height: 1rem;
+  width: 1.5rem;
+  height: 1.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(239, 68, 68, 0.9);
   border: none;
   border-radius: 50%;
   color: white;
   cursor: pointer;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   opacity: 0;
   transition: opacity 0.2s;
 }
 
+.saved-image .edit-btn {
+  bottom: 0.25rem;
+  right: 0.25rem;
+  background: rgba(96, 165, 250, 0.9);
+}
+
+.saved-image .delete-btn {
+  top: 0.25rem;
+  right: 0.25rem;
+  background: rgba(239, 68, 68, 0.9);
+}
+
+.saved-image:hover .edit-btn,
 .saved-image:hover .delete-btn {
   opacity: 1;
 }
 
 .add-btn {
-  width: 3.125rem;
-  height: 3.125rem;
+  width: 5.5rem;
+  height: 5.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--color-bg-tertiary);
-  border: 1px dashed var(--color-border);
-  border-radius: 0.25rem;
+  border: 2px dashed var(--color-border);
+  border-radius: 0.5rem;
   cursor: pointer;
   color: var(--color-text-secondary);
-  font-size: 1.25rem;
+  font-size: 1.75rem;
   transition: all 0.2s;
 }
 
@@ -489,5 +569,80 @@ function getCompletedCount(): number {
 
 .pic-list::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-secondary);
+}
+
+/* 图片编辑器弹窗 */
+.editor-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 1rem;
+}
+
+.editor-container {
+  width: 100%;
+  max-width: 1200px;
+  height: 90vh;
+  background: var(--color-bg-primary);
+  border-radius: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.editor-title svg {
+  font-size: 1.25rem;
+  color: rgb(96, 165, 250);
+}
+
+.editor-close-btn {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 1.25rem;
+  transition: all 0.2s;
+}
+
+.editor-close-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>

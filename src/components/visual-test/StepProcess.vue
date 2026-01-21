@@ -11,6 +11,8 @@
  */
 import { ref, computed, watch } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessageBox } from 'element-plus'
+import ImgEditor from '@/views/process-visual/components/ImgEditor.vue'
 
 // ==================== 类型定义 ====================
 
@@ -70,6 +72,12 @@ const questionExpandedIndex = ref<number | null>(null)
 const previewVisible = ref(false)
 const previewUrl = ref('')
 
+// 图片编辑
+const editorVisible = ref(false)
+const editingImages = ref<string[] | null>(null)
+const editingIndex = ref(-1)
+const editingUrl = ref('')
+
 // 计算属性 - 本地步骤数据
 const localSteps = computed({
   get: () => props.stepData,
@@ -119,8 +127,13 @@ function setStepWarn(step: StepItem) {
 }
 
 // 删除缺陷
-function deleteStepError(step: StepItem) {
-  if (confirm('确定删除该缺陷项吗？')) {
+async function deleteStepError(step: StepItem) {
+  try {
+    await ElMessageBox.confirm('确定删除该缺陷项吗？', '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     if (step.question) {
       step.pass = 3
     } else {
@@ -128,12 +141,19 @@ function deleteStepError(step: StepItem) {
     }
     delete step.error
     resetPopovers()
+  } catch {
+    // 用户取消
   }
 }
 
 // 删除疑问
-function deleteStepQuestion(step: StepItem) {
-  if (confirm('确定删除该疑问项吗？')) {
+async function deleteStepQuestion(step: StepItem) {
+  try {
+    await ElMessageBox.confirm('确定删除该疑问项吗？', '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     if (step.error) {
       step.pass = 2
     } else {
@@ -141,20 +161,36 @@ function deleteStepQuestion(step: StepItem) {
     }
     delete step.question
     resetPopovers()
+  } catch {
+    // 用户取消
   }
 }
 
 // 删除制程警示
-function deleteStepWarn(step: StepItem) {
-  if (confirm('确定删除该制程警示吗？')) {
+async function deleteStepWarn(step: StepItem) {
+  try {
+    await ElMessageBox.confirm('确定删除该制程警示吗？', '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     delete step.warn
+  } catch {
+    // 用户取消
   }
 }
 
 // 删除图片
-function deleteImage(images: string[], index: number) {
-  if (confirm('确定删除该图片吗？')) {
+async function deleteImage(images: string[], index: number) {
+  try {
+    await ElMessageBox.confirm('确定删除该图片吗？', '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     images.splice(index, 1)
+  } catch {
+    // 用户取消
   }
 }
 
@@ -162,6 +198,30 @@ function deleteImage(images: string[], index: number) {
 function previewImage(url: string) {
   previewUrl.value = url
   previewVisible.value = true
+}
+
+// 编辑图片
+function editImage(images: string[], index: number) {
+  editingImages.value = images
+  editingIndex.value = index
+  editingUrl.value = images[index]
+  editorVisible.value = true
+}
+
+// 保存编辑后的图片
+function handleEditorSave(dataUrl: string) {
+  if (editingImages.value && editingIndex.value >= 0) {
+    editingImages.value[editingIndex.value] = dataUrl
+  }
+  closeEditor()
+}
+
+// 关闭编辑器
+function closeEditor() {
+  editorVisible.value = false
+  editingImages.value = null
+  editingIndex.value = -1
+  editingUrl.value = ''
 }
 
 // 重置弹窗状态
@@ -279,8 +339,9 @@ function emitSaveWarn(stepId: number) {
             <Icon icon="mdi:close-circle" />
           </button>
 
-          <!-- 疑问按钮 -->
+          <!-- 疑问按钮 (疑问模式下隐藏，不允许再次标记为疑问) -->
           <button 
+            v-if="mode !== 'question'"
             class="action-btn question-btn"
             :class="{ active: step.pass === 3 || step.pass === 4 }"
             @click="setStepQuestion(step)"
@@ -318,7 +379,10 @@ function emitSaveWarn(stepId: number) {
               class="image-item"
             >
               <img :src="img" @click="previewImage(img)" />
-              <button class="img-delete" @click="deleteImage(step.error!.url, imgIdx)">
+              <button class="img-edit" @click.stop="editImage(step.error!.url, imgIdx)" title="编辑图片">
+                <Icon icon="mdi:pencil" />
+              </button>
+              <button class="img-delete" @click.stop="deleteImage(step.error!.url, imgIdx)" title="删除图片">
                 <Icon icon="mdi:close" />
               </button>
             </div>
@@ -359,7 +423,10 @@ function emitSaveWarn(stepId: number) {
               class="image-item"
             >
               <img :src="img" @click="previewImage(img)" />
-              <button class="img-delete" @click="deleteImage(step.question!.url, imgIdx)">
+              <button class="img-edit" @click.stop="editImage(step.question!.url, imgIdx)" title="编辑图片">
+                <Icon icon="mdi:pencil" />
+              </button>
+              <button class="img-delete" @click.stop="deleteImage(step.question!.url, imgIdx)" title="删除图片">
                 <Icon icon="mdi:close" />
               </button>
             </div>
@@ -401,7 +468,10 @@ function emitSaveWarn(stepId: number) {
               class="image-item"
             >
               <img :src="img" @click="previewImage(img)" />
-              <button class="img-delete" @click="deleteImage(step.warn!.url, imgIdx)">
+              <button class="img-edit" @click.stop="editImage(step.warn!.url, imgIdx)" title="编辑图片">
+                <Icon icon="mdi:pencil" />
+              </button>
+              <button class="img-delete" @click.stop="deleteImage(step.warn!.url, imgIdx)" title="删除图片">
                 <Icon icon="mdi:close" />
               </button>
             </div>
@@ -434,6 +504,29 @@ function emitSaveWarn(stepId: number) {
           <button class="close-btn" @click="previewVisible = false">
             <Icon icon="mdi:close" />
           </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 图片编辑器弹窗 -->
+    <Teleport to="body">
+      <div v-if="editorVisible" class="editor-overlay">
+        <div class="editor-container">
+          <div class="editor-header">
+            <span class="editor-title">
+              <Icon icon="mdi:image-edit" />
+              图片编辑
+            </span>
+            <button class="editor-close-btn" @click="closeEditor">
+              <Icon icon="mdi:close" />
+            </button>
+          </div>
+          <div class="editor-body">
+            <ImgEditor 
+              :img-url="editingUrl" 
+              @save="handleEditorSave" 
+            />
+          </div>
         </div>
       </div>
     </Teleport>
@@ -517,14 +610,14 @@ function emitSaveWarn(stepId: number) {
 }
 
 .step-index {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2.25rem;
+  height: 2.25rem;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--color-bg-hover);
   border-radius: 50%;
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--color-text-secondary);
 }
@@ -534,12 +627,12 @@ function emitSaveWarn(stepId: number) {
 }
 
 .step-name {
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 500;
 }
 
 .step-desc {
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   color: var(--color-text-secondary);
   margin-top: 0.25rem;
 }
@@ -550,9 +643,9 @@ function emitSaveWarn(stepId: number) {
 
 .status-badge {
   display: inline-block;
-  padding: 0.25rem 0.625rem;
+  padding: 0.375rem 0.75rem;
   border-radius: 0.75rem;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   font-weight: 500;
   background: var(--color-bg-hover);
   color: var(--color-text-secondary);
@@ -580,20 +673,20 @@ function emitSaveWarn(stepId: number) {
 
 .step-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.75rem;
   padding: 0 0.75rem 0.75rem;
 }
 
 .action-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 3rem;
+  height: 3rem;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  border-radius: 0.625rem;
   cursor: pointer;
-  font-size: 1.125rem;
+  font-size: 1.5rem;
   transition: all 0.2s;
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
@@ -679,15 +772,15 @@ function emitSaveWarn(stepId: number) {
 .image-gallery {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.75rem;
   margin-bottom: 0.75rem;
 }
 
 .image-item {
   position: relative;
-  width: 5rem;
-  height: 5rem;
-  border-radius: 0.375rem;
+  width: 6.5rem;
+  height: 6.5rem;
+  border-radius: 0.5rem;
   border: 1px solid var(--color-border);
   overflow: hidden;
   cursor: pointer;
@@ -699,16 +792,14 @@ function emitSaveWarn(stepId: number) {
   object-fit: cover;
 }
 
+.img-edit,
 .img-delete {
   position: absolute;
-  top: 0.125rem;
-  right: 0.125rem;
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 1.5rem;
+  height: 1.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(239, 68, 68, 0.9);
   border: none;
   border-radius: 50%;
   color: white;
@@ -718,21 +809,34 @@ function emitSaveWarn(stepId: number) {
   transition: opacity 0.2s;
 }
 
+.img-edit {
+  bottom: 0.25rem;
+  right: 0.25rem;
+  background: rgba(96, 165, 250, 0.9);
+}
+
+.img-delete {
+  top: 0.25rem;
+  right: 0.25rem;
+  background: rgba(239, 68, 68, 0.9);
+}
+
+.image-item:hover .img-edit,
 .image-item:hover .img-delete {
   opacity: 1;
 }
 
 .add-image-btn {
-  width: 5rem;
-  height: 5rem;
+  width: 6.5rem;
+  height: 6.5rem;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.25rem;
+  gap: 0.375rem;
   background: var(--color-bg-tertiary);
   border: 2px dashed var(--color-border);
-  border-radius: 0.375rem;
+  border-radius: 0.5rem;
   cursor: pointer;
   color: var(--color-text-secondary);
   font-size: 0.75rem;
@@ -746,7 +850,7 @@ function emitSaveWarn(stepId: number) {
 }
 
 .add-image-btn svg {
-  font-size: 1.5rem;
+  font-size: 1.75rem;
 }
 
 .desc-input {
@@ -837,5 +941,80 @@ function emitSaveWarn(stepId: number) {
 
 .step-list::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-secondary);
+}
+
+/* 图片编辑器弹窗 */
+.editor-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 1rem;
+}
+
+.editor-container {
+  width: 100%;
+  max-width: 1200px;
+  height: 90vh;
+  background: var(--color-bg-primary);
+  border-radius: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.editor-title svg {
+  font-size: 1.25rem;
+  color: rgb(96, 165, 250);
+}
+
+.editor-close-btn {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 1.25rem;
+  transition: all 0.2s;
+}
+
+.editor-close-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>
