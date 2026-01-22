@@ -85,6 +85,9 @@ export function useCamera() {
   /**
    * 启动摄像头（直接使用 Tauri）
    * @param deviceIndex - 摄像头索引
+   * 
+   * 注意：为处理热更新/刷新后黑屏问题，始终在启动前尝试释放摄像头，
+   * 确保 Tauri 后端状态与前端状态同步。
    */
   async function startCamera(deviceIndex?: string | number): Promise<boolean> {
     try {
@@ -97,10 +100,25 @@ export function useCamera() {
       
       console.log('启动摄像头，索引:', index)
       
-      // 如果已启动，先停止
-      if (isActive.value) {
-        await stopCamera()
+      // 无论本地状态如何，始终先尝试停止/释放摄像头
+      // 这对于热更新/页面刷新后恢复摄像头至关重要
+      try {
+        // 取消旧的帧监听（如果存在）
+        if (frameUnlisten) {
+          frameUnlisten()
+          frameUnlisten = null
+        }
+        // 停止后端视频流和释放摄像头
+        await invoke('stop_video_stream')
+        await invoke('release_camera')
+      } catch (e) {
+        // 忽略停止时的错误（可能本来就没启动）
+        console.debug('预清理摄像头:', e)
       }
+      
+      // 重置本地状态
+      currentFrame.value = ''
+      isActive.value = false
 
       // 启动视频流
       await invoke('start_video_stream', { index })

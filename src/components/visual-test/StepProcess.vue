@@ -636,6 +636,8 @@ function handleSaveComplete() {
   display: flex;
   flex-direction: column;
   height: 100%;
+  max-height: 100%;  /* 关键: 限制最大高度 */
+  min-height: 0;     /* 关键: flex子项可收缩 */
   background: var(--color-bg-secondary);
   border-radius: 0.75rem;
   border: 1px solid var(--color-border);
@@ -643,6 +645,7 @@ function handleSaveComplete() {
 }
 
 .step-header {
+  flex-shrink: 0;    /* 头部不收缩 */
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -670,7 +673,9 @@ function handleSaveComplete() {
 }
 
 .step-list {
-  flex: 1;
+  flex: 1 1 0;       /* 可伸缩，基础大小为0 */
+  min-height: 0;     /* 允许收缩到0 */
+  max-height: 100%;  /* 限制最大高度 */
   overflow-y: auto;
   padding: 0.75rem;
 }

@@ -10,7 +10,7 @@
  */
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useConfig } from '@/composables/useConfig'
@@ -618,6 +618,26 @@ async function submitReport() {
   }
 }
 
+// ==================== 退出处理 ====================
+
+/** 退出测试 - 显示确认对话框 */
+async function handlePauseExit() {
+  try {
+    await ElMessageBox.confirm(
+      '2D留存测试数据不会暂存，确定要退出吗？',
+      '确认退出',
+      {
+        confirmButtonText: '退出',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    emit('exit')
+  } catch {
+    // 用户取消
+  }
+}
+
 // ==================== 生命周期 ====================
 
 let frameInterval: number | null = null
@@ -829,6 +849,12 @@ function getReportStatusClass(status?: number | string): string {
           </div>
         </div>
       </div>
+      
+      <!-- 退出按钮 -->
+      <button @click="handlePauseExit" class="btn btn-ghost header-exit-btn">
+        <Icon icon="mdi:close" />
+        退出测试
+      </button>
       
       <!-- 步骤指示器 -->
       <div class="step-indicator">
@@ -1745,6 +1771,17 @@ function getReportStatusClass(status?: number | string): string {
 }
 
 .btn-ghost:hover { background: var(--color-bg-tertiary); }
+
+.header-exit-btn {
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.header-exit-btn:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
+}
 
 .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
 .btn-lg { padding: 0.75rem 1.5rem; font-size: 1rem; }

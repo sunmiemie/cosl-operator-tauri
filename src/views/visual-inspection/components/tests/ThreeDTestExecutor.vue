@@ -1977,6 +1977,7 @@ function addNote() {
 .test-panel {
   flex: 4;
   min-width: 0;
+  min-height: 0; /* 允许收缩，防止内容撑大 */
   display: flex;
   flex-direction: column;
   overflow: hidden;

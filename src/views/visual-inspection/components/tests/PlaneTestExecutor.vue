@@ -10,7 +10,7 @@
  */
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useConfig } from '@/composables/useConfig'
@@ -179,23 +179,25 @@ function drawFrame() {
 }
 
 // 绘制参考线
+// 与旧版 PlaneTest.vue 保持一致：
+// - distance = pixelDistance / 100（measureDistance 已按此计算）
+// - offset = 3.5 * distance（不再额外乘 100）
+// - 始终绘制三条线（中心线 + 上下偏移线）
 function drawGuidelines(ctx: CanvasRenderingContext2D, width: number, height: number) {
   ctx.strokeStyle = 'red'
-  ctx.lineWidth = 3
+  ctx.lineWidth = 2
   ctx.beginPath()
   
   // 中心参考线
   ctx.moveTo(0, height - planeLine.value)
   ctx.lineTo(width, height - planeLine.value)
   
-  // 上下偏移线（基于测量距离）
-  if (measureDistance.value > 0) {
-    const offset = 3.5 * measureDistance.value * 100
-    ctx.moveTo(0, height - planeLine.value - offset)
-    ctx.lineTo(width, height - planeLine.value - offset)
-    ctx.moveTo(0, height - planeLine.value + offset)
-    ctx.lineTo(width, height - planeLine.value + offset)
-  }
+  // 上下偏移线（基于测量距离，与旧版一致使用 3.5 * distance）
+  const offset = 3.5 * measureDistance.value
+  ctx.moveTo(0, height - planeLine.value - offset)
+  ctx.lineTo(width, height - planeLine.value - offset)
+  ctx.moveTo(0, height - planeLine.value + offset)
+  ctx.lineTo(width, height - planeLine.value + offset)
   
   ctx.stroke()
 }
@@ -424,6 +426,26 @@ async function submitReport() {
   }
 }
 
+// ==================== 退出处理 ====================
+
+/** 退出测试 - 显示确认对话框 */
+async function handlePauseExit() {
+  try {
+    await ElMessageBox.confirm(
+      '弓曲度测试数据不会暂存，确定要退出吗？',
+      '确认退出',
+      {
+        confirmButtonText: '退出',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    emit('exit')
+  } catch {
+    // 用户取消
+  }
+}
+
 // ==================== 生命周期 ====================
 
 // 监听摄像头帧更新
@@ -632,6 +654,12 @@ function getReportStatusClass(status?: number | string): string {
         </div>
       </div>
       
+      <!-- 退出按钮 -->
+      <button @click="handlePauseExit" class="btn btn-ghost header-exit-btn">
+        <Icon icon="mdi:close" />
+        退出测试
+      </button>
+      
       <!-- 步骤指示器 -->
       <div class="step-indicator">
         <div :class="['step', { active: testStep >= 1 }]">
@@ -660,25 +688,27 @@ function getReportStatusClass(status?: number | string): string {
             <Icon icon="mdi:video" />
             <span>实时画面</span>
           </div>
-          <div ref="canvasParentRef" class="camera-view">
-            <canvas 
-              ref="canvasRef" 
-              @click="handleCanvasClick"
-              class="camera-canvas"
-            />
-          </div>
-          
-          <!-- 参考线控制 -->
-          <div class="line-control">
-            <span class="control-label">参考线位置</span>
-            <input 
-              type="range" 
-              v-model.number="planeLine" 
-              :min="0" 
-              :max="planePix || 1080"
-              class="line-slider"
-            />
-            <span class="control-value">{{ planeLine }}px</span>
+          <div class="camera-with-slider">
+            <div ref="canvasParentRef" class="camera-view">
+              <canvas 
+                ref="canvasRef" 
+                @click="handleCanvasClick"
+                class="camera-canvas"
+              />
+            </div>
+            
+            <!-- 纵向参考线控制 -->
+            <div class="line-control-vertical">
+              <span class="control-value">{{ planeLine }}</span>
+              <input 
+                type="range" 
+                v-model.number="planeLine" 
+                :min="0" 
+                :max="planePix || 1080"
+                class="line-slider-vertical"
+              />
+              <span class="control-label">↕</span>
+            </div>
           </div>
         </div>
         
@@ -1205,45 +1235,62 @@ function getReportStatusClass(status?: number | string): string {
   cursor: crosshair;
 }
 
-.line-control {
+/* 画面与纵向滑动条容器 */
+.camera-with-slider {
+  flex: 1;
   display: flex;
+  min-height: 0;
+}
+
+/* 纵向参考线控制 */
+.line-control-vertical {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  border-top: 1px solid var(--color-border);
+  gap: 0.5rem;
+  padding: 0.5rem 0.375rem;
 }
 
 .control-label {
-  font-size: 0.8125rem;
+  font-size: 0.625rem;
   color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
-.line-slider {
+/* 纵向滑动条 */
+.line-slider-vertical {
   flex: 1;
-  height: 4px;
+  width: 6px;
+  min-height: 100px;
   -webkit-appearance: none;
   appearance: none;
-  background: var(--color-bg-tertiary);
-  border-radius: 2px;
+  background: rgba(74, 222, 128, 0.2);
+  border-radius: 3px;
   outline: none;
+  cursor: pointer;
+  writing-mode: vertical-lr;
+  direction: rtl;
 }
 
-.line-slider::-webkit-slider-thumb {
+.line-slider-vertical::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   background: rgb(74, 222, 128);
   border-radius: 50%;
   cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.3);
+}
+
+.line-slider-vertical::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 5px rgba(74, 222, 128, 0.3);
 }
 
 .control-value {
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  min-width: 4rem;
-  text-align: right;
+  font-size: 0.625rem;
+  color: rgb(74, 222, 128);
+  font-weight: 500;
 }
 
 /* 结果区域 */
@@ -1576,6 +1623,17 @@ function getReportStatusClass(status?: number | string): string {
 
 .btn-ghost:hover {
   background: var(--color-bg-tertiary);
+}
+
+.header-exit-btn {
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.header-exit-btn:hover {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .btn-lg {
