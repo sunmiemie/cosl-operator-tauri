@@ -8,11 +8,16 @@
  * - 显示检测步骤列表
  * - 支持合格/缺陷/疑问选择
  * - 缺陷/疑问时支持添加图片和描述
+ * - 支持从缺陷库/疑问库快速添加描述
+ * - 支持将当前描述保存到库
  */
 import { ref, computed, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessageBox } from 'element-plus'
 import ImgEditor from '@/views/process-visual/components/ImgEditor.vue'
+import IssueLibraryPicker from './IssueLibraryPicker.vue'
+import IssueLibrarySaveDialog from './IssueLibrarySaveDialog.vue'
+import type { IssueItem, IssueLibraryType } from '@/composables/useIssueLibrary'
 
 // ==================== 类型定义 ====================
 
@@ -77,6 +82,15 @@ const editorVisible = ref(false)
 const editingImages = ref<string[] | null>(null)
 const editingIndex = ref(-1)
 const editingUrl = ref('')
+
+// 缺陷/疑问库弹窗状态
+const pickerVisible = ref(false)
+const pickerType = ref<IssueLibraryType>('defect')
+const pickerTargetStep = ref<StepItem | null>(null)
+
+const saveDialogVisible = ref(false)
+const saveDialogType = ref<IssueLibraryType>('defect')
+const saveDialogDefaultName = ref('')
 
 // 计算属性 - 本地步骤数据
 const localSteps = computed({
@@ -284,6 +298,51 @@ function emitSaveQuestion(stepId: number) {
 function emitSaveWarn(stepId: number) {
   emit('click:saveWarn', stepId)
 }
+
+// ==================== 缺陷/疑问库相关方法 ====================
+
+// 打开选择弹窗（从库添加描述）
+function openPicker(type: IssueLibraryType, step: StepItem) {
+  pickerType.value = type
+  pickerTargetStep.value = step
+  pickerVisible.value = true
+}
+
+// 处理选中条目（追加到描述）
+function handlePickerSelect(item: IssueItem) {
+  if (!pickerTargetStep.value) return
+
+  const target = pickerType.value === 'defect' 
+    ? pickerTargetStep.value.error 
+    : pickerTargetStep.value.question
+
+  if (target) {
+    // 根据类型获取正确的描述字段（缺陷项用 problem_desc，疑问项用 question_desc）
+    const desc = pickerType.value === 'defect' 
+      ? (item.problem_desc || item.name)
+      : (item.question_desc || item.name)
+    
+    // 如果已有描述，换行追加；否则直接设置
+    if (target.desc.trim()) {
+      target.desc = target.desc + '\n' + desc
+    } else {
+      target.desc = desc
+    }
+  }
+}
+
+// 打开保存弹窗（保存描述到库）
+function openSaveDialog(type: IssueLibraryType, step: StepItem) {
+  saveDialogType.value = type
+  const target = type === 'defect' ? step.error : step.question
+  saveDialogDefaultName.value = target?.desc || ''
+  saveDialogVisible.value = true
+}
+
+// 保存完成后的回调
+function handleSaveComplete() {
+  // 可以在这里添加额外逻辑，比如提示用户
+}
 </script>
 
 <template>
@@ -403,6 +462,18 @@ function emitSaveWarn(stepId: number) {
             placeholder="请输入缺陷描述..."
             rows="3"
           />
+
+          <!-- 缺陷库快捷操作 -->
+          <div class="library-actions">
+            <button class="lib-btn" @click="openPicker('defect', step)" title="从缺陷库添加">
+              <Icon icon="mdi:database-import" />
+              <span>从库添加</span>
+            </button>
+            <button class="lib-btn" @click="openSaveDialog('defect', step)" title="保存到缺陷库">
+              <Icon icon="mdi:database-export" />
+              <span>保存到库</span>
+            </button>
+          </div>
         </div>
 
         <!-- 疑问详情 (pass=3 或 4 时显示) -->
@@ -448,6 +519,18 @@ function emitSaveWarn(stepId: number) {
             rows="3"
             :disabled="mode === 'question'"
           />
+
+          <!-- 疑问库快捷操作 (疑问模式下隐藏，因为描述已禁用) -->
+          <div v-if="mode !== 'question'" class="library-actions">
+            <button class="lib-btn" @click="openPicker('question', step)" title="从疑问库添加">
+              <Icon icon="mdi:database-import" />
+              <span>从库添加</span>
+            </button>
+            <button class="lib-btn" @click="openSaveDialog('question', step)" title="保存到疑问库">
+              <Icon icon="mdi:database-export" />
+              <span>保存到库</span>
+            </button>
+          </div>
         </div>
 
         <!-- 制程警示 (有 warn 时显示) -->
@@ -530,6 +613,21 @@ function emitSaveWarn(stepId: number) {
         </div>
       </div>
     </Teleport>
+
+    <!-- 缺陷/疑问库选择弹窗 -->
+    <IssueLibraryPicker
+      v-model:visible="pickerVisible"
+      :type="pickerType"
+      @select="handlePickerSelect"
+    />
+
+    <!-- 保存到缺陷/疑问库弹窗 -->
+    <IssueLibrarySaveDialog
+      v-model:visible="saveDialogVisible"
+      :type="saveDialogType"
+      :default-name="saveDialogDefaultName"
+      @saved="handleSaveComplete"
+    />
   </div>
 </template>
 
@@ -876,6 +974,37 @@ function emitSaveWarn(stepId: number) {
 .desc-input:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 缺陷/疑问库快捷操作按钮 */
+.library-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.lib-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lib-btn:hover {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgb(96, 165, 250);
+  color: rgb(96, 165, 250);
+}
+
+.lib-btn svg {
+  font-size: 0.875rem;
 }
 
 /* 图片预览遮罩 */

@@ -8,11 +8,16 @@
  * - 支持标记为：合格(pass=1)、缺陷(pass=2)、疑问(pass=3)、缺陷+疑问(pass=4)
  * - 支持制程警示 (warn)
  * - 支持拍照保存到 save[]、error.url[]、question.url[]、warn.url[]
+ * - 支持从缺陷库/疑问库快速添加描述
+ * - 支持将当前描述保存到库
  */
 import { ref, computed, Teleport } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessageBox } from 'element-plus'
 import ImgEditor from '@/views/process-visual/components/ImgEditor.vue'
+import IssueLibraryPicker from './IssueLibraryPicker.vue'
+import IssueLibrarySaveDialog from './IssueLibrarySaveDialog.vue'
+import type { IssueItem, IssueLibraryType } from '@/composables/useIssueLibrary'
 
 // ==================== 类型定义 ====================
 
@@ -83,6 +88,15 @@ const editorUrl = ref('')
 const editingItemIndex = ref(-1)
 const editingImageIndex = ref(-1)
 const editingImageType = ref<'save' | 'error' | 'question' | 'warn'>('save')
+
+// 缺陷/疑问库弹窗状态
+const pickerVisible = ref(false)
+const pickerType = ref<IssueLibraryType>('defect')
+const pickerTargetItemId = ref<number | null>(null)
+
+const saveDialogVisible = ref(false)
+const saveDialogType = ref<IssueLibraryType>('defect')
+const saveDialogDefaultName = ref('')
 
 // ==================== 检测项操作 ====================
 
@@ -352,6 +366,55 @@ function getStatusText(pass: number): string {
     default: return '待检测'
   }
 }
+
+// ==================== 缺陷/疑问库相关方法 ====================
+
+/** 打开选择弹窗（从库添加描述） */
+function openPicker(type: IssueLibraryType, itemId: number) {
+  pickerType.value = type
+  pickerTargetItemId.value = itemId
+  pickerVisible.value = true
+}
+
+/** 处理选中条目（追加到描述） */
+function handlePickerSelect(item: IssueItem) {
+  if (pickerTargetItemId.value === null) return
+
+  const targetItem = localReport.value.json.tempTest[pickerTargetItemId.value - 1]
+  if (!targetItem) return
+
+  const target = pickerType.value === 'defect' ? targetItem.error : targetItem.question
+
+  if (target) {
+    // 根据类型获取正确的描述字段（缺陷项用 problem_desc，疑问项用 question_desc）
+    const desc = pickerType.value === 'defect' 
+      ? (item.problem_desc || item.name)
+      : (item.question_desc || item.name)
+    
+    // 如果已有描述，换行追加；否则直接设置
+    if (target.desc.trim()) {
+      target.desc = target.desc + '\n' + desc
+    } else {
+      target.desc = desc
+    }
+  }
+}
+
+/** 打开保存弹窗（保存描述到库） */
+function openSaveDialog(type: IssueLibraryType, itemId: number) {
+  saveDialogType.value = type
+  const targetItem = localReport.value.json.tempTest[itemId - 1]
+  if (!targetItem) return
+
+  const target = type === 'defect' ? targetItem.error : targetItem.question
+  saveDialogDefaultName.value = target?.desc || ''
+  saveDialogVisible.value = true
+}
+
+/** 保存完成后的回调 */
+function handleSaveComplete() {
+  // 可以在这里添加额外逻辑
+}
 </script>
 
 <template>
@@ -541,6 +604,18 @@ function getStatusText(pass: number): string {
             placeholder="请输入缺陷描述..."
             rows="3"
           />
+          
+          <!-- 缺陷库快捷操作 -->
+          <div class="library-actions">
+            <button class="lib-btn" @click="openPicker('defect', item.id)" title="从缺陷库添加">
+              <Icon icon="mdi:database-import" />
+              <span>从库添加</span>
+            </button>
+            <button class="lib-btn" @click="openSaveDialog('defect', item.id)" title="保存到缺陷库">
+              <Icon icon="mdi:database-export" />
+              <span>保存到库</span>
+            </button>
+          </div>
         </div>
 
         <!-- 疑问详情 (pass=3 或 pass=4) -->
@@ -582,6 +657,18 @@ function getStatusText(pass: number): string {
             rows="3"
             :disabled="mode === 'question'"
           />
+          
+          <!-- 疑问库快捷操作 (疑问模式下隐藏) -->
+          <div v-if="mode !== 'question'" class="library-actions">
+            <button class="lib-btn" @click="openPicker('question', item.id)" title="从疑问库添加">
+              <Icon icon="mdi:database-import" />
+              <span>从库添加</span>
+            </button>
+            <button class="lib-btn" @click="openSaveDialog('question', item.id)" title="保存到疑问库">
+              <Icon icon="mdi:database-export" />
+              <span>保存到库</span>
+            </button>
+          </div>
         </div>
 
         <!-- 制程警示详情 -->
@@ -663,6 +750,21 @@ function getStatusText(pass: number): string {
         </div>
       </div>
     </Teleport>
+
+    <!-- 缺陷/疑问库选择弹窗 -->
+    <IssueLibraryPicker
+      v-model:visible="pickerVisible"
+      :type="pickerType"
+      @select="handlePickerSelect"
+    />
+
+    <!-- 保存到缺陷/疑问库弹窗 -->
+    <IssueLibrarySaveDialog
+      v-model:visible="saveDialogVisible"
+      :type="saveDialogType"
+      :default-name="saveDialogDefaultName"
+      @saved="handleSaveComplete"
+    />
   </div>
 </template>
 
@@ -972,6 +1074,37 @@ function getStatusText(pass: number): string {
 .question-panel { border-left: 3px solid #f59e0b; }
 .warn-panel { border-left: 3px solid #6366f1; }
 .save-panel { border-left: 3px solid #3b82f6; }
+
+/* 缺陷/疑问库快捷操作按钮 */
+.library-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.lib-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lib-btn:hover {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: rgb(96, 165, 250);
+  color: rgb(96, 165, 250);
+}
+
+.lib-btn svg {
+  font-size: 0.875rem;
+}
 
 /* 图片画廊 (与 StepProcess 一致) */
 .image-gallery {
