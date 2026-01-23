@@ -7,6 +7,12 @@
  * - 使用 TempTestProcess 作为检测面板
  * - 数据结构：tempReportJson.json.tempTest[]
  */
+
+// 禁用属性继承，避免 Teleport 导致的 fragment 警告
+defineOptions({
+  inheritAttrs: false
+})
+
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -31,7 +37,8 @@ const props = withDefaults(defineProps<{
   mode: TestMode
   isDevTest: boolean
   tempReportData?: TempReportJson  // 继续测试时的已保存数据
-  feedbackList?: number[]          // 打回模式下需要重检的项目ID列表
+  targetList?: number[]            // 疑问/打回模式下需要重检的项目ID列表（通用）
+  feedbackReason?: string          // 打回理由（反馈模式时显示）
   deviceType?: DeviceType          // 摄像头类型：micro=显微镜, xray=X-Ray
 }>(), {
   deviceType: 'micro'
@@ -278,22 +285,29 @@ async function initTest() {
   isLoading.value = true
   
   try {
-    if (props.mode === 'continue' && props.tempReportData) {
-      // 继续测试: 从保存的数据恢复
-      // 注意: tempReportData 可能是 TempOrderData 结构，其中 data 字段包含实际的 TempReportJson
+    // 需要恢复数据的模式: continue（继续测试）、feedback（打回）、question（疑问）
+    // 这些模式都需要从 tempReportData 恢复已有数据
+    const needsDataRestore = ['continue', 'feedback', 'question'].includes(props.mode) && props.tempReportData
+    
+    if (needsDataRestore) {
+      // 从保存的数据恢复（继续测试、打回、疑问模式）
+      // 注意: tempReportData 可能是多种结构:
+      // - TempOrderData 结构，其中 data 字段包含实际的 TempReportJson
+      // - ReportData 结构（反馈/疑问报告），其中 json.tempTest 包含测试项
+      // - 直接的 TempReportJson 结构
       const savedData = props.tempReportData as any
       
-      console.log('[TempTest] 接收到的临时数据:', savedData)
+      console.log(`[TempTest] ${props.mode} 模式，接收到的数据:`, savedData)
       
       // 尝试从不同的数据结构中提取 TempReportJson
       if (savedData.data?.json?.tempTest) {
-        // 数据在 data 字段内（TempOrderData.data = TempReportJson）
+        // TempOrderData.data = TempReportJson 结构
         tempReportJson.value = JSON.parse(JSON.stringify(savedData.data))
         console.log('[TempTest] 从 data 字段提取数据')
       } else if (savedData.json?.tempTest) {
-        // 直接是 TempReportJson 结构
+        // 直接是 TempReportJson 或 ReportData 结构（包含 json.tempTest）
         tempReportJson.value = JSON.parse(JSON.stringify(savedData))
-        console.log('[TempTest] 直接使用 TempReportJson 结构')
+        console.log('[TempTest] 直接使用包含 json.tempTest 的结构')
       } else {
         // 数据格式不正确，创建空报告
         console.warn('[TempTest] 无法识别的数据格式，创建空报告')
@@ -305,7 +319,7 @@ async function initTest() {
       tempReportJson.value.board_id = props.testUnit.board_id || tempReportJson.value.board_id
       tempReportJson.value.board_serialnumber = props.testUnit.serial || tempReportJson.value.board_serialnumber
       
-      console.log('[TempTest] 继续测试模式，最终数据:', tempReportJson.value)
+      console.log(`[TempTest] ${props.mode} 模式，最终数据:`, tempReportJson.value)
     } else {
       // 新测试: 创建空报告
       tempReportJson.value = createEmptyReport()
@@ -460,6 +474,17 @@ function validateTest(): boolean {
     }
   }
   
+  // 疑问模式校验：疑问项必须被处理（改为合格或缺陷），不能保留疑问状态
+  if (props.mode === 'question') {
+    const unresolvedQuestions = tempReportJson.value.json.tempTest.filter(
+      item => item.pass === 3 || item.pass === 4
+    )
+    if (unresolvedQuestions.length > 0) {
+      ElMessage.error('疑问未处理，请将疑问项标记为合格或缺陷')
+      return false
+    }
+  }
+  
   return true
 }
 
@@ -520,15 +545,28 @@ async function uploadReport() {
       throw new Error('缺少工单ID')
     }
     
-    // 状态统一为3(待审核)，与旧版前端保持一致
-    const result = await reportApi.uploadTempReport({
+    // 构建上传参数
+    const uploadParams = {
       dev_testunit_id: unitId,
       serialNumber: tempReportJson.value.board_serialnumber,
       userId: userInfo.value?.id || 0,
-      testType: 4,
+      testType: props.deviceType === 'xray' ? 5 : 4,
       dev_testunit_status: 3, // 待审核
       file: tempReportJson.value as any
-    }, getAuthHeaders())
+    }
+    
+    // 根据模式选择正确的上传接口
+    let result
+    if (props.mode === 'feedback') {
+      // 临时工单反馈模式
+      result = await reportApi.feedbackTempReport(uploadParams, getAuthHeaders())
+    } else if (props.mode === 'question') {
+      // 临时工单疑问模式
+      result = await reportApi.questionTempReport(uploadParams, getAuthHeaders())
+    } else {
+      // 正常/继续模式
+      result = await reportApi.uploadTempReport(uploadParams, getAuthHeaders())
+    }
     
     if (result.success) {
       ElMessage.success('报告上传成功')
@@ -683,7 +721,7 @@ function getReportStatusClass(status?: number | string): string {
 </script>
 
 <template>
-  <div class="temp-executor">
+  <div class="temp-executor" v-bind="$attrs">
     <!-- 加载遮罩 -->
     <div v-if="isLoading || isSaving" class="loading-overlay">
       <div class="loading-content">
@@ -766,6 +804,13 @@ function getReportStatusClass(status?: number | string): string {
       </div>
     </div>
 
+    <!-- 打回理由横幅（反馈模式时显示） -->
+    <div v-if="mode === 'feedback' && feedbackReason" class="feedback-reason-banner">
+      <Icon icon="mdi:message-alert" />
+      <span class="reason-label">打回理由:</span>
+      <span class="reason-text">{{ feedbackReason }}</span>
+    </div>
+
     <!-- 主内容区 -->
     <div class="executor-content">
       <!-- 步骤1: 检测中 -->
@@ -802,7 +847,7 @@ function getReportStatusClass(status?: number | string): string {
           <TempTestProcess 
             v-model:temp-report-json="tempReportJson"
             :mode="mode === 'feedback' ? 'feedback' : mode === 'question' ? 'question' : 'normal'"
-            :feedback-list="feedbackList"
+            :target-list="targetList"
             @click:save="handleSave"
             @click:save-error="handleSaveError"
             @click:save-question="handleSaveQuestion"
@@ -955,19 +1000,19 @@ function getReportStatusClass(status?: number | string): string {
         </button>
       </template>
     </div>
-  </div>
 
-  <!-- 图片预览 -->
-  <Teleport to="body">
-    <div v-if="viewerVisible" class="viewer-overlay" @click="viewerVisible = false">
-      <div class="viewer-content" @click.stop>
-        <img :src="viewerUrl" alt="" />
-        <button class="viewer-close" @click="viewerVisible = false">
-          <Icon icon="mdi:close" />
-        </button>
+    <!-- 图片预览 -->
+    <Teleport to="body">
+      <div v-if="viewerVisible" class="viewer-overlay" @click="viewerVisible = false">
+        <div class="viewer-content" @click.stop>
+          <img :src="viewerUrl" alt="" />
+          <button class="viewer-close" @click="viewerVisible = false">
+            <Icon icon="mdi:close" />
+          </button>
+        </div>
       </div>
-    </div>
-  </Teleport>
+    </Teleport>
+  </div>
 </template>
 
 <style scoped>
@@ -983,6 +1028,29 @@ function getReportStatusClass(status?: number | string): string {
   padding: 0.75rem;
   background: var(--color-bg);
   overflow: hidden;  /* 防止内容溢出 */
+}
+
+/* 打回理由横幅 */
+.feedback-reason-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(251, 146, 60, 0.15);
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  border-radius: 0.375rem;
+  color: rgb(251, 146, 60);
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
+
+.feedback-reason-banner .reason-label {
+  font-weight: 600;
+}
+
+.feedback-reason-banner .reason-text {
+  flex: 1;
+  color: var(--color-text-primary);
 }
 
 /* 加载遮罩 */

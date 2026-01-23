@@ -22,6 +22,7 @@ import { orderApi, type TestUnit, OrderStatus, OrderType } from '@/services/orde
 import { processApi, type ProcessData, type TempOrderData, type FeedbackData, type QuestionData } from '@/services/process'
 import { reportApi, type TestReport, type ReportData } from '@/services/report'
 import { startWorktime, stopWorktime } from '@/services/worktime'
+import { parseFeedbackTargets, parseQuestionTargets, parseTempTargetIds, type TargetItem } from '@/utils/feedbackQuestion'
 
 // 导入公共组件
 import { DeviceCheckOverlay, HistoryReportPanel, DownloadProgress } from '@/components/visual-test'
@@ -465,6 +466,16 @@ async function selectBoardToTest(pos: FixturePosition) {
     return
   }
 
+  // 临时工单疑问/打回模式: 校验目标清单不为空
+  if (pos.isDevTest && (pos.testMode === 'feedback' || pos.testMode === 'question')) {
+    const targetIds = getSlotTargetIds(pos)
+    if (!targetIds || targetIds.length === 0) {
+      const modeText = pos.testMode === 'feedback' ? '打回' : '疑问'
+      showMessage(`${modeText}清单为空，无法进入测试`, 'error')
+      return
+    }
+  }
+
   // 进入测试阶段
   phase.value = 'testing'
   isTesting.value = true
@@ -750,6 +761,71 @@ function getModeClass(mode?: TestMode): string {
     case 'feedback': return 'mode-feedback'
     case 'question': return 'mode-question'
     default: return ''
+  }
+}
+
+/**
+ * 获取槽位的目标 ID 列表（用于临时工单的遮罩）
+ */
+function getSlotTargetIds(pos: FixturePosition): number[] | undefined {
+  if (!pos.isDevTest) return undefined
+  
+  if (pos.testMode === 'feedback' && pos.feedbackData) {
+    return parseTempTargetIds(pos.feedbackData, 'feedback')
+  }
+  if (pos.testMode === 'question' && pos.questionData) {
+    return parseTempTargetIds(pos.questionData, 'question')
+  }
+  return undefined
+}
+
+/**
+ * 获取槽位的反馈目标清单（用于正式工单的清单驱动重检）
+ */
+function getSlotFeedbackTargets(pos: FixturePosition): TargetItem[] | undefined {
+  if (pos.testMode !== 'feedback' || !pos.feedbackData) return undefined
+  return parseFeedbackTargets(
+    pos.feedbackData,
+    pos.processData?.json,
+    pos.feedbackReport
+  )
+}
+
+/**
+ * 获取槽位的疑问目标清单（用于正式工单的清单驱动重检）
+ */
+function getSlotQuestionTargets(pos: FixturePosition): TargetItem[] | undefined {
+  if (pos.testMode !== 'question' || !pos.questionData) return undefined
+  return parseQuestionTargets(
+    pos.questionData,
+    pos.processData?.json,
+    pos.questionReport
+  )
+}
+
+/**
+ * 获取槽位的临时报告数据（用于 TempTestExecutor 恢复数据）
+ * 
+ * 根据 testMode 选择正确的数据来源:
+ * - continue: 使用 tempData（暂存的临时数据）
+ * - feedback: 使用 feedbackReport（原报告，需要在上面修改）
+ * - question: 使用 questionReport（原报告，需要在上面修改）
+ * - normal: 无需恢复数据
+ */
+function getSlotTempReportData(pos: FixturePosition): unknown | undefined {
+  if (!pos.isDevTest) return undefined
+  
+  switch (pos.testMode) {
+    case 'continue':
+      return pos.tempData
+    case 'feedback':
+      // 反馈模式: 返回原报告，TempTestExecutor 会从中恢复数据
+      return pos.feedbackReport
+    case 'question':
+      // 疑问模式: 返回原报告，TempTestExecutor 会从中恢复数据
+      return pos.questionReport
+    default:
+      return undefined
   }
 }
 
@@ -1064,7 +1140,9 @@ watch(() => scanner.error.value, (err) => {
             <!-- 临时工单检测 (isDevTest=true) - 使用 X-Ray 摄像头 -->
             <TempTestExecutor v-if="currentTestBoard && currentTestBoard.board && currentTestBoard.isDevTest"
               :test-unit="currentTestBoard.board as any" :mode="(currentTestBoard.testMode as any) || 'normal'"
-              :is-dev-test="true" :temp-report-data="(currentTestBoard.tempData as any) || undefined"
+              :is-dev-test="true" :temp-report-data="(getSlotTempReportData(currentTestBoard) as any) || undefined"
+              :target-list="getSlotTargetIds(currentTestBoard)"
+              :feedback-reason="currentTestBoard.board?.feedback_reason"
               device-type="xray"
               @complete="handleBoardTestComplete" @exit="exitTest" @request-exit="handleRequestExit"
               @error="(msg: string) => showMessage(msg, 'error')" />
@@ -1072,7 +1150,11 @@ watch(() => scanner.error.value, (err) => {
             <!-- X-Ray 测试执行器 (正常工单) -->
             <XrayTestExecutor v-else-if="currentTestBoard && currentTestBoard.board"
               :slot-data="currentTestBoard as any" :fixture-id="fixtureId" :total-boards="addedBoards.length"
-              :current-index="currentTestIndex" @complete="handleBoardTestComplete" @exit="exitTest"
+              :current-index="currentTestIndex"
+              :feedback-targets="getSlotFeedbackTargets(currentTestBoard)"
+              :question-targets="getSlotQuestionTargets(currentTestBoard)"
+              :feedback-reason="currentTestBoard.board?.feedback_reason"
+              @complete="handleBoardTestComplete" @exit="exitTest"
               @request-exit="handleRequestExit" @error="(msg: string) => showMessage(msg, 'error')" />
 
             <!-- 无测试数据时的占位 -->

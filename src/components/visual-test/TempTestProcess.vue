@@ -59,7 +59,7 @@ export interface TempReportJson {
 const props = defineProps<{
   tempReportJson: TempReportJson
   mode?: 'normal' | 'feedback' | 'question'  // 测试模式
-  feedbackList?: number[]  // 打回/疑问模式下需要处理的项目ID列表
+  targetList?: number[]  // 疑问/打回模式下需要重检的项目ID列表（通用）
 }>()
 
 const emit = defineEmits<{
@@ -100,6 +100,14 @@ const saveDialogDefaultName = ref('')
 
 // ==================== 检测项操作 ====================
 
+/**
+ * 通过 ID 查找检测项
+ * 不再假设 id = index + 1，而是通过 find 查找
+ */
+function findItemById(id: number): TempTestItem | undefined {
+  return localReport.value.json.tempTest.find(item => item.id === id)
+}
+
 /** 添加新检测记录 */
 function addTestRecord() {
   const newItem: TempTestItem = {
@@ -121,7 +129,9 @@ async function deleteTestRecord(id: number) {
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
     )
     
-    const index = id - 1
+    // 通过 id 查找索引，而不是假设 id = index + 1
+    const index = localReport.value.json.tempTest.findIndex(item => item.id === id)
+    if (index === -1) return
     localReport.value.json.tempTest.splice(index, 1)
     // 重新编号
     localReport.value.json.tempTest.forEach((item, idx) => {
@@ -134,7 +144,8 @@ async function deleteTestRecord(id: number) {
 
 /** 标记为合格 */
 function handleCorrect(id: number) {
-  const item = localReport.value.json.tempTest[id - 1]
+  const item = findItemById(id)
+  if (!item) return
   item.pass = 1
   item.name = '合格项'
   // 清除缺陷和疑问数据
@@ -144,7 +155,8 @@ function handleCorrect(id: number) {
 
 /** 标记为缺陷 */
 function handleError(id: number) {
-  const item = localReport.value.json.tempTest[id - 1]
+  const item = findItemById(id)
+  if (!item) return
   
   if ('question' in item) {
     item.pass = 4
@@ -161,7 +173,8 @@ function handleError(id: number) {
 
 /** 标记为疑问 */
 function handleQuestion(id: number) {
-  const item = localReport.value.json.tempTest[id - 1]
+  const item = findItemById(id)
+  if (!item) return
   
   if ('error' in item) {
     item.pass = 4
@@ -178,7 +191,8 @@ function handleQuestion(id: number) {
 
 /** 添加制程警示 */
 function handleWarn(id: number) {
-  const item = localReport.value.json.tempTest[id - 1]
+  const item = findItemById(id)
+  if (!item) return
   
   if (!item.name.startsWith('制程警示-')) {
     item.name = '制程警示-' + item.name
@@ -198,7 +212,8 @@ async function deleteError(id: number) {
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
     )
     
-    const item = localReport.value.json.tempTest[id - 1]
+    const item = findItemById(id)
+    if (!item) return
     if ('question' in item) {
       item.pass = 3
       item.name = '疑问项'
@@ -221,7 +236,8 @@ async function deleteQuestion(id: number) {
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
     )
     
-    const item = localReport.value.json.tempTest[id - 1]
+    const item = findItemById(id)
+    if (!item) return
     if ('error' in item) {
       item.pass = 2
       item.name = '缺陷项'
@@ -244,7 +260,8 @@ async function deleteWarn(id: number) {
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' }
     )
     
-    const item = localReport.value.json.tempTest[id - 1]
+    const item = findItemById(id)
+    if (!item) return
     if (item.name.startsWith('制程警示-')) {
       item.name = item.name.replace('制程警示-', '')
     }
@@ -334,8 +351,8 @@ function closeEditor() {
 /** 检查项目是否被遮罩（打回/疑问模式下非目标项目） */
 function isItemMasked(id: number): boolean {
   if (props.mode === 'normal' || !props.mode) return false
-  if (!props.feedbackList || props.feedbackList.length === 0) return false
-  return !props.feedbackList.includes(id)
+  if (!props.targetList || props.targetList.length === 0) return false
+  return !props.targetList.includes(id)
 }
 
 /** 获取遮罩文字 */
@@ -380,7 +397,7 @@ function openPicker(type: IssueLibraryType, itemId: number) {
 function handlePickerSelect(item: IssueItem) {
   if (pickerTargetItemId.value === null) return
 
-  const targetItem = localReport.value.json.tempTest[pickerTargetItemId.value - 1]
+  const targetItem = findItemById(pickerTargetItemId.value)
   if (!targetItem) return
 
   const target = pickerType.value === 'defect' ? targetItem.error : targetItem.question
@@ -403,7 +420,7 @@ function handlePickerSelect(item: IssueItem) {
 /** 打开保存弹窗（保存描述到库） */
 function openSaveDialog(type: IssueLibraryType, itemId: number) {
   saveDialogType.value = type
-  const targetItem = localReport.value.json.tempTest[itemId - 1]
+  const targetItem = findItemById(itemId)
   if (!targetItem) return
 
   const target = type === 'defect' ? targetItem.error : targetItem.question
@@ -548,7 +565,7 @@ function handleSaveComplete() {
               class="image-item"
             >
               <img :src="img" alt="" @click="openViewer(img)" />
-              <button class="img-edit" @click.stop="openEditor(img, item.id - 1, idx, 'save')" title="编辑">
+              <button class="img-edit" @click.stop="openEditor(img, index, idx, 'save')" title="编辑">
                 <Icon icon="mdi:pencil" />
               </button>
               <button class="img-delete" @click.stop="deleteImage(item.save, idx)" title="删除">
@@ -582,7 +599,7 @@ function handleSaveComplete() {
               class="image-item"
             >
               <img :src="img" alt="" @click="openViewer(img)" />
-              <button class="img-edit" @click.stop="openEditor(img, item.id - 1, idx, 'error')" title="编辑">
+              <button class="img-edit" @click.stop="openEditor(img, index, idx, 'error')" title="编辑">
                 <Icon icon="mdi:pencil" />
               </button>
               <button class="img-delete" @click.stop="deleteImage(item.error!.url, idx)" title="删除">
@@ -634,7 +651,7 @@ function handleSaveComplete() {
               class="image-item"
             >
               <img :src="img" alt="" @click="openViewer(img)" />
-              <button class="img-edit" @click.stop="openEditor(img, item.id - 1, idx, 'question')" title="编辑">
+              <button class="img-edit" @click.stop="openEditor(img, index, idx, 'question')" title="编辑">
                 <Icon icon="mdi:pencil" />
               </button>
               <button class="img-delete" @click.stop="deleteImage(item.question!.url, idx)" title="删除">
@@ -687,7 +704,7 @@ function handleSaveComplete() {
               class="image-item"
             >
               <img :src="img" alt="" @click="openViewer(img)" />
-              <button class="img-edit" @click.stop="openEditor(img, item.id - 1, idx, 'warn')" title="编辑">
+              <button class="img-edit" @click.stop="openEditor(img, index, idx, 'warn')" title="编辑">
                 <Icon icon="mdi:pencil" />
               </button>
               <button class="img-delete" @click.stop="deleteImage(item.warn!.url, idx)" title="删除">

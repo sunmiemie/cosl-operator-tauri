@@ -28,6 +28,7 @@ import {
 } from '@/services/process'
 import { reportApi, type ReportUploadParams, type ReportData, type TestReport } from '@/services/report'
 import { createBaseReportJson, trimReportJson, collectStepLists, stepsToStepList, picsToPicList } from '@/utils/reportTemplate'
+import type { TargetItem } from '@/utils/feedbackQuestion'
 
 // ==================== 类型定义 ====================
 
@@ -56,6 +57,9 @@ const props = defineProps<{
   fixtureId: string
   totalBoards: number
   currentIndex: number
+  feedbackTargets?: TargetItem[]    // 反馈目标清单（清单驱动模式）
+  questionTargets?: TargetItem[]    // 疑问目标清单（清单驱动模式）
+  feedbackReason?: string           // 打回理由
 }>()
 
 // Emits
@@ -133,6 +137,44 @@ const noteForm = reactive({
   areaId: 0,
   pointId: 0
 })
+
+// ==================== 清单驱动模式 ====================
+
+// 当前目标清单索引（疑问/反馈模式下使用）
+const currentTargetIndex = ref(0)
+
+// 是否为清单驱动模式
+const isTargetDrivenMode = computed(() => {
+  const mode = props.slotData.testMode
+  if (mode === 'feedback' && props.feedbackTargets && props.feedbackTargets.length > 0) {
+    return true
+  }
+  if (mode === 'question' && props.questionTargets && props.questionTargets.length > 0) {
+    return true
+  }
+  return false
+})
+
+// 当前目标清单
+const currentTargetList = computed<TargetItem[]>(() => {
+  const mode = props.slotData.testMode
+  if (mode === 'feedback' && props.feedbackTargets) {
+    return props.feedbackTargets
+  }
+  if (mode === 'question' && props.questionTargets) {
+    return props.questionTargets
+  }
+  return []
+})
+
+// 当前目标项
+const currentTarget = computed<TargetItem | null>(() => {
+  if (!isTargetDrivenMode.value) return null
+  return currentTargetList.value[currentTargetIndex.value] || null
+})
+
+// 目标总数
+const targetCount = computed(() => currentTargetList.value.length)
 
 // ==================== 计算属性 ====================
 
@@ -538,6 +580,12 @@ function initReportJson() {
 
 // 下一步
 async function handleNext() {
+  // 清单驱动模式使用独立的导航逻辑
+  if (isTargetDrivenMode.value) {
+    await handleTargetNext()
+    return
+  }
+  
   if (testStep.value === 2) {
     // 整体检测阶段
     if (totalMethods.value === 'step') {
@@ -602,6 +650,12 @@ async function handleAreaNext() {
 
 // 上一步
 function handlePrevious() {
+  // 清单驱动模式使用独立的导航逻辑
+  if (isTargetDrivenMode.value) {
+    handleTargetPrevious()
+    return
+  }
+  
   if (testStep.value === 2) {
     if (totalMethods.value === 'pic') {
       totalMethods.value = 'step'
@@ -654,6 +708,135 @@ function goToAreaLastPoint() {
   pointMethods.value = 'pic'
   currentPoint.value = areaData.detail?.length || 0
 }
+
+// ==================== 清单驱动导航 ====================
+
+/**
+ * 清单驱动模式 - 下一个目标
+ */
+async function handleTargetNext() {
+  const target = currentTarget.value
+  if (!target) return
+  
+  // 验证当前目标项是否完成
+  const stepData = findTargetStepData(target)
+  if (stepData && !validateSingleStep(stepData)) {
+    return
+  }
+  
+  // 检查是否是最后一个目标
+  if (currentTargetIndex.value >= targetCount.value - 1) {
+    await ElMessageBox.confirm('所有重检项目已完成，是否提交报告？', '完成确认', {
+      confirmButtonText: '继续',
+      cancelButtonText: '取消',
+      distinguishCancelAndClose: true
+    })
+    // 生成并上传报告
+    await handleTestComplete()
+    return
+  }
+  
+  // 进入下一个目标
+  currentTargetIndex.value++
+}
+
+/**
+ * 清单驱动模式 - 上一个目标
+ */
+function handleTargetPrevious() {
+  if (currentTargetIndex.value > 0) {
+    currentTargetIndex.value--
+  }
+}
+
+/**
+ * 查找目标对应的步骤数据
+ */
+function findTargetStepData(target: TargetItem): StepItem | null {
+  if (!processJson.value) return null
+  
+  // X-Ray 只有 xray 类型
+  if (target.type !== 'xray') return null
+  
+  if (target.position === 'total') {
+    return processJson.value.total?.step?.find((s: StepItem) => s.id === target.stepId) || null
+  }
+  
+  if (target.position === 'area' && target.areaId !== undefined) {
+    const area = processJson.value.area?.find((a: AreaData) => a.id === target.areaId)
+    if (!area) return null
+    
+    if (target.areaPosition === 'general') {
+      return area.general?.step?.find((s: StepItem) => s.id === target.stepId) || null
+    }
+    
+    if (target.areaPosition === 'detail' && target.detailId !== undefined) {
+      const detail = area.detail?.find((d: { id: number }) => d.id === target.detailId)
+      return detail?.step?.find((s: StepItem) => s.id === target.stepId) || null
+    }
+  }
+  
+  return null
+}
+
+/**
+ * 验证单个步骤是否完成
+ */
+function validateSingleStep(step: StepItem): boolean {
+  if (step.pass === 0) {
+    ElMessage.warning('请完成检测步骤')
+    return false
+  }
+  
+  // 疑问模式下，pass=3/4 不允许提交
+  if (props.slotData.testMode === 'question') {
+    if (step.pass === 3 || step.pass === 4) {
+      ElMessage.error('疑问未处理，请将疑问项标记为合格或缺陷')
+      return false
+    }
+  }
+  
+  if (step.pass === 2 || step.pass === 4) {
+    if (!step.error?.url?.length || !step.error?.desc) {
+      ElMessage.warning('缺陷项需要添加图片和描述')
+      return false
+    }
+  }
+  if (step.pass === 3 || step.pass === 4) {
+    if (!step.question?.url?.length || !step.question?.desc) {
+      ElMessage.warning('疑问项需要添加图片和描述')
+      return false
+    }
+  }
+  if (step.warn) {
+    if (!step.warn.url?.length || !step.warn.desc) {
+      ElMessage.warning('制程警示需要添加图片和描述')
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * 获取当前目标的步骤列表（用于 StepProcess 组件）
+ */
+const targetStepList = computed<StepItem[]>(() => {
+  const target = currentTarget.value
+  if (!target) return []
+  
+  const step = findTargetStepData(target)
+  if (step) {
+    return [step]
+  }
+  return []
+})
+
+/**
+ * 获取当前目标的参考图 URL
+ */
+const targetReferenceUrl = computed<string>(() => {
+  return currentTarget.value?.referenceUrl || ''
+})
 
 // ==================== 验证逻辑 ====================
 
@@ -794,20 +977,36 @@ function findPic(picId: number): PicItem | null {
 // ==================== 完成测试 ====================
 
 async function handleTestComplete() {
-  try {
-    await ElMessageBox.confirm('测试已完成，是否提交报告？', '提交确认', {
-      confirmButtonText: '提交',
-      cancelButtonText: '取消',
-      type: 'info'
-    })
-  } catch {
-    return  // 用户取消
+  const testMode = props.slotData.testMode
+  
+  // 清单驱动模式下的提交确认已在 handleTargetNext 中处理
+  if (!isTargetDrivenMode.value) {
+    try {
+      await ElMessageBox.confirm('测试已完成，是否提交报告？', '提交确认', {
+        confirmButtonText: '提交',
+        cancelButtonText: '取消',
+        type: 'info'
+      })
+    } catch {
+      return  // 用户取消
+    }
   }
   
   isSaving.value = true
   
   try {
     generateReport()
+    
+    // 反馈/疑问模式：合并原报告中未重检的项目
+    // 根据模式使用对应的原报告（反馈用 feedbackReport，疑问用 questionReport）
+    const prevReport = testMode === 'feedback' 
+      ? props.slotData.feedbackReport 
+      : testMode === 'question' 
+        ? props.slotData.questionReport 
+        : null
+    if ((testMode === 'feedback' || testMode === 'question') && prevReport) {
+      mergeWithPreviousReport(prevReport as ReportData)
+    }
     
     // 使用 as any 避免复杂类型检查 - 实际数据结构与后端协议一致
     const uploadParams: ReportUploadParams = {
@@ -819,7 +1018,17 @@ async function handleTestComplete() {
       file: reportJson.value as any
     }
     
-    const result = await reportApi.uploadReport(uploadParams, getAuthHeaders())
+    let result
+    if (testMode === 'feedback') {
+      // 反馈工单使用 feedbackReport 接口
+      result = await reportApi.feedbackReport(uploadParams, getAuthHeaders())
+    } else if (testMode === 'question') {
+      // 疑问工单使用 questionReport 接口
+      result = await reportApi.questionReport(uploadParams, getAuthHeaders())
+    } else {
+      // 正常/继续模式使用标准 uploadReport 接口
+      result = await reportApi.uploadReport(uploadParams, getAuthHeaders())
+    }
     
     if (result.success) {
       ElMessage.success('报告提交成功')
@@ -833,6 +1042,108 @@ async function handleTestComplete() {
     ElMessage.error('提交报告失败: ' + (err as Error).message)
   } finally {
     isSaving.value = false
+  }
+}
+
+/**
+ * 合并原报告数据（反馈/疑问模式）
+ * 将原报告中未被重检的项目结果保留，仅更新当前重检的项目
+ * @param prevReport 原报告（反馈模式传 feedbackReport，疑问模式传 questionReport）
+ */
+function mergeWithPreviousReport(prevReport: ReportData) {
+  if (!prevReport?.json || !reportJson.value?.json) {
+    return
+  }
+  
+  const prevXray = (prevReport.json as any).xray as { total?: Record<string, unknown>; area?: Record<string, unknown>[] } | undefined
+  const currXray = (reportJson.value.json as any).xray as { total?: Record<string, unknown>; area?: Record<string, unknown>[] } | undefined
+  
+  if (!prevXray || !currXray) return
+  
+  // 获取目标清单用于判断哪些项目是本次重检的
+  const testMode = props.slotData.testMode
+  const targets = testMode === 'feedback' ? props.feedbackTargets : props.questionTargets
+  const targetKeys = new Set(targets?.map(t => t.key) || [])
+  
+  // 合并 total 部分
+  if (prevXray.total && currXray.total) {
+    mergeSectionLists(prevXray.total, currXray.total, 'xray', 'total', targetKeys)
+  }
+  
+  // 合并 area 部分
+  if (prevXray.area && currXray.area) {
+    for (let i = 0; i < prevXray.area.length; i++) {
+      const prevArea = prevXray.area[i] as Record<string, unknown>
+      const currArea = currXray.area[i] as Record<string, unknown>
+      if (!prevArea || !currArea) continue
+      
+      const areaId = prevArea.id as number
+      
+      // 合并 general
+      if (prevArea.general && currArea.general) {
+        mergeSectionLists(
+          prevArea.general as Record<string, unknown>,
+          currArea.general as Record<string, unknown>,
+          'xray', 'area', targetKeys, areaId, 'general'
+        )
+      }
+      
+      // 合并 detail
+      const prevDetails = prevArea.detail as Record<string, unknown>[] | undefined
+      const currDetails = currArea.detail as Record<string, unknown>[] | undefined
+      if (prevDetails && currDetails) {
+        for (let j = 0; j < prevDetails.length; j++) {
+          const prevDetail = prevDetails[j]
+          const currDetail = currDetails[j]
+          if (!prevDetail || !currDetail) continue
+          
+          const detailId = prevDetail.id as number
+          mergeSectionLists(
+            prevDetail, currDetail, 'xray', 'area', targetKeys, areaId, 'detail', detailId
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 合并单个 section 的 errorList/questionList/warnList
+ */
+function mergeSectionLists(
+  prevSection: Record<string, unknown>,
+  currSection: Record<string, unknown>,
+  type: string,
+  position: string,
+  targetKeys: Set<string>,
+  areaId?: number,
+  areaPosition?: string,
+  detailId?: number
+) {
+  for (const listKey of ['errorList', 'questionList', 'warnList']) {
+    const prevList = prevSection[listKey] as Array<{ id: number }> | undefined
+    const currList = currSection[listKey] as Array<{ id: number }> | undefined
+    
+    if (!prevList || prevList.length === 0) continue
+    
+    for (const prevItem of prevList) {
+      // 构建 key 检查是否在目标中
+      const keyParts = [type, position]
+      if (areaId !== undefined) keyParts.push(`a${areaId}`)
+      if (areaPosition) keyParts.push(areaPosition)
+      if (detailId !== undefined) keyParts.push(`d${detailId}`)
+      keyParts.push(`s${prevItem.id}`)
+      const itemKey = keyParts.join('-')
+      
+      // 如果不在目标清单中，从原报告复制到当前报告
+      if (!targetKeys.has(itemKey)) {
+        if (!currList) {
+          currSection[listKey] = [prevItem]
+        } else if (!currList.find(c => c.id === prevItem.id)) {
+          currList.push(prevItem)
+        }
+      }
+    }
   }
 }
 
@@ -1394,6 +1705,17 @@ function addNote() {
         <div class="step-indicator">
           <Icon icon="mdi:progress-clock" class="step-icon" />
           <span class="step-title">{{ currentStepTitle }}</span>
+          <!-- 清单驱动模式进度 -->
+          <span v-if="isTargetDrivenMode" class="target-progress">
+            ({{ currentTargetIndex + 1 }}/{{ targetCount }})
+          </span>
+        </div>
+        
+        <!-- 打回理由显示 -->
+        <div v-if="slotData.testMode === 'feedback' && feedbackReason" class="feedback-reason-banner">
+          <Icon icon="mdi:message-alert" />
+          <span class="reason-label">打回理由:</span>
+          <span class="reason-text">{{ feedbackReason }}</span>
         </div>
       </div>
       
@@ -1488,11 +1810,11 @@ function addNote() {
 
       <!-- 测试面板区域 (45%) -->
       <div class="test-panel">
-        <!-- 步骤面板 -->
+        <!-- 步骤面板 (清单驱动模式使用 targetStepList，普通模式使用 currentStepData) -->
         <StepProcess
-          v-if="showStepPanel && currentStepData.length > 0"
-          :step-data="currentStepData"
-          :image="currentReferenceImage"
+          v-if="isTargetDrivenMode ? targetStepList.length > 0 : (showStepPanel && currentStepData.length > 0)"
+          :step-data="isTargetDrivenMode ? targetStepList : currentStepData"
+          :image="isTargetDrivenMode ? targetReferenceUrl : currentReferenceImage"
           :mode="props.slotData.testMode === 'feedback' ? 'feedback' : props.slotData.testMode === 'question' ? 'question' : 'normal'"
           @click:save="handleStepSave"
           @click:save-question="handleStepSaveQuestion"
@@ -1887,6 +2209,36 @@ function addNote() {
 .step-title {
   font-size: 0.875rem;
   font-weight: 600;
+}
+
+/* 清单驱动模式进度 */
+.target-progress {
+  color: rgb(251, 191, 36);
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+/* 打回理由横幅 */
+.feedback-reason-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(251, 146, 60, 0.15);
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  border-radius: 0.375rem;
+  color: rgb(251, 146, 60);
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+
+.feedback-reason-banner .reason-label {
+  font-weight: 600;
+}
+
+.feedback-reason-banner .reason-text {
+  flex: 1;
+  color: var(--color-text-primary);
 }
 
 .reference-preview {

@@ -36,6 +36,10 @@ type TotalMethod = 'step' | 'pic'
 type AreaMethod = 'step' | 'pic' | 'detail'
 type PointMethod = 'step' | 'pic'
 
+// 导入目标项类型
+import type { TargetItem } from '@/utils/feedbackQuestion'
+import type { ReportData } from '@/services/report'
+
 // Props
 const props = defineProps<{
   testUnit: TestUnit
@@ -45,6 +49,10 @@ const props = defineProps<{
   tempData?: TempOrderData
   feedbackData?: FeedbackData
   questionData?: QuestionData
+  feedbackTargets?: TargetItem[]    // 反馈目标清单（清单驱动模式）
+  questionTargets?: TargetItem[]    // 疑问目标清单（清单驱动模式）
+  previousReport?: ReportData       // 原报告（用于合并结果）
+  feedbackReason?: string           // 打回理由
 }>()
 
 // Emits
@@ -125,6 +133,42 @@ const noteForm = reactive({
   areaId: 0,
   pointId: 0
 })
+
+// ==================== 清单驱动模式 ====================
+
+// 当前目标清单索引（疑问/反馈模式下使用）
+const currentTargetIndex = ref(0)
+
+// 是否为清单驱动模式
+const isTargetDrivenMode = computed(() => {
+  if (props.mode === 'feedback' && props.feedbackTargets && props.feedbackTargets.length > 0) {
+    return true
+  }
+  if (props.mode === 'question' && props.questionTargets && props.questionTargets.length > 0) {
+    return true
+  }
+  return false
+})
+
+// 当前目标清单
+const currentTargetList = computed<TargetItem[]>(() => {
+  if (props.mode === 'feedback' && props.feedbackTargets) {
+    return props.feedbackTargets
+  }
+  if (props.mode === 'question' && props.questionTargets) {
+    return props.questionTargets
+  }
+  return []
+})
+
+// 当前目标项
+const currentTarget = computed<TargetItem | null>(() => {
+  if (!isTargetDrivenMode.value) return null
+  return currentTargetList.value[currentTargetIndex.value] || null
+})
+
+// 目标总数
+const targetCount = computed(() => currentTargetList.value.length)
 
 // ==================== 计算属性 ====================
 
@@ -347,6 +391,12 @@ function initReportJson() {
 
 // 下一步
 async function handleNext() {
+  // 清单驱动模式使用独立的导航逻辑
+  if (isTargetDrivenMode.value) {
+    await handleTargetNext()
+    return
+  }
+  
   // 整体检测阶段
   if (threeDStep.value === 1 || threeDStep.value === 3) {
     if (totalMethods.value === 'step') {
@@ -448,6 +498,12 @@ async function handleSideComplete() {
 
 // 上一步
 function handlePrevious() {
+  // 清单驱动模式使用独立的导航逻辑
+  if (isTargetDrivenMode.value) {
+    handleTargetPrevious()
+    return
+  }
+  
   if (threeDStep.value === 1 || threeDStep.value === 3) {
     if (totalMethods.value === 'pic') {
       totalMethods.value = 'step'
@@ -515,6 +571,143 @@ function goToAreaLastPoint() {
   pointMethods.value = 'pic'
   currentPoint.value = areaData.detail?.length || 0
 }
+
+// ==================== 清单驱动导航 ====================
+
+/**
+ * 清单驱动模式 - 下一个目标
+ * 参考旧程序 FeedbackThreeDTest.vue / QuestionThreeDTest.vue 的导航逻辑
+ */
+async function handleTargetNext() {
+  const target = currentTarget.value
+  if (!target) return
+  
+  // 验证当前目标项是否完成
+  const stepData = findTargetStepData(target)
+  if (stepData && !validateSingleStep(stepData)) {
+    return
+  }
+  
+  // 检查是否是最后一个目标
+  if (currentTargetIndex.value >= targetCount.value - 1) {
+    // 所有目标已完成，进入报告预览
+    await ElMessageBox.confirm('所有重检项目已完成，是否提交报告？', '完成确认', {
+      confirmButtonText: '继续',
+      cancelButtonText: '取消',
+      distinguishCancelAndClose: true
+    })
+    // 生成并上传报告
+    await handleTestComplete()
+    return
+  }
+  
+  // 进入下一个目标
+  currentTargetIndex.value++
+}
+
+/**
+ * 清单驱动模式 - 上一个目标
+ */
+function handleTargetPrevious() {
+  if (currentTargetIndex.value > 0) {
+    currentTargetIndex.value--
+  }
+}
+
+/**
+ * 查找目标对应的步骤数据
+ */
+function findTargetStepData(target: TargetItem): StepItem | null {
+  if (!localJson.value) return null
+  
+  let sideData: EyesSideData | undefined
+  if (target.type === 'eyes') {
+    sideData = localJson.value.eyes
+  } else if (target.type === 'eyesBak') {
+    sideData = localJson.value.eyesBak
+  }
+  
+  if (!sideData) return null
+  
+  if (target.position === 'total') {
+    return sideData.total?.step?.find(s => s.id === target.stepId) || null
+  }
+  
+  if (target.position === 'area' && target.areaId !== undefined) {
+    const area = sideData.area?.find(a => a.id === target.areaId)
+    if (!area) return null
+    
+    if (target.areaPosition === 'general') {
+      return area.general?.step?.find(s => s.id === target.stepId) || null
+    }
+    
+    if (target.areaPosition === 'detail' && target.detailId !== undefined) {
+      const detail = area.detail?.find(d => d.id === target.detailId)
+      return detail?.step?.find(s => s.id === target.stepId) || null
+    }
+  }
+  
+  return null
+}
+
+/**
+ * 验证单个步骤是否完成
+ */
+function validateSingleStep(step: StepItem): boolean {
+  if (step.pass === 0) {
+    ElMessage.warning('请完成检测步骤')
+    return false
+  }
+  
+  // 疑问模式下，pass=3/4 不允许提交
+  if (props.mode === 'question') {
+    if (step.pass === 3 || step.pass === 4) {
+      ElMessage.error('疑问未处理，请将疑问项标记为合格或缺陷')
+      return false
+    }
+  }
+  
+  if (step.pass === 2 || step.pass === 4) {
+    if (!step.error?.url?.length || !step.error?.desc) {
+      ElMessage.warning('缺陷项需要添加图片和描述')
+      return false
+    }
+  }
+  if (step.pass === 3 || step.pass === 4) {
+    if (!step.question?.url?.length || !step.question?.desc) {
+      ElMessage.warning('疑问项需要添加图片和描述')
+      return false
+    }
+  }
+  if (step.warn) {
+    if (!step.warn.url?.length || !step.warn.desc) {
+      ElMessage.warning('制程警示需要添加图片和描述')
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * 获取当前目标的步骤列表（用于 StepProcess 组件）
+ */
+const targetStepList = computed<StepItem[]>(() => {
+  const target = currentTarget.value
+  if (!target) return []
+  
+  const step = findTargetStepData(target)
+  if (step) {
+    return [step]
+  }
+  return []
+})
+
+/**
+ * 获取当前目标的参考图 URL
+ */
+const targetReferenceUrl = computed<string>(() => {
+  return currentTarget.value?.referenceUrl || ''
+})
 
 // ==================== 验证逻辑 ====================
 
@@ -667,14 +860,17 @@ function findPic(picId: number): PicItem | null {
 // ==================== 完成测试 ====================
 
 async function handleTestComplete() {
-  try {
-    await ElMessageBox.confirm('测试已完成，是否提交报告？', '提交确认', {
-      confirmButtonText: '提交',
-      cancelButtonText: '取消',
-      type: 'info'
-    })
-  } catch {
-    return  // 用户取消
+  // 清单驱动模式下的提交确认已在 handleTargetNext 中处理，这里不再弹窗
+  if (!isTargetDrivenMode.value) {
+    try {
+      await ElMessageBox.confirm('测试已完成，是否提交报告？', '提交确认', {
+        confirmButtonText: '提交',
+        cancelButtonText: '取消',
+        type: 'info'
+      })
+    } catch {
+      return  // 用户取消
+    }
   }
   
   isSaving.value = true
@@ -683,7 +879,12 @@ async function handleTestComplete() {
     // 生成报告数据
     generateReport()
     
-    // 上传报告
+    // 反馈/疑问模式：合并原报告中未重检的项目
+    if ((props.mode === 'feedback' || props.mode === 'question') && props.previousReport) {
+      mergeWithPreviousReport()
+    }
+    
+    // 根据模式选择不同的上传接口
     const uploadParams: ReportUploadParams = {
       testunit_id: reportJson.value!.testunit_id,
       serialNumber: reportJson.value!.board_serialnumber,
@@ -693,7 +894,17 @@ async function handleTestComplete() {
       file: reportJson.value as any
     }
     
-    const result = await reportApi.uploadReport(uploadParams, getAuthHeaders())
+    let result
+    if (props.mode === 'feedback') {
+      // 反馈工单使用 feedbackReport 接口
+      result = await reportApi.feedbackReport(uploadParams, getAuthHeaders())
+    } else if (props.mode === 'question') {
+      // 疑问工单使用 questionReport 接口
+      result = await reportApi.questionReport(uploadParams, getAuthHeaders())
+    } else {
+      // 正常/继续模式使用标准 uploadReport 接口
+      result = await reportApi.uploadReport(uploadParams, getAuthHeaders())
+    }
     
     if (result.success) {
       ElMessage.success('报告提交成功')
@@ -707,6 +918,113 @@ async function handleTestComplete() {
     ElMessage.error('提交报告失败: ' + (err as Error).message)
   } finally {
     isSaving.value = false
+  }
+}
+
+/**
+ * 合并原报告数据（反馈/疑问模式）
+ * 将原报告中未被重检的项目结果保留，仅更新当前重检的项目
+ */
+function mergeWithPreviousReport() {
+  if (!props.previousReport?.json?.threeD || !reportJson.value?.json) {
+    return
+  }
+  
+  const prevThreeD = props.previousReport.json.threeD as Record<string, unknown>
+  const currThreeD = (reportJson.value.json as any).threeD as Record<string, unknown>
+  
+  // 获取目标清单用于判断哪些项目是本次重检的
+  const targets = props.mode === 'feedback' ? props.feedbackTargets : props.questionTargets
+  const targetKeys = new Set(targets?.map(t => t.key) || [])
+  
+  // 合并逻辑：遍历 eyes/eyesBak，对于不在 targetKeys 中的项目，从原报告中复制
+  for (const sideKey of ['eyes', 'eyesBak']) {
+    const prevSide = prevThreeD[sideKey] as { total?: Record<string, unknown>; area?: Record<string, unknown>[] } | undefined
+    const currSide = currThreeD[sideKey] as { total?: Record<string, unknown>; area?: Record<string, unknown>[] } | undefined
+    
+    if (!prevSide || !currSide) continue
+    
+    // 合并 total 部分的 lists
+    if (prevSide.total && currSide.total) {
+      mergeSectionLists(prevSide.total, currSide.total, sideKey, 'total', targetKeys)
+    }
+    
+    // 合并 area 部分
+    if (prevSide.area && currSide.area) {
+      for (let i = 0; i < prevSide.area.length; i++) {
+        const prevArea = prevSide.area[i] as Record<string, unknown>
+        const currArea = currSide.area[i] as Record<string, unknown>
+        if (!prevArea || !currArea) continue
+        
+        const areaId = prevArea.id as number
+        
+        // 合并 general
+        if (prevArea.general && currArea.general) {
+          mergeSectionLists(
+            prevArea.general as Record<string, unknown>,
+            currArea.general as Record<string, unknown>,
+            sideKey, 'area', targetKeys, areaId, 'general'
+          )
+        }
+        
+        // 合并 detail
+        const prevDetails = prevArea.detail as Record<string, unknown>[] | undefined
+        const currDetails = currArea.detail as Record<string, unknown>[] | undefined
+        if (prevDetails && currDetails) {
+          for (let j = 0; j < prevDetails.length; j++) {
+            const prevDetail = prevDetails[j]
+            const currDetail = currDetails[j]
+            if (!prevDetail || !currDetail) continue
+            
+            const detailId = prevDetail.id as number
+            mergeSectionLists(
+              prevDetail, currDetail, sideKey, 'area', targetKeys, areaId, 'detail', detailId
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 合并单个 section 的 errorList/questionList/warnList
+ */
+function mergeSectionLists(
+  prevSection: Record<string, unknown>,
+  currSection: Record<string, unknown>,
+  type: string,
+  position: string,
+  targetKeys: Set<string>,
+  areaId?: number,
+  areaPosition?: string,
+  detailId?: number
+) {
+  for (const listKey of ['errorList', 'questionList', 'warnList']) {
+    const prevList = prevSection[listKey] as Array<{ id: number }> | undefined
+    const currList = currSection[listKey] as Array<{ id: number }> | undefined
+    
+    if (!prevList || prevList.length === 0) continue
+    
+    // 对于原报告中的每个项目，检查是否在目标清单中
+    for (const prevItem of prevList) {
+      // 构建 key 检查是否在目标中
+      const keyParts = [type === 'eyes' ? 'eyes' : type === 'eyesBak' ? 'eyesBak' : 'xray', position]
+      if (areaId !== undefined) keyParts.push(`a${areaId}`)
+      if (areaPosition) keyParts.push(areaPosition)
+      if (detailId !== undefined) keyParts.push(`d${detailId}`)
+      keyParts.push(`s${prevItem.id}`)
+      const itemKey = keyParts.join('-')
+      
+      // 如果不在目标清单中，从原报告复制到当前报告
+      if (!targetKeys.has(itemKey)) {
+        if (!currList) {
+          currSection[listKey] = [prevItem]
+        } else if (!currList.find(c => c.id === prevItem.id)) {
+          currList.push(prevItem)
+        }
+      }
+    }
   }
 }
 
@@ -1374,6 +1692,17 @@ function addNote() {
         <div class="step-indicator">
           <Icon icon="mdi:progress-clock" class="step-icon" />
           <span class="step-title">{{ currentStepTitle }}</span>
+          <!-- 清单驱动模式进度 -->
+          <span v-if="isTargetDrivenMode" class="target-progress">
+            ({{ currentTargetIndex + 1 }}/{{ targetCount }})
+          </span>
+        </div>
+        
+        <!-- 打回理由显示 -->
+        <div v-if="mode === 'feedback' && feedbackReason" class="feedback-reason-banner">
+          <Icon icon="mdi:message-alert" />
+          <span class="reason-label">打回理由:</span>
+          <span class="reason-text">{{ feedbackReason }}</span>
         </div>
       </div>
       
@@ -1465,11 +1794,11 @@ function addNote() {
 
       <!-- 测试面板区域 (45%) -->
       <div class="test-panel">
-        <!-- 步骤面板 -->
+        <!-- 步骤面板 (清单驱动模式使用 targetStepList，普通模式使用 currentStepData) -->
         <StepProcess
-          v-if="showStepPanel && currentStepData.length > 0"
-          :step-data="currentStepData"
-          :image="currentReferenceImage"
+          v-if="isTargetDrivenMode ? targetStepList.length > 0 : (showStepPanel && currentStepData.length > 0)"
+          :step-data="isTargetDrivenMode ? targetStepList : currentStepData"
+          :image="isTargetDrivenMode ? targetReferenceUrl : currentReferenceImage"
           :mode="props.mode === 'feedback' ? 'feedback' : props.mode === 'question' ? 'question' : 'normal'"
           @click:save="handleStepSave"
           @click:save-question="handleStepSaveQuestion"
@@ -1651,6 +1980,36 @@ function addNote() {
   height: 100%;
   width: 100%;
   background: var(--color-bg-primary);
+}
+
+/* 清单驱动模式进度 */
+.target-progress {
+  color: rgb(251, 191, 36);
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+/* 打回理由横幅 */
+.feedback-reason-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(251, 146, 60, 0.15);
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  border-radius: 0.375rem;
+  color: rgb(251, 146, 60);
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+
+.feedback-reason-banner .reason-label {
+  font-weight: 600;
+}
+
+.feedback-reason-banner .reason-text {
+  flex: 1;
+  color: var(--color-text-primary);
 }
 
 /* 加载遮罩 */

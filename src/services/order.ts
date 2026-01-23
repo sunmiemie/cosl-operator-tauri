@@ -20,6 +20,7 @@ export interface TestUnit {
   board_id?: number            // 生产工单的电路板 ID
   prod_board_id?: number       // 临时工单关联的生产电路板 ID
   temp_board_id?: number       // 临时工单关联的临时电路板 ID
+  feedback_reason?: string     // 打回理由（反馈工单时有值）
 }
 
 // 工单状态枚举 (与后端保持一致，使用字符串)

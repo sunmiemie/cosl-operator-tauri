@@ -22,6 +22,7 @@ import { orderApi, type TestUnit, OrderStatus, OrderType } from '@/services/orde
 import { processApi, type ProcessData, type TempOrderData, type FeedbackData, type QuestionData } from '@/services/process'
 import { reportApi, type ReportData } from '@/services/report'
 import { startWorktime, stopWorktime } from '@/services/worktime'
+import { parseFeedbackTargets, parseQuestionTargets, parseTempTargetIds, type TargetItem } from '@/utils/feedbackQuestion'
 
 // 导入公共组件
 import {
@@ -91,6 +92,63 @@ const feedbackJson = ref<FeedbackData | null>(null)
 const questionJson = ref<QuestionData | null>(null)
 const feedbackReport = ref<ReportData | null>(null)
 const questionReport = ref<ReportData | null>(null)
+
+// 解析后的目标清单（用于清单驱动的重检流程）
+const feedbackTargets = computed<TargetItem[]>(() => {
+  if (!feedbackJson.value || testMode.value !== 'feedback') return []
+  return parseFeedbackTargets(
+    feedbackJson.value,
+    processJson.value?.json,
+    feedbackReport.value
+  )
+})
+
+const questionTargets = computed<TargetItem[]>(() => {
+  if (!questionJson.value || testMode.value !== 'question') return []
+  return parseQuestionTargets(
+    questionJson.value,
+    processJson.value?.json,
+    questionReport.value
+  )
+})
+
+// 临时工单的目标 ID 列表（用于遮罩非目标项）
+const tempTargetIds = computed<number[]>(() => {
+  if (!isDevTest.value) return []
+  if (testMode.value === 'feedback' && feedbackJson.value) {
+    return parseTempTargetIds(feedbackJson.value, 'feedback')
+  }
+  if (testMode.value === 'question' && questionJson.value) {
+    return parseTempTargetIds(questionJson.value, 'question')
+  }
+  return []
+})
+
+/**
+ * 临时工单的报告数据来源（用于 TempTestExecutor 恢复数据）
+ * 
+ * 根据 testMode 选择正确的数据来源:
+ * - continue: 使用 tempReportJson（暂存的临时数据）
+ * - feedback: 使用 feedbackReport（原报告，需要在上面修改）
+ * - question: 使用 questionReport（原报告，需要在上面修改）
+ * - normal: 无需恢复数据
+ */
+const tempReportDataSource = computed(() => {
+  if (!isDevTest.value) return undefined
+  
+  switch (testMode.value) {
+    case 'continue':
+      return tempReportJson.value
+    case 'feedback':
+      // 反馈模式: 返回原报告，TempTestExecutor 会从中恢复数据
+      return feedbackReport.value
+    case 'question':
+      // 疑问模式: 返回原报告，TempTestExecutor 会从中恢复数据
+      return questionReport.value
+    default:
+      return undefined
+  }
+})
 
 // 下载进度
 const isDownloading = ref(false)
@@ -522,6 +580,16 @@ async function downloadFeedBack(processId: number | undefined, unitId: number, t
   }
   
   isDownloading.value = false
+  
+  // 临时工单打回模式: 校验目标清单不为空
+  if (isDevTest.value && feedbackJson.value) {
+    const targetIds = parseTempTargetIds(feedbackJson.value, 'feedback')
+    if (!targetIds || targetIds.length === 0) {
+      showMessage('打回清单为空，无法进入测试', 'error')
+      return
+    }
+  }
+  
   phase.value = 'testing'
 }
 
@@ -570,6 +638,16 @@ async function downloadQuestion(processId: number | undefined, unitId: number, t
   }
   
   isDownloading.value = false
+  
+  // 临时工单疑问模式: 校验目标清单不为空
+  if (isDevTest.value && questionJson.value) {
+    const targetIds = parseTempTargetIds(questionJson.value, 'question')
+    if (!targetIds || targetIds.length === 0) {
+      showMessage('疑问清单为空，无法进入测试', 'error')
+      return
+    }
+  }
+  
   phase.value = 'testing'
 }
 
@@ -908,8 +986,9 @@ watch(() => scanner.error.value, (err) => {
               :test-unit="currentTestUnit"
               :mode="testMode"
               :is-dev-test="true"
-              :temp-report-data="tempReportJson || undefined"
-              :feedback-list="feedbackJson ? (feedbackJson as any[]).map((f: any) => f.id) : undefined"
+              :temp-report-data="(tempReportDataSource as any) || undefined"
+              :target-list="tempTargetIds.length > 0 ? tempTargetIds : undefined"
+              :feedback-reason="currentTestUnit.feedback_reason"
               @complete="handleTestComplete"
               @exit="exitTest"
               @request-exit="handleRequestExit"
@@ -926,7 +1005,10 @@ watch(() => scanner.error.value, (err) => {
               :temp-data="tempReportJson || undefined"
               :feedback-data="feedbackJson || undefined"
               :question-data="questionJson || undefined"
+              :feedback-targets="feedbackTargets.length > 0 ? feedbackTargets : undefined"
+              :question-targets="questionTargets.length > 0 ? questionTargets : undefined"
               :previous-report="testMode === 'feedback' ? feedbackReport || undefined : testMode === 'question' ? questionReport || undefined : undefined"
+              :feedback-reason="currentTestUnit.feedback_reason"
               @complete="handleTestComplete"
               @exit="exitTest"
               @request-exit="handleRequestExit"
