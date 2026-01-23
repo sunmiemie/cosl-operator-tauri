@@ -2,10 +2,17 @@
 mod camera;
 mod scanner;
 mod cache;
+mod flojoy;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+/// 打开开发者工具
+#[tauri::command]
+fn open_devtools(webview: tauri::Webview) {
+    webview.open_devtools();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -18,6 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             greet,
+            open_devtools,
             // 摄像头相关
             camera::get_camera_list,
             camera::open_camera,
@@ -44,6 +52,14 @@ pub fn run() {
             cache::get_all_cache_sizes,
             cache::clear_all_cache,
             cache::list_cache_ids,
+            // Flojoy 服务管理
+            flojoy::start_flojoy,
+            flojoy::stop_flojoy,
+            flojoy::flojoy_status,
+            flojoy::restart_flojoy,
+            flojoy::update_flojoy_config,
+            flojoy::get_flojoy_config,
+            flojoy::check_embedded_flojoy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

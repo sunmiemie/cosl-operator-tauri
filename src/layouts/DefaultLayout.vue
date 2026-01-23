@@ -4,14 +4,17 @@ import { useRouter } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import AppAside from '@/components/layout/AppAside.vue'
 import AppFooter from '@/components/layout/AppFooter.vue'
+import LockMask from '@/components/common/LockMask.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useTheme } from '@/composables/useTheme'
 import { useLayout } from '@/composables/useLayout'
+import { useAppLock } from '@/composables/useAppLock'
 
 const router = useRouter()
 const { initAuth, isLoggedIn } = useAuth()
 const { initTheme } = useTheme()
 const { isAsideVisible, exitEditMode } = useLayout()
+const { isLocked } = useAppLock()
 
 // 初始化
 onMounted(async () => {
@@ -61,6 +64,9 @@ onUnmounted(() => {
 
     <!-- 底部状态栏 -->
     <AppFooter />
+
+    <!-- 锁定遮罩 -->
+    <LockMask v-if="isLocked" />
   </div>
 </template>
 

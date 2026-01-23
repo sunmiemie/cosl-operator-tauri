@@ -628,7 +628,7 @@ onUnmounted(() => {
   border: 1px solid var(--color-border);
   border-radius: 14px;
   overflow: hidden;
-  transition: all 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
 .stat-card:hover {

@@ -155,10 +155,10 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* 输入框基础样式 */
-input,
-textarea,
-select {
+/* 输入框基础样式（排除 Element Plus 组件和特殊组件的输入框） */
+input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input),
+textarea:not(.el-textarea__inner),
+select:not(.el-select__input) {
   font-family: inherit;
   font-size: inherit;
   color: inherit;
@@ -169,9 +169,9 @@ select {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-input:focus,
-textarea:focus,
-select:focus {
+input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):focus,
+textarea:not(.el-textarea__inner):focus,
+select:not(.el-select__input):focus {
   outline: none;
   border-color: var(--color-accent-blue);
   box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
@@ -253,6 +253,28 @@ html.dark .el-button--primary:hover {
 
 html.dark .el-overlay {
   background-color: rgba(0, 0, 0, 0.7);
+}
+
+/* Element Plus MessageBox 输入框暗色适配 */
+html.dark .el-message-box__input .el-input__wrapper {
+  background: var(--color-bg-tertiary);
+  box-shadow: 0 0 0 1px var(--color-border) inset;
+}
+
+html.dark .el-message-box__input .el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--color-text-muted) inset;
+}
+
+html.dark .el-message-box__input .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--color-accent-blue) inset;
+}
+
+html.dark .el-message-box__input .el-input__inner {
+  color: var(--color-text-primary);
+}
+
+html.dark .el-message-box__input .el-input__inner::placeholder {
+  color: var(--color-text-muted);
 }
 
 /* Element Plus Message 暗色适配 */

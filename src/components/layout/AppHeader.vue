@@ -5,10 +5,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon } from '@iconify/vue'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/composables/useAuth'
+import { useAppLock } from '@/composables/useAppLock'
 
 const router = useRouter()
 const { isDark, toggleTheme } = useTheme()
 const { userInfo, logout } = useAuth()
+const { isLocked, lockApp } = useAppLock()
 
 // 窗口最大化状态
 const isMaximized = ref(false)
@@ -69,6 +71,16 @@ function closeUserMenu() {
 
     <!-- 右侧工具区域 -->
     <div class="header-actions">
+      <!-- 锁定按钮 -->
+      <button 
+        class="action-btn lock-btn" 
+        :class="{ locked: isLocked }"
+        @click="lockApp" 
+        title="锁定应用"
+      >
+        <Icon icon="mdi:lock-outline" />
+      </button>
+
       <!-- 主题切换按钮 -->
       <button class="action-btn theme-toggle" @click="toggleTheme" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'">
         <Icon :icon="isDark ? 'mdi:weather-sunny' : 'mdi:weather-night'" />
@@ -195,6 +207,15 @@ function closeUserMenu() {
 
 .theme-toggle:hover {
   color: var(--color-accent-orange);
+}
+
+.lock-btn:hover {
+  color: var(--color-accent-blue);
+}
+
+.lock-btn.locked {
+  color: var(--color-accent-blue);
+  background: var(--color-bg-tertiary);
 }
 
 /* 用户下拉菜单 */
