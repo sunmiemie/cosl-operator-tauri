@@ -6,7 +6,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
-import ModalLayout from '@/layouts/ModalLayout.vue'
+import WindowLayout from '@/layouts/WindowLayout.vue'
 import { reportApi, type ReportData } from '@/services/report'
 import { useAuth } from '@/composables/useAuth'
 
@@ -23,6 +23,11 @@ const loading = ref(true)
 const data = ref<ReportData | null>(null)
 const error = ref<string | null>(null)
 
+// 加载进度
+const progress = ref(0)          // 0-100
+const loadedBytes = ref(0)       // 已加载字节
+const totalBytes = ref(0)        // 总字节
+
 // 图片查看器
 const viewerVisible = ref(false)
 const viewerUrl = ref('')
@@ -32,6 +37,28 @@ const windowTitle = computed(() => {
   if (displayMode.value === 'temp') return '临时报告详情'
   return '报告详情'
 })
+
+// 格式化文件大小
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+// 进度回调
+function handleProgress(loaded: number, total: number) {
+  loadedBytes.value = loaded
+  totalBytes.value = total
+  // 如果后端返回了 Content-Length，计算真实进度；否则使用模拟进度
+  if (total > 0) {
+    progress.value = Math.min(Math.round((loaded / total) * 100), 100)
+  } else {
+    // 没有 total 时，根据已加载量模拟进度（最大到 90%，完成时跳到 100%）
+    progress.value = Math.min(90, Math.round(loaded / 1024))
+  }
+}
 
 // 加载报告数据
 async function loadReport() {
@@ -43,9 +70,21 @@ async function loadReport() {
   
   loading.value = true
   error.value = null
+  progress.value = 0
+  loadedBytes.value = 0
+  totalBytes.value = 0
   
   try {
-    const result = await reportApi.download(mode.value, unitId.value, getAuthHeaders())
+    const result = await reportApi.download(
+      mode.value, 
+      unitId.value, 
+      getAuthHeaders(),
+      handleProgress  // 传递进度回调
+    )
+    
+    // 完成时确保进度为 100%
+    progress.value = 100
+    
     if (result.success && result.data) {
       data.value = result.data
       console.log('[报告预览] 加载的报告数据:', JSON.stringify(result.data, null, 2))
@@ -105,12 +144,28 @@ const hasTempTest = computed(() => reportJson.value?.tempTest && reportJson.valu
 </script>
 
 <template>
-  <ModalLayout :title="windowTitle" icon="mdi:file-document">
+  <WindowLayout :title="windowTitle" icon="mdi:file-document">
     <div class="report-content">
       <!-- 加载状态 -->
-      <div v-if="loading" class="state-box">
-        <Icon icon="mdi:loading" class="spin" />
-        <span>加载中...</span>
+      <div v-if="loading" class="state-box loading-state">
+        <Icon icon="mdi:file-document-outline" class="loading-icon" />
+        <span class="loading-title">正在加载报告...</span>
+        
+        <!-- 进度条 -->
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div class="progress-fill" :style="{ width: progress + '%' }"></div>
+          </div>
+          <div class="progress-info">
+            <span class="progress-percent">{{ progress }}%</span>
+            <span v-if="totalBytes > 0" class="progress-size">
+              {{ formatBytes(loadedBytes) }} / {{ formatBytes(totalBytes) }}
+            </span>
+            <span v-else-if="loadedBytes > 0" class="progress-size">
+              已加载 {{ formatBytes(loadedBytes) }}
+            </span>
+          </div>
+        </div>
       </div>
 
       <!-- 错误状态 -->
@@ -677,7 +732,7 @@ const hasTempTest = computed(() => reportJson.value?.tempTest && reportJson.valu
       </div>
     </div>
 
-  </ModalLayout>
+  </WindowLayout>
 
   <!-- 图片查看器 - 在 ModalLayout 外部，不遮挡 header -->
   <div v-if="viewerVisible" class="viewer-overlay" @click="viewerVisible = false">
@@ -698,6 +753,39 @@ const hasTempTest = computed(() => reportJson.value?.tempTest && reportJson.valu
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .btn-retry { padding: 8px 20px; background: var(--color-accent-blue); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+
+/* 加载状态增强 */
+.loading-state { gap: 16px; padding: 80px 40px; }
+.loading-icon { font-size: 48px; color: var(--color-accent-blue); animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(0.95); } }
+.loading-title { font-size: 16px; font-weight: 500; color: var(--color-text-primary); }
+
+/* 进度条容器 */
+.progress-container { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 8px; }
+.progress-bar { height: 8px; background: var(--color-bg-tertiary); border-radius: 4px; overflow: hidden; position: relative; }
+.progress-fill { 
+  height: 100%; 
+  background: linear-gradient(90deg, var(--color-accent-blue), var(--color-accent-purple)); 
+  border-radius: 4px; 
+  transition: width 0.15s ease-out;
+  position: relative;
+}
+.progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+/* 进度信息 */
+.progress-info { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.progress-percent { font-weight: 600; color: var(--color-accent-blue); font-family: var(--font-mono); }
+.progress-size { color: var(--color-text-muted); font-family: var(--font-mono); }
 
 /* 信息卡片 */
 .info-card { display: flex; align-items: center; gap: 24px; padding: 12px 16px; background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: 10px; margin-bottom: 16px; }
@@ -823,10 +911,10 @@ const hasTempTest = computed(() => reportJson.value?.tempTest && reportJson.valu
 .inline-issue { margin-top: 4px; }
 
 /* 图片查看器 */
-/* 图片查看器 - 不遮挡 header (32px) */
-.viewer-overlay { position: fixed; top: 32px; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.92); }
-.viewer-box { position: relative; max-width: 90%; max-height: calc(100vh - 32px - 40px); }
-.viewer-box img { max-width: 100%; max-height: calc(100vh - 32px - 60px); object-fit: contain; border-radius: 8px; }
+/* 图片查看器 - 不遮挡 header (36px) */
+.viewer-overlay { position: fixed; top: 36px; left: 0; right: 0; bottom: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.92); }
+.viewer-box { position: relative; max-width: 90%; max-height: calc(100vh - 36px - 40px); }
+.viewer-box img { max-width: 100%; max-height: calc(100vh - 36px - 60px); object-fit: contain; border-radius: 8px; }
 .viewer-close { position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; border: none; border-radius: 50%; background: rgba(0, 0, 0, 0.6); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; transition: background 0.2s; }
 .viewer-close:hover { background: rgba(0, 0, 0, 0.8); }
 

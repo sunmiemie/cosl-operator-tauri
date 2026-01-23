@@ -41,6 +41,9 @@ export interface AppConfig {
   dataDir: string          // 离线数据存储目录
   autoSave: boolean        // 测试过程自动保存
   autoReUpload: boolean    // 网络恢复自动回传
+  
+  // 侧边栏菜单隐藏配置（存储被隐藏的路由路径列表）
+  hiddenMenus: string[]
 }
 
 // 默认配置
@@ -63,6 +66,8 @@ const defaultConfig: AppConfig = {
   dataDir: '',
   autoSave: true,
   autoReUpload: true,
+  // 隐藏菜单默认值（默认全部显示）
+  hiddenMenus: [],
 }
 
 // 当前配置
@@ -108,6 +113,7 @@ export async function initializeConfig(): Promise<AppConfig> {
       const dataDir = await store.get<string>('dataDir')
       const autoSave = await store.get<boolean>('autoSave')
       const autoReUpload = await store.get<boolean>('autoReUpload')
+      const hiddenMenus = await store.get<string[]>('hiddenMenus')
 
       // 检查是否需要写入默认值（首次启动）
       let needsSave = false
@@ -161,6 +167,12 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('autoReUpload', defaultConfig.autoReUpload)
         needsSave = true
       }
+      
+      // 菜单隐藏配置
+      if (hiddenMenus === null || hiddenMenus === undefined) {
+        await store.set('hiddenMenus', defaultConfig.hiddenMenus)
+        needsSave = true
+      }
 
       // 保存默认配置到文件
       if (needsSave) {
@@ -181,6 +193,7 @@ export async function initializeConfig(): Promise<AppConfig> {
         dataDir: dataDir ?? defaultConfig.dataDir,
         autoSave: autoSave ?? defaultConfig.autoSave,
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,
+        hiddenMenus: hiddenMenus ?? defaultConfig.hiddenMenus,
       }
 
       // 监听配置变更事件（跨窗口同步）

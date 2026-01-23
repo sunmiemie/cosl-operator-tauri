@@ -1,5 +1,5 @@
 import { ref, readonly } from 'vue'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 
 // 连接状态
 export type ConnectionStatus = 'checking' | 'online' | 'offline'
@@ -25,11 +25,11 @@ export function useConnection() {
   const checkConnection = async (): Promise<boolean> => {
     try {
       // 确保API已初始化
-      if (!api.getBaseUrl()) {
-        await api.init()
+      if (!http.getBaseUrl()) {
+        await http.init()
       }
       
-      const result = await api.testConnection()
+      const result = await http.testConnection()
       connectionStatus.value = result.success ? 'online' : 'offline'
       lastCheckTime.value = new Date()
       return result.success

@@ -18,7 +18,7 @@
  *   - /data/question-item/add (添加条目)
  */
 import { ref } from 'vue'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 import { useAuth } from '@/composables/useAuth'
 
 // ==================== 类型定义 ====================
@@ -117,7 +117,7 @@ export function useIssueLibrary() {
 
     try {
       // 后端返回格式: { code: 0, data: { list: [...] } }
-      const response = await api.get<BackendResponse<ListResponse<DirectoryTreeNode>>>(
+      const response = await http.get<BackendResponse<ListResponse<DirectoryTreeNode>>>(
         `${prefix}-directory/list`,
         getAuthHeaders()
       )
@@ -148,7 +148,7 @@ export function useIssueLibrary() {
     const prefix = getApiPrefix(type)
 
     try {
-      const response = await api.get<BackendResponse<ListResponse<FirstLevelDirectory>>>(
+      const response = await http.get<BackendResponse<ListResponse<FirstLevelDirectory>>>(
         `${prefix}-first-level-directory/list`,
         getAuthHeaders()
       )
@@ -177,7 +177,7 @@ export function useIssueLibrary() {
 
     try {
       // 后端参数是 id，返回格式是 { code: 0, data: [...] } 直接是数组
-      const response = await api.get<BackendResponse<SecondLevelDirectory[]>>(
+      const response = await http.get<BackendResponse<SecondLevelDirectory[]>>(
         `${prefix}-second-level-directory/list`,
         getAuthHeaders(),
         { id: String(firstLevelId) }
@@ -208,7 +208,7 @@ export function useIssueLibrary() {
     selectedDirectoryId.value = secondLevelDirectoryId
 
     try {
-      const response = await api.get<BackendResponse<ListResponse<IssueItem>>>(
+      const response = await http.get<BackendResponse<ListResponse<IssueItem>>>(
         `${prefix}/list`,
         getAuthHeaders(),
         { secondLevelDirectoryId: String(secondLevelDirectoryId), size: '999999' }
@@ -244,7 +244,7 @@ export function useIssueLibrary() {
     isSaving.value = true
 
     try {
-      const response = await api.post<BackendResponse<unknown>>(
+      const response = await http.post<BackendResponse<unknown>>(
         `${prefix}/add`,
         { name, secondLevelDirectoryId },
         getAuthHeaders()

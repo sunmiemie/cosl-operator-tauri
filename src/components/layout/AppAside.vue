@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { useWindow } from '@/composables/useWindow'
+import { useConfig } from '@/composables/useConfig'
 
 const route = useRoute()
 const { openSettingsWindow } = useWindow()
+const { config, initConfig } = useConfig()
+
+// 初始化配置
+onMounted(async () => {
+  await initConfig()
+})
 
 // 侧边栏折叠状态
 const isCollapsed = ref(false)
@@ -70,6 +77,20 @@ const menuGroups: MenuGroup[] = [
     ]
   },
 ]
+
+// 根据配置过滤后的菜单组（隐藏被配置为隐藏的菜单项）
+const filteredMenuGroups = computed(() => {
+  const hidden = config.value.hiddenMenus || []
+  
+  return menuGroups
+    .map(group => ({
+      ...group,
+      // 过滤掉被隐藏的子菜单项
+      children: group.children.filter(item => !hidden.includes(item.path))
+    }))
+    // 过滤掉没有子菜单的组
+    .filter(group => group.children.length > 0)
+})
 
 // 判断菜单项是否激活
 function isItemActive(item: MenuItem) {
@@ -136,8 +157,8 @@ async function handleOpenSettings() {
       <!-- 分隔线 -->
       <div class="menu-divider" v-show="!isCollapsed"></div>
 
-      <!-- 菜单组 -->
-      <div v-for="group in menuGroups" :key="group.id" class="menu-group">
+      <!-- 菜单组（根据配置过滤显示） -->
+      <div v-for="group in filteredMenuGroups" :key="group.id" class="menu-group">
         <!-- 菜单组标题 -->
         <button 
           class="group-header" 

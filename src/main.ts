@@ -3,7 +3,7 @@ import App from './App.vue'
 import router from './router'
 import { initializeConfig } from './composables/useConfig'
 import { initializeOfflineIcons } from './utils/iconify-offline'
-import { api } from './services/api'
+import { http } from './services/http'
 
 // 导入 Element Plus 样式（用于 ElMessageBox、ElMessage 等组件）
 import 'element-plus/dist/index.css'
@@ -24,7 +24,7 @@ async function bootstrap() {
 
     // 3. 初始化 API 服务（使用配置中的后端地址）
     console.log('正在初始化 API 服务...')
-    await api.init()
+    await http.init()
     console.log('API 服务初始化完成')
 
     // 4. 创建 Vue 应用实例

@@ -1,5 +1,5 @@
 import { ref, reactive, computed, onMounted } from 'vue'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 import { useAuth } from '@/composables/useAuth'
 import { useFileSystem, type TempProcessInfo } from '@/composables/useFileSystem'
 import { ElMessageBox } from 'element-plus'
@@ -191,7 +191,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
   async function fetchTreeData() {
     try {
       // 实际 API: /equipment/instrument/list?currentPage=1&size=999999&isTree=True
-      const response = await api.get<{ data: { list: TreeNode[] } }>(
+      const response = await http.get<{ data: { list: TreeNode[] } }>(
         '/equipment/instrument/list',
         getAuthHeaders(),
         { currentPage: '1', size: '999999', isTree: 'true' }
@@ -212,7 +212,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       currentSelectProcess.value = null
       
       // 实际 API: /test/addprocess/list/?boardModel_id=xxx
-      const response = await api.get<{ data: any[] }>(
+      const response = await http.get<{ data: any[] }>(
         '/test/addprocess/list/',
         getAuthHeaders(),
         { boardModel_id: String(boardModelId) }
@@ -255,7 +255,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       
       const testtypeId = processType === 'eyes' ? 2 : 5
       // 实际 API: /test/process/myjob/?user_id=xxx&testtype_id=xxx
-      const response = await api.get<{ data: any[] }>(
+      const response = await http.get<{ data: any[] }>(
         '/test/process/myjob/',
         getAuthHeaders(),
         { user_id: String(userId), testtype_id: String(testtypeId) }
@@ -311,7 +311,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       // 从服务器下载（后端返回的是文件流，需要直接下载）
       downloadProgress.value = 0
       const authHeaders = getAuthHeaders()
-      const baseUrl = api.getBaseUrl()
+      const baseUrl = http.getBaseUrl()
       const downloadUrl = `${baseUrl}/test/addprocess/download/?id=${processId}`
       
       console.log('下载工艺, URL:', downloadUrl)
@@ -523,7 +523,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       formData.append('userId', String(userInfo.value?.id || ''))
       formData.append('file', jsonBlob, 'data.json')
       
-      const response = await api.postFormData<{ msg: string }>(
+      const response = await http.postFormData<{ msg: string }>(
         endpoint, 
         formData, 
         getAuthHeaders()
@@ -563,7 +563,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       formData.append('version', editForm.version)
       formData.append('file', jsonBlob, 'data.json')
       
-      const response = await api.postFormData<{ msg: string }>(
+      const response = await http.postFormData<{ msg: string }>(
         endpoint, 
         formData, 
         getAuthHeaders()
@@ -586,7 +586,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
   async function submitProcess(processId: number): Promise<boolean> {
     try {
       // 实际 API: /test/addprocess/submitcheck/
-      const response = await api.post<{ msg: string }>(
+      const response = await http.post<{ msg: string }>(
         '/test/addprocess/submitcheck/',
         { id: processId },
         getAuthHeaders()
@@ -607,7 +607,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
   async function deleteProcess(processId: number): Promise<boolean> {
     try {
       // 实际 API: /test/process/delete/{id}/
-      const response = await api.delete<{ code: number }>(
+      const response = await http.delete<{ code: number }>(
         `/test/process/delete/${processId}/`,
         getAuthHeaders()
       )
@@ -1073,7 +1073,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
     try {
       quickTreeLoading.value = true
       // API: /data/check-item-directory/list
-      const response = await api.get<{ data: any[] }>(
+      const response = await http.get<{ data: any[] }>(
         '/data/check-item-directory/list',
         getAuthHeaders()
       )
@@ -1093,7 +1093,7 @@ export function useProcess(processType: 'eyes' | 'xray' = 'eyes') {
       quickTableLoading.value = true
       selectQuickId.value = directoryId
       // API: /data/check-item/list?secondLevelDirectoryId=xxx&size=999999
-      const response = await api.get<{ data: { list: any[] } }>(
+      const response = await http.get<{ data: { list: any[] } }>(
         '/data/check-item/list',
         getAuthHeaders(),
         { secondLevelDirectoryId: String(directoryId), size: '999999' }

@@ -50,5 +50,3 @@ export {
   isTracking 
 } from './worktime'
 
-// 兼容旧 API（保持向后兼容）
-export { api } from './api'

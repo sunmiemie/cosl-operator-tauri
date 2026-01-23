@@ -5,7 +5,7 @@ import { Icon } from '@iconify/vue'
 import { useTheme } from '@/composables/useTheme'
 import { useConfig } from '@/composables/useConfig'
 import { useConnection } from '@/composables/useConnection'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 
 const { initTheme } = useTheme()
 const { initConfig, setConfigItem, config } = useConfig()
@@ -117,7 +117,7 @@ async function saveBackendUrl() {
   
   try {
     await setConfigItem('backendUrl', backendUrl.value)
-    api.setBaseUrl(backendUrl.value)
+    http.setBaseUrl(backendUrl.value)
     saveSuccess.value = true
     setTimeout(() => {
       saveSuccess.value = false
@@ -135,8 +135,8 @@ async function testConnectionInDialog() {
   testConnectionStatus.value = 'idle'
   
   try {
-    api.setBaseUrl(backendUrl.value)
-    const result = await api.testConnection()
+    http.setBaseUrl(backendUrl.value)
+    const result = await http.testConnection()
     testConnectionStatus.value = result.success ? 'success' : 'error'
   } catch {
     testConnectionStatus.value = 'error'

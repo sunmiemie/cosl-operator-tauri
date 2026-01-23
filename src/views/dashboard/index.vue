@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 import { useAuth } from '@/composables/useAuth'
 import { useTheme } from '@/composables/useTheme'
 import VChart from 'vue-echarts'
@@ -250,7 +250,7 @@ const formatDateTime = (dateStr: string | undefined) => {
 const loadWaitData = async () => {
   waitLoading.value = true
   try {
-    const response = await api.get<OrderDataResponse>('/test/getoperatororder/', getAuthHeaders())
+    const response = await http.get<OrderDataResponse>('/test/getoperatororder/', getAuthHeaders())
     if (response.success && response.data) {
       const data = Array.isArray(response.data) ? response.data : (response.data as OrderDataResponse).data || []
       waitingUnit.value = []
@@ -276,7 +276,7 @@ const loadTodayData = async () => {
   todayLoading.value = true
   try {
     const userId = userInfo.value?.id || 0
-    const response = await api.get<OrderDataResponse>(
+    const response = await http.get<OrderDataResponse>(
       `/test/testunit/today/completed/?user_id=${userId}`,
       getAuthHeaders()
     )

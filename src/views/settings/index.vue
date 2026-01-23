@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
+import { useRouter } from 'vue-router'
 import ModalLayout from '@/layouts/ModalLayout.vue'
 import XrayCropCalibration from './components/XrayCropCalibration.vue'
 import { useTheme } from '@/composables/useTheme'
 import { useConfig } from '@/composables/useConfig'
 import { useCamera, type CameraDevice } from '@/composables/useCamera'
 import { ThemeMode } from '@/enums'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 import { cacheApi, type CacheSizes } from '@/services/process'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 注意: 如果需要目录选择功能，需要安装 @tauri-apps/plugin-dialog
@@ -66,6 +67,57 @@ let previewAnimationId: number | null = null
 // X-Ray 区域校准
 const showXrayCropCalibration = ref(false)
 
+// 侧边栏菜单配置
+const router = useRouter()
+const hiddenMenus = ref<string[]>([])
+
+// 可配置的菜单项接口
+interface MenuConfigItem {
+  path: string
+  title: string
+}
+
+// 从路由配置中动态提取可配置的菜单项（排除仪表盘和设置）
+const configurableMenus = computed<MenuConfigItem[]>(() => {
+  // 获取原始路由配置
+  const routes = router.options.routes
+  
+  // 查找主布局路由（path 为 '/'）
+  const mainLayoutRoute = routes.find(r => r.path === '/')
+  if (!mainLayoutRoute?.children) return []
+  
+  // 提取所有子路由（排除首页仪表盘）
+  return mainLayoutRoute.children
+    .filter(child => {
+      // 排除仪表盘（首页，path 为空字符串）
+      if (!child.path || child.path === '') return false
+      return true
+    })
+    .map(child => {
+      // 构建完整路径
+      const fullPath = child.path.startsWith('/') ? child.path : '/' + child.path
+      // 获取标题（从 meta.title 或 name）
+      const title = (child.meta?.title as string) || (child.name as string) || child.path
+      return { path: fullPath, title }
+    })
+})
+
+// 检查菜单项是否隐藏
+function isMenuHidden(path: string): boolean {
+  return hiddenMenus.value.includes(path)
+}
+
+// 切换菜单项显示/隐藏
+async function toggleMenuVisibility(path: string) {
+  const index = hiddenMenus.value.indexOf(path)
+  if (index > -1) {
+    hiddenMenus.value.splice(index, 1)
+  } else {
+    hiddenMenus.value.push(path)
+  }
+  await setConfigItem('hiddenMenus', [...hiddenMenus.value])
+}
+
 // 判断是否启用了 X-Ray 裁剪预览
 const isXrayPreviewWithCrop = computed(() => {
   return previewDevice.value === 'xray' && config.value.xrayCropArea?.enabled
@@ -89,6 +141,7 @@ onMounted(async () => {
   autoReUpload.value = config.value.autoReUpload ?? true
   language.value = config.value.language ?? 'zh-CN'
   autoStart.value = config.value.autoStart ?? false
+  hiddenMenus.value = [...(config.value.hiddenMenus ?? [])]
   
   // 获取配置文件路径
   configPath.value = await getConfigPath()
@@ -281,7 +334,7 @@ async function doSaveBackendUrl() {
   
   try {
     await setConfigItem('backendUrl', backendUrl.value)
-    api.setBaseUrl(backendUrl.value)
+    http.setBaseUrl(backendUrl.value)
     saveSuccess.value = true
     setTimeout(() => {
       saveSuccess.value = false
@@ -299,8 +352,8 @@ async function testConnection() {
   connectionStatus.value = 'idle'
   
   try {
-    api.setBaseUrl(backendUrl.value)
-    const result = await api.testConnection()
+    http.setBaseUrl(backendUrl.value)
+    const result = await http.testConnection()
     connectionStatus.value = result.success ? 'success' : 'error'
   } catch {
     connectionStatus.value = 'error'
@@ -873,6 +926,40 @@ const languageOptions = [
         </div>
       </div>
 
+      <!-- 侧边栏菜单配置 -->
+      <div class="settings-section">
+        <h3 class="section-title">
+          <Icon icon="mdi:menu" class="section-icon" />
+          侧边栏菜单
+        </h3>
+        
+        <div class="settings-list">
+          <div class="settings-item menu-config-hint">
+            <Icon icon="mdi:information-outline" class="hint-icon" />
+            <span class="hint-text">控制侧边栏显示的功能模块（仪表盘和设置始终显示）</span>
+          </div>
+          <div 
+            v-for="menu in configurableMenus" 
+            :key="menu.path" 
+            class="settings-item menu-config-item"
+          >
+            <div class="menu-info">
+              <span class="item-label">{{ menu.title }}</span>
+              <span class="menu-path">{{ menu.path }}</span>
+            </div>
+            <button 
+              class="toggle-btn" 
+              :class="{ active: !isMenuHidden(menu.path) }"
+              @click="toggleMenuVisibility(menu.path)"
+            >
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- 通用设置 -->
       <div class="settings-section">
         <h3 class="section-title">
@@ -1394,6 +1481,42 @@ const languageOptions = [
 
 .option-icon {
   font-size: 14px;
+}
+
+/* 菜单配置样式 */
+.menu-config-hint {
+  background: var(--color-bg-tertiary);
+  gap: 8px;
+}
+
+.hint-icon {
+  font-size: 14px;
+  color: var(--color-accent-blue);
+  flex-shrink: 0;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.menu-config-item {
+  padding: 10px 14px;
+}
+
+.menu-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.menu-info .menu-path {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  margin-left: auto;
+  padding-right: 12px;
 }
 
 /* 下拉选择 */

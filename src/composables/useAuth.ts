@@ -1,5 +1,5 @@
 import { ref, computed, readonly } from 'vue'
-import { api } from '@/services/api'
+import { http } from '@/services/http'
 import { load } from '@tauri-apps/plugin-store'
 
 // 用户信息接口
@@ -117,13 +117,13 @@ export function useAuth() {
     isLoading.value = true
 
     try {
-      // 确保 API 已初始化
-      if (!api.getBaseUrl()) {
-        await api.init()
+      // 确保 HTTP 客户端已初始化
+      if (!http.getBaseUrl()) {
+        await http.init()
       }
 
       // 发送登录请求
-      const response = await api.post<LoginResponse>('/login/login', {
+      const response = await http.post<LoginResponse>('/login/login', {
         username,
         password: password,
       })
@@ -160,7 +160,7 @@ export function useAuth() {
 
     try {
       // 使用 Authorization header 获取用户信息
-      const response = await api.get<UserInfoResponse>('/login/info', getAuthHeaders())
+      const response = await http.get<UserInfoResponse>('/login/info', getAuthHeaders())
 
       if (response.success && response.data?.code === 0) {
         userInfo.value = response.data.data
@@ -185,13 +185,13 @@ export function useAuth() {
     if (!token.value) return false
 
     try {
-      // 确保 API 已初始化
-      if (!api.getBaseUrl()) {
-        await api.init()
+      // 确保 HTTP 客户端已初始化
+      if (!http.getBaseUrl()) {
+        await http.init()
       }
 
       // 使用 Authorization header 验证 token
-      const response = await api.get<UserInfoResponse>('/login/info', getAuthHeaders())
+      const response = await http.get<UserInfoResponse>('/login/info', getAuthHeaders())
 
       if (response.success && response.data?.code === 0) {
         userInfo.value = response.data.data
@@ -215,7 +215,7 @@ export function useAuth() {
     try {
       // 调用后端登出接口
       if (token.value) {
-        await api.get('/login/logout', getAuthHeaders())
+        await http.get('/login/logout', getAuthHeaders())
       }
     } catch (error) {
       console.warn('登出请求失败:', error)
