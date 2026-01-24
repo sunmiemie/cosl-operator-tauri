@@ -47,12 +47,6 @@ export interface AppConfig {
   
   // 安全设置
   lockerPassword: string   // 锁定密码 (MD5 加密后存储)
-  
-  // Flojoy 服务设置
-  flojoyMode: 'embedded' | 'external'  // 运行模式（内嵌/外部）
-  flojoyPath: string       // Flojoy 可执行文件路径（仅外部模式）
-  flojoyPort: number       // Flojoy 服务端口
-  flojoyTimeout: number    // Flojoy 启动超时（秒）
 }
 
 // 默认配置
@@ -82,11 +76,6 @@ const defaultConfig: AppConfig = {
   hiddenMenus: [],
   // 安全设置默认值（默认密码: 12345678）
   lockerPassword: DEFAULT_LOCKER_PASSWORD,
-  // Flojoy 默认值
-  flojoyMode: 'embedded',
-  flojoyPath: '',
-  flojoyPort: 5392,
-  flojoyTimeout: 30,
 }
 
 // 当前配置
@@ -134,10 +123,6 @@ export async function initializeConfig(): Promise<AppConfig> {
       const autoReUpload = await store.get<boolean>('autoReUpload')
       const hiddenMenus = await store.get<string[]>('hiddenMenus')
       const lockerPassword = await store.get<string>('lockerPassword')
-      const flojoyMode = await store.get<'embedded' | 'external'>('flojoyMode')
-      const flojoyPath = await store.get<string>('flojoyPath')
-      const flojoyPort = await store.get<number>('flojoyPort')
-      const flojoyTimeout = await store.get<number>('flojoyTimeout')
 
       // 检查是否需要写入默认值（首次启动）
       let needsSave = false
@@ -203,24 +188,6 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('lockerPassword', defaultConfig.lockerPassword)
         needsSave = true
       }
-      
-      // Flojoy 配置
-      if (flojoyMode === null || flojoyMode === undefined) {
-        await store.set('flojoyMode', defaultConfig.flojoyMode)
-        needsSave = true
-      }
-      if (flojoyPath === null || flojoyPath === undefined) {
-        await store.set('flojoyPath', defaultConfig.flojoyPath)
-        needsSave = true
-      }
-      if (flojoyPort === null || flojoyPort === undefined) {
-        await store.set('flojoyPort', defaultConfig.flojoyPort)
-        needsSave = true
-      }
-      if (flojoyTimeout === null || flojoyTimeout === undefined) {
-        await store.set('flojoyTimeout', defaultConfig.flojoyTimeout)
-        needsSave = true
-      }
 
       // 保存默认配置到文件
       if (needsSave) {
@@ -243,10 +210,6 @@ export async function initializeConfig(): Promise<AppConfig> {
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,
         hiddenMenus: hiddenMenus ?? defaultConfig.hiddenMenus,
         lockerPassword: lockerPassword ?? defaultConfig.lockerPassword,
-        flojoyMode: flojoyMode ?? defaultConfig.flojoyMode,
-        flojoyPath: flojoyPath ?? defaultConfig.flojoyPath,
-        flojoyPort: flojoyPort ?? defaultConfig.flojoyPort,
-        flojoyTimeout: flojoyTimeout ?? defaultConfig.flojoyTimeout,
       }
 
       // 监听配置变更事件（跨窗口同步）

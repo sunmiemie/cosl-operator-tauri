@@ -17,7 +17,6 @@ import { appDataDir, join, downloadDir } from '@tauri-apps/api/path'
 const DOWNLOADS_DIR = 'downloads/processes'
 const TEMP_DIR = 'temp/processes'
 const QUICK_STEP_DIR = 'quick'
-const HALT_HASS_DIR = 'halt-hass/processes'
 
 // 工艺类型
 export type ProcessType = 'eyes' | 'xray'
@@ -71,7 +70,6 @@ export function useFileSystem() {
     await ensureDir(DOWNLOADS_DIR)
     await ensureDir(TEMP_DIR)
     await ensureDir(QUICK_STEP_DIR)
-    await ensureDir(HALT_HASS_DIR)
   }
 
   /**
@@ -389,173 +387,6 @@ export function useFileSystem() {
     }
   }
 
-  // ==================== HALT-HASS 工艺文件操作 ====================
-
-  /**
-   * 生成 HALT-HASS 工艺文件名
-   * 格式: halt-hass-{name}-{version}-{timestamp}.json
-   */
-  function generateHaltHassFileName(name: string, version: string): string {
-    const timestamp = Date.now()
-    // 清理文件名中的非法字符
-    const safeName = name.replace(/[\\/:*?"<>|]/g, '_')
-    const safeVersion = version.replace(/[\\/:*?"<>|]/g, '_')
-    return `halt-hass-${safeName}-${safeVersion}-${timestamp}.json`
-  }
-
-  /**
-   * 获取 HALT-HASS 工艺目录路径
-   */
-  async function getHaltHassDirPath(): Promise<string> {
-    const appData = await appDataDir()
-    return await join(appData, HALT_HASS_DIR)
-  }
-
-  /**
-   * 获取 HALT-HASS 工艺文件路径
-   */
-  async function getHaltHassFilePath(fileName: string): Promise<string> {
-    const dirPath = await getHaltHassDirPath()
-    return await join(dirPath, fileName)
-  }
-
-  /**
-   * 保存 HALT-HASS 工艺到本地
-   */
-  async function saveHaltHassProcess(data: any, fileName?: string): Promise<{ success: boolean; fileName?: string }> {
-    try {
-      await ensureDir(HALT_HASS_DIR)
-      
-      // 如果没有提供文件名，自动生成
-      const finalFileName = fileName || generateHaltHassFileName(data.name || '未命名', data.version || '1.0.0')
-      const filePath = await getHaltHassFilePath(finalFileName)
-      
-      await writeTextFile(filePath, JSON.stringify(data, null, 2))
-      console.log('HALT-HASS 工艺保存成功:', filePath)
-      
-      return { success: true, fileName: finalFileName }
-    } catch (error) {
-      console.error('保存 HALT-HASS 工艺失败:', error)
-      return { success: false }
-    }
-  }
-
-  /**
-   * 加载 HALT-HASS 工艺
-   */
-  async function loadHaltHassProcess<T>(fileName: string): Promise<T | null> {
-    try {
-      const filePath = await getHaltHassFilePath(fileName)
-      const content = await readTextFile(filePath)
-      return JSON.parse(content) as T
-    } catch (error) {
-      console.error('加载 HALT-HASS 工艺失败:', error)
-      return null
-    }
-  }
-
-  /**
-   * 获取 HALT-HASS 工艺列表
-   */
-  async function getHaltHassProcessList(): Promise<Array<{
-    fileName: string
-    name: string
-    version: string
-    updatedAt: string
-    filePath: string
-  }>> {
-    try {
-      await ensureDir(HALT_HASS_DIR)
-      const dirPath = await getHaltHassDirPath()
-      
-      const entries = await readDir(dirPath)
-      const result: Array<{
-        fileName: string
-        name: string
-        version: string
-        updatedAt: string
-        filePath: string
-      }> = []
-      
-      for (const entry of entries) {
-        if (entry.isFile && entry.name?.endsWith('.json')) {
-          try {
-            const filePath = await join(dirPath, entry.name)
-            const content = await readTextFile(filePath)
-            const data = JSON.parse(content)
-            
-            result.push({
-              fileName: entry.name,
-              name: data.name || '未命名',
-              version: data.version || '1.0.0',
-              updatedAt: data.meta?.updatedAt || new Date().toISOString(),
-              filePath
-            })
-          } catch {
-            // 跳过无法解析的文件
-            console.warn('跳过无效的工艺文件:', entry.name)
-          }
-        }
-      }
-      
-      // 按更新时间倒序排序
-      result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      
-      return result
-    } catch (error) {
-      console.error('获取 HALT-HASS 工艺列表失败:', error)
-      return []
-    }
-  }
-
-  /**
-   * 删除 HALT-HASS 工艺
-   */
-  async function deleteHaltHassProcess(fileName: string): Promise<boolean> {
-    try {
-      const filePath = await getHaltHassFilePath(fileName)
-      const fileExists = await exists(filePath)
-      if (fileExists) {
-        await remove(filePath)
-        console.log('已删除 HALT-HASS 工艺:', fileName)
-      }
-      return true
-    } catch (error) {
-      console.error('删除 HALT-HASS 工艺失败:', error)
-      return false
-    }
-  }
-
-  /**
-   * 导出 HALT-HASS 工艺到用户选择的位置
-   */
-  async function exportHaltHassProcess(data: any, defaultName: string): Promise<boolean> {
-    try {
-      const defaultPath = await downloadDir()
-      
-      const filePath = await save({
-        defaultPath: await join(defaultPath, `${defaultName}.json`),
-        filters: [{
-          name: 'HALT-HASS 工艺文件',
-          extensions: ['json']
-        }],
-        title: '导出 HALT-HASS 工艺'
-      })
-      
-      if (!filePath) {
-        console.log('用户取消导出')
-        return false
-      }
-      
-      await writeTextFile(filePath, JSON.stringify(data, null, 2))
-      console.log('HALT-HASS 工艺导出成功:', filePath)
-      return true
-    } catch (error) {
-      console.error('导出 HALT-HASS 工艺失败:', error)
-      return false
-    }
-  }
-
   return {
     // 初始化
     initDirectories,
@@ -580,15 +411,6 @@ export function useFileSystem() {
     readQuickSteps,
     
     // 导出
-    exportProcessToFile,
-    
-    // HALT-HASS 工艺
-    saveHaltHassProcess,
-    loadHaltHassProcess,
-    getHaltHassProcessList,
-    deleteHaltHassProcess,
-    exportHaltHassProcess,
-    generateHaltHassFileName,
-    getHaltHassDirPath
+    exportProcessToFile
   }
 }

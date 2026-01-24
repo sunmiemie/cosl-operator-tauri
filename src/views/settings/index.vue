@@ -56,14 +56,6 @@ const dataDir = ref('')
 const autoSave = ref(true)
 const autoReUpload = ref(true)
 
-// Flojoy 服务设置
-const flojoyMode = ref<'embedded' | 'external'>('embedded')
-const flojoyPath = ref('')
-const flojoyPort = ref(5392)
-const flojoyTimeout = ref(30)
-const isEditingFlojoyPath = ref(false)
-const tempFlojoyPath = ref('')
-
 // 通用设置
 const language = ref('zh-CN')
 const autoStart = ref(false)
@@ -158,11 +150,6 @@ onMounted(async () => {
   language.value = config.value.language ?? 'zh-CN'
   autoStart.value = config.value.autoStart ?? false
   hiddenMenus.value = [...(config.value.hiddenMenus ?? [])]
-  // Flojoy 配置
-  flojoyMode.value = config.value.flojoyMode ?? 'embedded'
-  flojoyPath.value = config.value.flojoyPath ?? ''
-  flojoyPort.value = config.value.flojoyPort ?? 5392
-  flojoyTimeout.value = config.value.flojoyTimeout ?? 30
   
   // 获取配置文件路径
   configPath.value = await getConfigPath()
@@ -414,47 +401,6 @@ function cancelEditDataDir() {
 // 保存离线设置
 async function saveOfflineSetting(key: 'autoSave' | 'autoReUpload', value: boolean) {
   await setConfigItem(key, value)
-}
-
-// Flojoy 配置编辑
-async function saveFlojoyMode(mode: 'embedded' | 'external') {
-  flojoyMode.value = mode
-  await setConfigItem('flojoyMode', mode)
-  ElMessage.success(`已切换到${mode === 'embedded' ? '内嵌' : '外部'}模式`)
-}
-
-function startEditFlojoyPath() {
-  tempFlojoyPath.value = flojoyPath.value
-  isEditingFlojoyPath.value = true
-}
-
-async function saveFlojoyPath() {
-  flojoyPath.value = tempFlojoyPath.value
-  await setConfigItem('flojoyPath', tempFlojoyPath.value)
-  isEditingFlojoyPath.value = false
-  ElMessage.success('Flojoy 路径已保存')
-}
-
-function cancelEditFlojoyPath() {
-  isEditingFlojoyPath.value = false
-}
-
-async function saveFlojoyPort() {
-  if (flojoyPort.value < 1024 || flojoyPort.value > 65535) {
-    ElMessage.warning('端口号应在 1024-65535 范围内')
-    flojoyPort.value = 5392
-    return
-  }
-  await setConfigItem('flojoyPort', flojoyPort.value)
-}
-
-async function saveFlojoyTimeout() {
-  if (flojoyTimeout.value < 10 || flojoyTimeout.value > 120) {
-    ElMessage.warning('超时时间应在 10-120 秒范围内')
-    flojoyTimeout.value = 30
-    return
-  }
-  await setConfigItem('flojoyTimeout', flojoyTimeout.value)
 }
 
 // 锁定密码验证和修改
@@ -899,119 +845,6 @@ const languageOptions = [
         </div>
       </div>
 
-      <!-- Flojoy 设置 -->
-      <div class="settings-section">
-        <h3 class="section-title">
-          <Icon icon="mdi:server" class="section-icon" />
-          Flojoy 服务
-          <span class="section-badge">HALT-HASS</span>
-        </h3>
-        
-        <div class="settings-list">
-          <!-- 运行模式选择 -->
-          <div class="settings-item">
-            <span class="item-label">运行模式</span>
-            <div class="mode-selector">
-              <button 
-                class="mode-btn"
-                :class="{ active: flojoyMode === 'embedded' }"
-                @click="saveFlojoyMode('embedded')"
-              >
-                <Icon icon="mdi:package-variant-closed" />
-                <span>内嵌</span>
-              </button>
-              <button 
-                class="mode-btn"
-                :class="{ active: flojoyMode === 'external' }"
-                @click="saveFlojoyMode('external')"
-              >
-                <Icon icon="mdi:link-variant" />
-                <span>外部</span>
-              </button>
-            </div>
-          </div>
-          
-          <!-- 内嵌模式提示 -->
-          <div v-if="flojoyMode === 'embedded'" class="settings-item hint">
-            <Icon icon="mdi:information-outline" class="hint-icon" />
-            <span class="hint-text">内嵌模式使用应用内置的 Flojoy 运行时，无需额外配置</span>
-          </div>
-          
-          <!-- 外部模式配置 -->
-          <div v-if="flojoyMode === 'external'" class="settings-item">
-            <span class="item-label">可执行文件路径</span>
-            <div class="dir-selector">
-              <input 
-                v-if="isEditingFlojoyPath"
-                v-model="tempFlojoyPath"
-                class="dir-input editable"
-                placeholder="例如: C:\Flojoy\flojoy.exe"
-                @keyup.enter="saveFlojoyPath"
-                @keyup.escape="cancelEditFlojoyPath"
-              />
-              <input 
-                v-else
-                :value="flojoyPath || '未配置'" 
-                readonly 
-                class="dir-input"
-                @click="startEditFlojoyPath"
-              />
-              <button 
-                v-if="isEditingFlojoyPath" 
-                class="browse-btn save" 
-                @click="saveFlojoyPath"
-                title="保存"
-              >
-                <Icon icon="mdi:check" />
-              </button>
-              <button 
-                v-if="isEditingFlojoyPath" 
-                class="browse-btn" 
-                @click="cancelEditFlojoyPath"
-                title="取消"
-              >
-                <Icon icon="mdi:close" />
-              </button>
-              <button 
-                v-if="!isEditingFlojoyPath" 
-                class="browse-btn" 
-                @click="startEditFlojoyPath"
-                title="编辑"
-              >
-                <Icon icon="mdi:pencil" />
-              </button>
-            </div>
-          </div>
-          
-          <div class="settings-item">
-            <span class="item-label">服务端口</span>
-            <input 
-              v-model.number="flojoyPort"
-              type="number"
-              class="number-input"
-              min="1024"
-              max="65535"
-              @change="saveFlojoyPort"
-            />
-          </div>
-          <div class="settings-item">
-            <span class="item-label">启动超时（秒）</span>
-            <input 
-              v-model.number="flojoyTimeout"
-              type="number"
-              class="number-input"
-              min="10"
-              max="120"
-              @change="saveFlojoyTimeout"
-            />
-          </div>
-          <div class="settings-item hint">
-            <Icon icon="mdi:information-outline" class="hint-icon" />
-            <span class="hint-text">配置 Flojoy 后，可在 HALT-HASS 工艺编辑/测试页面使用</span>
-          </div>
-        </div>
-      </div>
-
       <!-- 缓存管理 -->
       <div class="settings-section">
         <h3 class="section-title">
@@ -1369,18 +1202,6 @@ const languageOptions = [
   font-size: 14px;
 }
 
-.section-badge {
-  margin-left: auto;
-  padding: 2px 6px;
-  font-size: 9px;
-  font-weight: normal;
-  color: var(--color-accent-blue);
-  background: rgba(88, 166, 255, 0.15);
-  border-radius: 4px;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
 .section-action {
   margin-left: auto;
   padding: 4px;
@@ -1593,37 +1414,6 @@ const languageOptions = [
   cursor: not-allowed;
 }
 
-/* 模式选择器 */
-.mode-selector {
-  display: flex;
-  gap: 8px;
-}
-
-.mode-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.mode-btn:hover {
-  border-color: var(--color-accent-blue);
-  color: var(--color-accent-blue);
-}
-
-.mode-btn.active {
-  background: var(--color-accent-blue);
-  border-color: var(--color-accent-blue);
-  color: white;
-}
-
 /* 目录选择器 */
 .dir-selector {
   display: flex;
@@ -1684,49 +1474,6 @@ const languageOptions = [
 .browse-btn.save:hover {
   background: #3d9a4d;
   border-color: #3d9a4d;
-}
-
-/* 数字输入框 */
-.number-input {
-  width: 80px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-primary);
-  text-align: center;
-}
-
-.number-input:focus {
-  outline: none;
-  border-color: var(--color-accent-blue);
-  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
-}
-
-/* 提示行 */
-.settings-item.hint {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 10px;
-  background: rgba(88, 166, 255, 0.08);
-  border-radius: 6px;
-  margin-top: 4px;
-}
-
-.hint-icon {
-  font-size: 14px;
-  color: var(--color-accent-blue);
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.hint-text {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  line-height: 1.4;
 }
 
 .action-btn {

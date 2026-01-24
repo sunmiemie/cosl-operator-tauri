@@ -2,7 +2,6 @@
 mod camera;
 mod scanner;
 mod cache;
-mod flojoy;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -52,14 +51,6 @@ pub fn run() {
             cache::get_all_cache_sizes,
             cache::clear_all_cache,
             cache::list_cache_ids,
-            // Flojoy 服务管理
-            flojoy::start_flojoy,
-            flojoy::stop_flojoy,
-            flojoy::flojoy_status,
-            flojoy::restart_flojoy,
-            flojoy::update_flojoy_config,
-            flojoy::get_flojoy_config,
-            flojoy::check_embedded_flojoy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
