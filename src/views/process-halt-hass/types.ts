@@ -1,0 +1,271 @@
+/**
+ * HALT-HASS 工艺类型定义
+ * 对齐 Studio 数据结构
+ */
+import type { Node, Edge } from '@vue-flow/core'
+
+// ========== Block 相关类型（对齐 Studio） ==========
+
+// Block 参数值类型
+export type BlockParameterValue = string | number | boolean | null | undefined
+
+// Block 参数定义（对齐 Studio ParamDefinition）
+export interface ParamDefinition {
+  type: string
+  default: BlockParameterValue
+  options?: (string | number)[]
+  desc: string | null
+  overload: Record<string, string[]> | null
+}
+
+// Block IO 定义（对齐 Studio blockIoSchema）
+export interface BlockIO {
+  name: string
+  id: string
+  type: string
+  desc: string | null
+  multiple?: boolean // 仅 input 有
+}
+
+// pip 依赖
+export interface PipDependency {
+  name: string
+  v: string | null
+}
+
+// Block 定义（对齐 Studio BlockDefinition）
+export interface BlockDefinition {
+  name: string
+  key: string
+  type: string
+  inputs?: BlockIO[]
+  outputs?: BlockIO[]
+  parameters?: Record<string, ParamDefinition>
+  init_parameters?: Record<string, ParamDefinition>
+  pip_dependencies?: PipDependency[]
+  children: null
+}
+
+// ========== 控件数据类型（对齐 Studio CtrlData） ==========
+
+export type CtrlData = Record<
+  string,
+  {
+    functionName: string
+    param: string
+    value: BlockParameterValue
+    type?: string
+    default?: BlockParameterValue
+    options?: (string | number)[]
+    desc?: string | null
+  }
+>
+
+// ========== Block 节点数据（对齐 Studio BlockData） ==========
+
+export interface BlockData {
+  // 核心标识
+  id: string
+  label: string
+  type: string
+  func: string
+  path: string
+  
+  // 控件参数
+  ctrls: CtrlData
+  initCtrls?: CtrlData
+  
+  // IO 定义
+  inputs?: BlockIO[]
+  outputs?: BlockIO[]
+  
+  // 依赖
+  pip_dependencies?: PipDependency[]
+  
+  // 运行状态
+  running?: boolean
+  failed?: boolean
+  invalid?: boolean
+  
+  // 额外的自定义字段（用于兼容旧格式）
+  blockKey?: string
+  category?: string
+  status?: 'pending' | 'running' | 'success' | 'error'
+  params?: Record<string, unknown>
+  result?: unknown
+}
+
+// ========== Block 结果类型（对齐 Studio BlockResult） ==========
+
+export interface PlotlyFig {
+  data: unknown[]
+  layout: Record<string, unknown> | undefined
+}
+
+export interface DataContainer {
+  type: string
+  [key: string]: unknown
+}
+
+export interface BlockResult {
+  plotly_fig?: PlotlyFig
+  text_blob?: string
+  data?: DataContainer
+}
+
+// ========== 运行设置（对齐 Studio BackendSettings） ==========
+
+export interface RunSettings {
+  nodeDelay: number
+  maximumRuntime: number
+  maximumConcurrentWorkers: number
+}
+
+// 默认运行设置
+export const defaultRunSettings: RunSettings = {
+  nodeDelay: 0,
+  maximumRuntime: 3000,
+  maximumConcurrentWorkers: 1,
+}
+
+// ========== HALT-HASS 工艺类型 ==========
+
+// HALT-HASS 工艺元信息
+export interface HaltHassMetadata {
+  // 工艺名称
+  name: string
+  // 版本号
+  version: string
+  // 机型/型号 ID
+  boardModelId: number
+  // 机型/型号名称
+  boardModel: string
+  // 描述/说明
+  description: string
+  // 创建时间
+  createdAt?: string
+  // 更新时间
+  updatedAt?: string
+  // 创建者
+  createdBy?: string
+}
+
+// HALT-HASS 测试参数
+export interface HaltHassTestParams {
+  // 温度范围（摄氏度）
+  temperatureMin: number
+  temperatureMax: number
+  // 温度变化速率（°C/min）
+  temperatureRate: number
+  // 振动强度（G）
+  vibrationLevel: number
+  // 测试持续时间（分钟）
+  duration: number
+  // 循环次数
+  cycles: number
+  // 其他自定义参数
+  customParams?: Record<string, unknown>
+}
+
+// HALT-HASS 流程图数据
+export interface HaltHassFlowchart {
+  // 节点列表
+  nodes: Node<BlockData>[]
+  // 边（连线）列表
+  edges: Edge[]
+  // 观察块 ID 列表（用于实时显示结果）
+  observeBlocks: string[]
+  // 运行参数
+  runSettings: RunSettings
+}
+
+// HALT-HASS 工艺完整 JSON 结构
+export interface HaltHassProcessJson {
+  // 元信息
+  metadata: HaltHassMetadata
+  // 测试参数
+  testParams: HaltHassTestParams
+  // 流程图数据
+  flowchart: HaltHassFlowchart
+}
+
+// 创建空的 HALT-HASS 工艺 JSON
+export function createEmptyHaltHassJson(): HaltHassProcessJson {
+  return {
+    metadata: {
+      name: '',
+      version: '1.0.0',
+      boardModelId: -1,
+      boardModel: '待选择',
+      description: '',
+    },
+    testParams: {
+      temperatureMin: -40,
+      temperatureMax: 85,
+      temperatureRate: 10,
+      vibrationLevel: 5,
+      duration: 60,
+      cycles: 1,
+    },
+    flowchart: {
+      nodes: [],
+      edges: [],
+      observeBlocks: [],
+      runSettings: { ...defaultRunSettings },
+    },
+  }
+}
+
+// 编辑表单状态
+export interface HaltHassEditForm {
+  // 工艺名称
+  name: string
+  // 版本号
+  version: string
+  // 描述
+  description: string
+  // 当前编辑的工艺 ID（-1 表示新建）
+  processId: number
+  // 是否为编辑模式（修改已有工艺）
+  isEdit: boolean
+  // 是否有未保存的更改
+  hasUnsavedChanges: boolean
+}
+
+// 创建空的编辑表单
+export function createEmptyEditForm(): HaltHassEditForm {
+  return {
+    name: '',
+    version: '1.0.0',
+    description: '',
+    processId: -1,
+    isEdit: false,
+    hasUnsavedChanges: false,
+  }
+}
+
+// ========== Manifest 树结构类型（对齐 Studio） ==========
+
+// 叶子节点
+export type Leaf = BlockDefinition
+
+// 父节点（分类）
+export interface ParentNode {
+  name: string
+  key?: string
+  children: (ParentNode | BlockDefinition)[]
+}
+
+// 根节点
+export interface RootNode {
+  name: 'ROOT'
+  children: (ParentNode | BlockDefinition)[]
+}
+
+// 仅包含叶子的父节点
+export interface LeafParentNode extends ParentNode {
+  children: Leaf[]
+}
+
+// 树节点联合类型
+export type TreeNode = Leaf | ParentNode | LeafParentNode | RootNode
