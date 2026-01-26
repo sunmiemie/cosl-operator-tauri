@@ -1,0 +1,295 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "id": "PLOTLY_DATASET-1218cf6e-6c3e-44dd-a52c-d8857e3a4f78",
+                "type": "DATA",
+                "data": {
+                    "id": "PLOTLY_DATASET-1218cf6e-6c3e-44dd-a52c-d8857e3a4f78",
+                    "label": "PLOTLY DATASET",
+                    "func": "PLOTLY_DATASET",
+                    "type": "DATA",
+                    "ctrls": {
+                        "dataset_key": {
+                            "type": "select",
+                            "default": "wind",
+                            "options": [
+                                "wind",
+                                "iris",
+                                "carshare",
+                                "tips",
+                                "election",
+                                "experiment",
+                                "gapminder",
+                                "medals_long",
+                                "medals_wide",
+                                "stocks"
+                            ],
+                            "desc": null,
+                            "overload": null,
+                            "functionName": "PLOTLY_DATASET",
+                            "param": "dataset_key",
+                            "value": "tips"
+                        }
+                    },
+                    "initCtrls": {},
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "DataFrame",
+                            "desc": null
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SAMPLE_DATASETS/PLOTLY_DATASET/PLOTLY_DATASET.py"
+                },
+                "position": {
+                    "x": 146.79652106781964,
+                    "y": 454.32517012839446
+                },
+                "width": 216,
+                "height": 233,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 146.79652106781964,
+                    "y": 454.32517012839446
+                },
+                "dragging": false
+            },
+            {
+                "id": "EXTRACT_COLUMNS-54b80aa8-309b-4304-a6da-8470246065ea",
+                "type": "EXTRACT",
+                "data": {
+                    "id": "EXTRACT_COLUMNS-54b80aa8-309b-4304-a6da-8470246065ea",
+                    "label": "EXTRACT COLUMNS 1",
+                    "func": "EXTRACT_COLUMNS",
+                    "type": "EXTRACT",
+                    "ctrls": {
+                        "columns": {
+                            "type": "Array",
+                            "default": null,
+                            "desc": "The columns to extract from the input dataframe",
+                            "overload": null,
+                            "functionName": "EXTRACT_COLUMNS",
+                            "param": "columns",
+                            "value": "total_bill"
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "DataFrame|Matrix",
+                            "desc": "Input to use as the table for column extraction",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "DataFrame",
+                            "desc": "DataFrame or Matrix with only the specified columns"
+                        }
+                    ],
+                    "path": "ETL/EXTRACT/DATAFRAME/EXTRACT_COLUMNS/EXTRACT_COLUMNS.py"
+                },
+                "position": {
+                    "x": 542.4996568708716,
+                    "y": 641.1734478409235
+                },
+                "width": 216,
+                "height": 296,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 542.4996568708716,
+                    "y": 641.1734478409235
+                },
+                "dragging": false
+            },
+            {
+                "id": "EXTRACT_COLUMNS-53dae371-6571-4097-85fe-617c2fd9ac8f",
+                "type": "EXTRACT",
+                "data": {
+                    "id": "EXTRACT_COLUMNS-53dae371-6571-4097-85fe-617c2fd9ac8f",
+                    "label": "EXTRACT COLUMNS",
+                    "func": "EXTRACT_COLUMNS",
+                    "type": "EXTRACT",
+                    "ctrls": {
+                        "columns": {
+                            "type": "Array",
+                            "default": null,
+                            "desc": "The columns to extract from the input dataframe",
+                            "overload": null,
+                            "functionName": "EXTRACT_COLUMNS",
+                            "param": "columns",
+                            "value": "tip, time"
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "DataFrame|Matrix",
+                            "desc": "Input to use as the table for column extraction",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "DataFrame",
+                            "desc": "DataFrame or Matrix with only the specified columns"
+                        }
+                    ],
+                    "path": "ETL/EXTRACT/DATAFRAME/EXTRACT_COLUMNS/EXTRACT_COLUMNS.py"
+                },
+                "position": {
+                    "x": 543.053395244221,
+                    "y": 185.35072335085107
+                },
+                "width": 216,
+                "height": 296,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 543.053395244221,
+                    "y": 185.35072335085107
+                },
+                "dragging": false
+            },
+            {
+                "id": "TABLE-3655fe15-f12c-40e8-bca4-5f8ff6aa5fd9",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "TABLE-3655fe15-f12c-40e8-bca4-5f8ff6aa5fd9",
+                    "label": "TABLE 1",
+                    "func": "TABLE",
+                    "type": "VISUALIZATION",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedTriple|OrderedPair|DataFrame|Vector",
+                            "desc": "the DataContainer to be visualized",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly Table visualization"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/TABLE/TABLE.py"
+                },
+                "position": {
+                    "x": 958.2259889954869,
+                    "y": 637.0805067479929
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 958.2259889954869,
+                    "y": 637.0805067479929
+                },
+                "dragging": false
+            },
+            {
+                "id": "TABLE-df84e92c-8d4b-4a1b-93f4-d93a71125457",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "TABLE-df84e92c-8d4b-4a1b-93f4-d93a71125457",
+                    "label": "TABLE",
+                    "func": "TABLE",
+                    "type": "VISUALIZATION",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedTriple|OrderedPair|DataFrame|Vector",
+                            "desc": "the DataContainer to be visualized",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly Table visualization"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/TABLE/TABLE.py"
+                },
+                "position": {
+                    "x": 951.7202897028892,
+                    "y": 181.6968260733471
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 951.7202897028892,
+                    "y": 181.6968260733471
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "EXTRACT_COLUMNS-54b80aa8-309b-4304-a6da-8470246065ea->TABLE-3655fe15-f12c-40e8-bca4-5f8ff6aa5fd9_c2c6cb22-cfe0-4913-b605-7c03ec6dfeee",
+                "source": "EXTRACT_COLUMNS-54b80aa8-309b-4304-a6da-8470246065ea",
+                "target": "TABLE-3655fe15-f12c-40e8-bca4-5f8ff6aa5fd9",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "DataFrame"
+                }
+            },
+            {
+                "id": "EXTRACT_COLUMNS-53dae371-6571-4097-85fe-617c2fd9ac8f->TABLE-df84e92c-8d4b-4a1b-93f4-d93a71125457_f8a7be74-9362-449a-bebf-9556126d90e8",
+                "source": "EXTRACT_COLUMNS-53dae371-6571-4097-85fe-617c2fd9ac8f",
+                "target": "TABLE-df84e92c-8d4b-4a1b-93f4-d93a71125457",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "DataFrame"
+                }
+            },
+            {
+                "id": "PLOTLY_DATASET-1218cf6e-6c3e-44dd-a52c-d8857e3a4f78->EXTRACT_COLUMNS-53dae371-6571-4097-85fe-617c2fd9ac8f_0969bfb4-c70b-4e99-b6c0-882393590a92",
+                "source": "PLOTLY_DATASET-1218cf6e-6c3e-44dd-a52c-d8857e3a4f78",
+                "target": "EXTRACT_COLUMNS-53dae371-6571-4097-85fe-617c2fd9ac8f",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "DataFrame"
+                }
+            },
+            {
+                "id": "PLOTLY_DATASET-1218cf6e-6c3e-44dd-a52c-d8857e3a4f78->EXTRACT_COLUMNS-54b80aa8-309b-4304-a6da-8470246065ea_e2f96058-9d78-4f08-af52-61a9889ac809",
+                "source": "PLOTLY_DATASET-1218cf6e-6c3e-44dd-a52c-d8857e3a4f78",
+                "target": "EXTRACT_COLUMNS-54b80aa8-309b-4304-a6da-8470246065ea",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "DataFrame"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}

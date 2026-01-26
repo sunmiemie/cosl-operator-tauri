@@ -1,0 +1,107 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "id": "IMAGE-f23f456a-2f83-49fc-9bcc-166052fb44c3",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "IMAGE-f23f456a-2f83-49fc-9bcc-166052fb44c3",
+                    "label": "IMAGE",
+                    "func": "IMAGE",
+                    "type": "VISUALIZATION",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Image|Grayscale",
+                            "desc": "the DataContainer to be visualized",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly Image visualization of the input image"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/IMAGE/IMAGE.py"
+                },
+                "position": {
+                    "x": 780.2488795339325,
+                    "y": 485.2201495056281
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 780.2488795339325,
+                    "y": 485.2201495056281
+                },
+                "dragging": false
+            },
+            {
+                "id": "OPEN_IMAGE-359c0946-5b68-4b08-a44d-75c181eacc13",
+                "type": "EXTRACT",
+                "data": {
+                    "id": "OPEN_IMAGE-359c0946-5b68-4b08-a44d-75c181eacc13",
+                    "label": "OPEN IMAGE",
+                    "func": "OPEN_IMAGE",
+                    "type": "EXTRACT",
+                    "ctrls": {
+                        "file_path": {
+                            "type": "File",
+                            "default": null,
+                            "desc": "path to the file to be loaded",
+                            "overload": null,
+                            "functionName": "OPEN_IMAGE",
+                            "param": "file_path",
+                            "value": ""
+                        }
+                    },
+                    "initCtrls": {},
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Image",
+                            "desc": "Image loaded from specified file path"
+                        }
+                    ],
+                    "path": "ETL/EXTRACT/FILE/OPEN_IMAGE/OPEN_IMAGE.py"
+                },
+                "position": {
+                    "x": 225.41517948953208,
+                    "y": 490.01498747790333
+                },
+                "width": 216,
+                "height": 260,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 225.41517948953208,
+                    "y": 490.01498747790333
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "OPEN_IMAGE-359c0946-5b68-4b08-a44d-75c181eacc13->IMAGE-f23f456a-2f83-49fc-9bcc-166052fb44c3_3093df56-0239-4bd2-b3e8-8890095b84df",
+                "source": "OPEN_IMAGE-359c0946-5b68-4b08-a44d-75c181eacc13",
+                "target": "IMAGE-f23f456a-2f83-49fc-9bcc-166052fb44c3",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Image"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}

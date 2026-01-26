@@ -1,0 +1,117 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "id": "OPEN_PARQUET-166fcaa7-ddfd-45e8-a97b-8a2659263a11",
+                "type": "EXTRACT",
+                "data": {
+                    "id": "OPEN_PARQUET-166fcaa7-ddfd-45e8-a97b-8a2659263a11",
+                    "label": "OPEN PARQUET",
+                    "func": "OPEN_PARQUET",
+                    "type": "EXTRACT",
+                    "ctrls": {
+                        "file_path": {
+                            "type": "File",
+                            "default": null,
+                            "desc": "File path to the .parquet file or an URL of a .parquet file.",
+                            "overload": null,
+                            "functionName": "OPEN_PARQUET",
+                            "param": "file_path",
+                            "value": ""
+                        }
+                    },
+                    "initCtrls": {},
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "DataFrame",
+                            "desc": "DataFrame loaded from .parquet file"
+                        }
+                    ],
+                    "pip_dependencies": [
+                        {
+                            "name": "pyarrow",
+                            "v": "12.0.1"
+                        },
+                        {
+                            "name": "fastparquet",
+                            "v": "2023.7.0"
+                        }
+                    ],
+                    "path": "ETL/EXTRACT/FILE/OPEN_PARQUET/OPEN_PARQUET.py"
+                },
+                "position": {
+                    "x": 140.67953677813284,
+                    "y": 97.63111198157486
+                },
+                "width": 216,
+                "height": 296,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 140.67953677813284,
+                    "y": 97.63111198157486
+                },
+                "dragging": false
+            },
+            {
+                "id": "TABLE-9588c426-9b9a-44a2-982e-3179edd053bb",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "TABLE-9588c426-9b9a-44a2-982e-3179edd053bb",
+                    "label": "TABLE",
+                    "func": "TABLE",
+                    "type": "VISUALIZATION",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedTriple|OrderedPair|DataFrame|Vector",
+                            "desc": "the DataContainer to be visualized",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly Table visualization"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/TABLE/TABLE.py"
+                },
+                "position": {
+                    "x": 529.2859053392498,
+                    "y": 93.56918510136035
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 529.2859053392498,
+                    "y": 93.56918510136035
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "OPEN_PARQUET-166fcaa7-ddfd-45e8-a97b-8a2659263a11->TABLE-9588c426-9b9a-44a2-982e-3179edd053bb_396fb71a-aa4c-4dc2-9507-694f93dcafad",
+                "source": "OPEN_PARQUET-166fcaa7-ddfd-45e8-a97b-8a2659263a11",
+                "target": "TABLE-9588c426-9b9a-44a2-982e-3179edd053bb",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "DataFrame"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}
