@@ -2,6 +2,7 @@
 mod camera;
 mod scanner;
 mod cache;
+mod flojoy;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -22,6 +23,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        // 注册 Flojoy 后端状态管理
+        .manage(flojoy::FlojoyBackendState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -51,6 +54,19 @@ pub fn run() {
             cache::get_all_cache_sizes,
             cache::clear_all_cache,
             cache::list_cache_ids,
+            // Flojoy 后端管理（Python 源码运行）
+            flojoy::configure_python,
+            flojoy::check_python_version,
+            flojoy::check_poetry_installed,
+            flojoy::install_poetry,
+            flojoy::install_dependencies,
+            flojoy::get_flojoy_config,
+            flojoy::start_flojoy_backend,
+            flojoy::stop_flojoy_backend,
+            flojoy::is_flojoy_backend_running,
+            flojoy::get_flojoy_backend_pid,
+            flojoy::set_flojoy_backend_port,
+            flojoy::init_flojoy_backend_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

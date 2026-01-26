@@ -8,7 +8,10 @@ import { useTheme } from '@/composables/useTheme'
 import { useConfig } from '@/composables/useConfig'
 import { useCamera, type CameraDevice } from '@/composables/useCamera'
 import { useAppLock } from '@/composables/useAppLock'
+import { useFlojoyBackend, BackendStatus, InitStatus } from '@/composables/useFlojoyBackend'
 import { ThemeMode } from '@/enums'
+import { open } from '@tauri-apps/plugin-dialog'
+import { platform as getPlatform } from '@tauri-apps/plugin-os'
 import { http } from '@/services/http'
 import { cacheApi, type CacheSizes } from '@/services/process'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -18,6 +21,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const { themeMode, setTheme, initTheme } = useTheme()
 const { initConfig, setConfigItem, getConfigPath, config } = useConfig()
 const camera = useCamera()
+
+// Flojoy 后端管理
+const flojoyBackend = useFlojoyBackend()
 
 // 后端地址
 const backendUrl = ref('http://localhost:60034')
@@ -605,11 +611,213 @@ const languageOptions = [
   { label: '简体中文', value: 'zh-CN' },
   { label: 'English', value: 'en-US' },
 ]
+
+// ==================== Flojoy Python 环境配置 ====================
+
+// 选择 Python 解释器
+async function selectPythonPath() {
+  try {
+    const currentPlatform = getPlatform()
+    const isWindows = currentPlatform === 'windows'
+    
+    const selected = await open({
+      title: '选择 Python 3.11 解释器',
+      filters: isWindows 
+        ? [{ name: 'Python', extensions: ['exe'] }]
+        : [],
+      multiple: false,
+      directory: false,
+    })
+    
+    if (selected && typeof selected === 'string') {
+      const success = await flojoyBackend.configurePython(selected)
+      if (success) {
+        ElMessage.success('Python 解释器配置成功')
+      } else {
+        ElMessage.warning(`Python 版本不符合要求，需要 Python 3.11，当前版本: ${flojoyBackend.pythonVersion.value}`)
+      }
+    }
+  } catch (error) {
+    console.error('选择 Python 路径失败:', error)
+    ElMessage.error('选择 Python 路径失败')
+  }
+}
+
+// 安装 Flojoy 依赖
+async function installFlojoyDependencies() {
+  try {
+    ElMessage.info('正在安装依赖，请稍候...')
+    const success = await flojoyBackend.initializeEnvironment()
+    if (success) {
+      ElMessage.success('Flojoy 环境初始化成功')
+    } else {
+      ElMessage.error(flojoyBackend.initError.value || '初始化失败')
+    }
+  } catch (error) {
+    console.error('安装依赖失败:', error)
+    ElMessage.error('安装依赖失败')
+  }
+}
+
+// 启动/停止 Flojoy 后端
+async function toggleFlojoyBackend() {
+  if (flojoyBackend.isRunning.value) {
+    const success = await flojoyBackend.stop()
+    if (success) {
+      ElMessage.success('Flojoy 后端已停止')
+    } else {
+      ElMessage.error(flojoyBackend.errorMessage.value || '停止失败')
+    }
+  } else {
+    const success = await flojoyBackend.start()
+    if (success) {
+      ElMessage.success('Flojoy 后端已启动')
+    } else {
+      ElMessage.error(flojoyBackend.errorMessage.value || '启动失败')
+    }
+  }
+}
+
+// 获取 Flojoy 状态文本
+function getFlojoyStatusText(): string {
+  switch (flojoyBackend.status.value) {
+    case BackendStatus.RUNNING:
+      return '运行中'
+    case BackendStatus.STARTING:
+      return '启动中...'
+    case BackendStatus.ERROR:
+      return '错误'
+    default:
+      return '已停止'
+  }
+}
+
+// 获取 Flojoy 初始化状态文本
+function getFlojoyInitStatusText(): string {
+  switch (flojoyBackend.initStatus.value) {
+    case InitStatus.CHECKING:
+      return '检查中...'
+    case InitStatus.INSTALLING:
+      return '安装中...'
+    case InitStatus.READY:
+      return '就绪'
+    case InitStatus.ERROR:
+      return '错误'
+    default:
+      return '未初始化'
+  }
+}
 </script>
 
 <template>
   <ModalLayout title="设置" icon="mdi:cog">
     <div class="settings-content">
+      <!-- Flojoy Python 环境配置 -->
+      <div class="settings-section">
+        <h3 class="section-title">
+          <Icon icon="mdi:language-python" class="section-icon" />
+          Flojoy Python 环境
+        </h3>
+        
+        <div class="settings-list">
+          <!-- Python 解释器路径 -->
+          <div class="settings-item backend-item">
+            <span class="item-label">Python 解释器 (需要 3.11)</span>
+            <div class="backend-config">
+              <input 
+                :value="flojoyBackend.pythonPath.value" 
+                type="text" 
+                class="backend-input"
+                placeholder="选择 Python 3.11 解释器路径"
+                readonly
+              />
+              <button 
+                class="action-btn" 
+                @click="selectPythonPath"
+                title="浏览选择"
+              >
+                <Icon icon="mdi:folder-open" />
+              </button>
+            </div>
+          </div>
+          
+          <!-- Python 版本显示 -->
+          <div class="settings-item" v-if="flojoyBackend.pythonVersion.value">
+            <span class="item-label">Python 版本</span>
+            <div class="item-value">
+              <span :class="{ 'text-success': flojoyBackend.pythonVersionValid.value, 'text-error': !flojoyBackend.pythonVersionValid.value }">
+                {{ flojoyBackend.pythonVersion.value }}
+                {{ flojoyBackend.pythonVersionValid.value ? '✓' : '(需要 3.11)' }}
+              </span>
+            </div>
+          </div>
+          
+          <!-- 环境状态 -->
+          <div class="settings-item">
+            <span class="item-label">环境状态</span>
+            <div class="item-value">
+              <span class="status-badge" :class="{
+                'status-success': flojoyBackend.initStatus.value === 'ready',
+                'status-warning': flojoyBackend.initStatus.value === 'checking' || flojoyBackend.initStatus.value === 'installing',
+                'status-error': flojoyBackend.initStatus.value === 'error',
+              }">
+                {{ getFlojoyInitStatusText() }}
+              </span>
+              <span v-if="flojoyBackend.poetryInstalled.value" class="status-item">Poetry ✓</span>
+              <span v-if="flojoyBackend.dependenciesInstalled.value" class="status-item">依赖 ✓</span>
+            </div>
+          </div>
+          
+          <!-- 初始化按钮 -->
+          <div class="settings-item" v-if="flojoyBackend.pythonVersionValid.value && !flojoyBackend.isEnvironmentReady.value">
+            <span class="item-label">初始化环境</span>
+            <div class="item-value">
+              <button 
+                class="action-btn primary-btn"
+                @click="installFlojoyDependencies"
+                :disabled="flojoyBackend.isInitializing.value"
+              >
+                <Icon v-if="flojoyBackend.isInitializing.value" icon="mdi:loading" class="spin" />
+                <span v-else>安装 Poetry 和依赖</span>
+              </button>
+            </div>
+          </div>
+          
+          <!-- 后端控制 -->
+          <div class="settings-item" v-if="flojoyBackend.isEnvironmentReady.value">
+            <span class="item-label">Flojoy 后端</span>
+            <div class="backend-config">
+              <span class="status-badge" :class="{
+                'status-success': flojoyBackend.isRunning.value,
+                'status-warning': flojoyBackend.isStarting.value,
+                'status-error': flojoyBackend.status.value === 'error',
+              }">
+                {{ getFlojoyStatusText() }}
+              </span>
+              <button 
+                class="action-btn"
+                :class="{ 'danger-btn': flojoyBackend.isRunning.value, 'success-btn': !flojoyBackend.isRunning.value }"
+                @click="toggleFlojoyBackend"
+                :disabled="flojoyBackend.isStarting.value"
+              >
+                <Icon v-if="flojoyBackend.isStarting.value" icon="mdi:loading" class="spin" />
+                <Icon v-else-if="flojoyBackend.isRunning.value" icon="mdi:stop" />
+                <Icon v-else icon="mdi:play" />
+                <span>{{ flojoyBackend.isRunning.value ? '停止' : '启动' }}</span>
+              </button>
+            </div>
+          </div>
+          
+          <!-- 错误信息 -->
+          <div class="settings-item error-item" v-if="flojoyBackend.initError.value || flojoyBackend.errorMessage.value">
+            <span class="item-label">错误信息</span>
+            <div class="item-value text-error">
+              {{ flojoyBackend.initError.value || flojoyBackend.errorMessage.value }}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 连接设置 -->
       <div class="settings-section">
         <h3 class="section-title">
@@ -1363,6 +1571,7 @@ const languageOptions = [
   gap: 6px;
   flex: 1;
   max-width: 400px;
+  justify-content: end;
 }
 
 .backend-input {
@@ -1933,5 +2142,72 @@ const languageOptions = [
 
 .confirm-btn:hover {
   background: #dc2626;
+}
+
+/* ==================== Flojoy Python 环境配置样式 ==================== */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-success {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--color-accent-green);
+}
+
+.status-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.status-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--color-accent-red);
+}
+
+.status-item {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--color-accent-green);
+}
+
+.text-success {
+  color: var(--color-accent-green);
+}
+
+.text-error {
+  color: var(--color-accent-red);
+}
+
+.primary-btn {
+  background: var(--color-accent-blue) !important;
+  color: white !important;
+  border-color: var(--color-accent-blue) !important;
+}
+
+.primary-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.success-btn {
+  background: var(--color-accent-green) !important;
+  color: white !important;
+  border-color: var(--color-accent-green) !important;
+}
+
+.danger-btn {
+  background: var(--color-accent-red) !important;
+  color: white !important;
+  border-color: var(--color-accent-red) !important;
+}
+
+.error-item .item-value {
+  font-size: 12px;
+  word-break: break-all;
 }
 </style>

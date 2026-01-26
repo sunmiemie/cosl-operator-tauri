@@ -5,7 +5,8 @@ import { initializeConfig } from './composables/useConfig'
 import { initializeOfflineIcons } from './utils/iconify-offline'
 import { http } from './services/http'
 
-// 导入 Element Plus 样式（用于 ElMessageBox、ElMessage 等组件）
+// 导入 Element Plus 及其样式
+import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 
 // 导入 Tailwind CSS
@@ -29,6 +30,7 @@ async function bootstrap() {
 
     // 4. 创建 Vue 应用实例
     const app = createApp(App)
+    app.use(ElementPlus)
     app.use(router)
     app.mount('#app')
 
@@ -38,6 +40,7 @@ async function bootstrap() {
     
     // 即使初始化失败，也尝试启动应用（用户可以在设置中修复配置）
     const app = createApp(App)
+    app.use(ElementPlus)
     app.use(router)
     app.mount('#app')
   }

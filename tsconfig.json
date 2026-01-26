@@ -12,7 +12,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "preserve",
+    
+    /* JSX 配置 - 支持 React */
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
 
     /* 路径别名 */
     "baseUrl": ".",

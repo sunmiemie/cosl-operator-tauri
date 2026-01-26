@@ -33,10 +33,20 @@ html.dark {
   --color-bg-hover: rgba(255, 255, 255, 0.06);
   --color-border: rgba(255, 255, 255, 0.08);
   
+  /* 组件使用的背景色别名（暗色主题） */
+  --color-bg-1: #0d1117;
+  --color-bg-2: #161b22;
+  --color-bg-3: #21262d;
+  
   /* 文字颜色 */
   --color-text-primary: #e6edf3;
   --color-text-secondary: #8b949e;
   --color-text-muted: #6e7681;
+  
+  /* 组件使用的文字色别名（暗色主题） */
+  --color-text-1: #e6edf3;
+  --color-text-2: #8b949e;
+  --color-text-3: #6e7681;
   
   /* 强调色 */
   --color-accent-blue: #58a6ff;
@@ -44,6 +54,23 @@ html.dark {
   --color-accent-purple: #a371f7;
   --color-accent-orange: #f78166;
   --color-accent-red: #f85149;
+  --color-accent-pink: #db61a2;
+  --color-accent-cyan: #39c5cf;
+  
+  /* 主色调（暗色主题） */
+  --color-primary: #58a6ff;
+  --color-primary-light: rgba(88, 166, 255, 0.15);
+  --color-primary-dark: #4a94e8;
+  
+  /* 功能色（暗色主题） */
+  --color-success: #3fb950;
+  --color-success-light: rgba(63, 185, 80, 0.15);
+  --color-success-dark: #2ea043;
+  --color-warning: #d29922;
+  --color-warning-light: rgba(210, 153, 34, 0.15);
+  --color-danger: #f85149;
+  --color-danger-light: rgba(248, 81, 73, 0.15);
+  --color-danger-dark: #da3633;
   
   /* 卡片 */
   --color-card-bg: rgba(22, 27, 34, 0.8);
@@ -61,12 +88,22 @@ html.light {
   --color-bg-secondary: #f6f8fa;
   --color-bg-tertiary: #eef1f4;
   --color-bg-hover: rgba(0, 0, 0, 0.04);
-  --color-border: rgba(0, 0, 0, 0.1);
+  --color-border: #e2e8f0;
+  
+  /* 组件使用的背景色别名（亮色主题） */
+  --color-bg-1: #f8fafc;
+  --color-bg-2: #ffffff;
+  --color-bg-3: #f1f5f9;
   
   /* 文字颜色 */
   --color-text-primary: #1f2328;
   --color-text-secondary: #656d76;
   --color-text-muted: #8c959f;
+  
+  /* 组件使用的文字色别名（亮色主题） */
+  --color-text-1: #1e293b;
+  --color-text-2: #64748b;
+  --color-text-3: #94a3b8;
   
   /* 强调色 */
   --color-accent-blue: #0969da;
@@ -74,6 +111,23 @@ html.light {
   --color-accent-purple: #8250df;
   --color-accent-orange: #bc4c00;
   --color-accent-red: #cf222e;
+  --color-accent-pink: #bf3989;
+  --color-accent-cyan: #0891b2;
+  
+  /* 主色调（亮色主题） */
+  --color-primary: #3b82f6;
+  --color-primary-light: #dbeafe;
+  --color-primary-dark: #2563eb;
+  
+  /* 功能色（亮色主题） */
+  --color-success: #22c55e;
+  --color-success-light: #dcfce7;
+  --color-success-dark: #16a34a;
+  --color-warning: #f59e0b;
+  --color-warning-light: #fef3c7;
+  --color-danger: #ef4444;
+  --color-danger-light: #fee2e2;
+  --color-danger-dark: #dc2626;
   
   /* 卡片 */
   --color-card-bg: #ffffff;
@@ -156,9 +210,9 @@ button:focus-visible {
 }
 
 /* 输入框基础样式（排除 Element Plus 组件和特殊组件的输入框） */
-input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input),
-textarea:not(.el-textarea__inner),
-select:not(.el-select__input) {
+input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):not(.search-input):not(.label-input):not(.form-input),
+textarea:not(.el-textarea__inner):not(.form-textarea),
+select:not(.el-select__input):not(.form-select) {
   font-family: inherit;
   font-size: inherit;
   color: inherit;
@@ -169,9 +223,9 @@ select:not(.el-select__input) {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):focus,
-textarea:not(.el-textarea__inner):focus,
-select:not(.el-select__input):focus {
+input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):not(.search-input):not(.label-input):not(.form-input):focus,
+textarea:not(.el-textarea__inner):not(.form-textarea):focus,
+select:not(.el-select__input):not(.form-select):focus {
   outline: none;
   border-color: var(--color-accent-blue);
   box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
@@ -286,4 +340,16 @@ html.dark .el-message {
 html.dark .el-message__content {
   color: var(--color-text-primary);
 }
+
+/* 确保 Tailwind preflight 不影响 Element Plus 组件 */
+/* 重置 ElSelect 可能被 Tailwind 影响的样式 */
+.el-select,
+.el-select__wrapper,
+.el-input,
+.el-input__wrapper {
+  border: none !important;
+}
+
+/* Element Plus 使用 box-shadow 而不是 border 来显示边框 */
+/* 确保不会有额外的边框叠加 */
 </style>

@@ -1,0 +1,230 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "width": 208,
+                "height": 96,
+                "id": "BOOLEAN-6ecbe422-83c0-48b1-899d-ca0b1d50c91f",
+                "type": "DATA",
+                "data": {
+                    "id": "BOOLEAN-6ecbe422-83c0-48b1-899d-ca0b1d50c91f",
+                    "label": "BOOLEAN",
+                    "func": "BOOLEAN",
+                    "type": "DATA",
+                    "ctrls": {
+                        "status": {
+                            "type": "bool",
+                            "default": true,
+                            "desc": "either True or False value that you want to assign",
+                            "overload": null,
+                            "functionName": "BOOLEAN",
+                            "param": "status",
+                            "value": true
+                        }
+                    },
+                    "initCtrls": {},
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Boolean",
+                            "desc": "Boolean node"
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/BOOLEAN/BOOLEAN.py",
+                    "selected": false
+                },
+                "position": {
+                    "x": -313.14452664399516,
+                    "y": 7.917790683938733
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -313.14452664399516,
+                    "y": 7.917790683938733
+                },
+                "dragging": false
+            },
+            {
+                "width": 225,
+                "height": 226,
+                "id": "TEXT_VIEW-b4f49971-09c4-4ad9-a4a2-417eae73808c",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "TEXT_VIEW-b4f49971-09c4-4ad9-a4a2-417eae73808c",
+                    "label": "TEXT VIEW",
+                    "func": "TEXT_VIEW",
+                    "type": "VISUALIZATION",
+                    "ctrls": {
+                        "prettify": {
+                            "type": "bool",
+                            "default": false,
+                            "desc": "Whether to prettify the displayed text (defaults to True)",
+                            "overload": null,
+                            "functionName": "TEXT_VIEW",
+                            "param": "prettify",
+                            "value": false
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "String|Boolean",
+                            "desc": "The DataContainer to be visualized in text format",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "String",
+                            "desc": "The DataContainer containing text data"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/DATA_STRUCTURE/TEXT_VIEW/TEXT_VIEW.py",
+                    "selected": false
+                },
+                "position": {
+                    "x": 735.4616578281573,
+                    "y": -167.334869212615
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 735.4616578281573,
+                    "y": -167.334869212615
+                },
+                "dragging": false
+            },
+            {
+                "width": 208,
+                "height": 96,
+                "id": "BOOLEAN-1ae06ff9-112a-49b7-a49a-6981056c54d0",
+                "type": "DATA",
+                "data": {
+                    "id": "BOOLEAN-1ae06ff9-112a-49b7-a49a-6981056c54d0",
+                    "label": "BOOLEAN 1",
+                    "func": "BOOLEAN",
+                    "type": "DATA",
+                    "ctrls": {
+                        "status": {
+                            "type": "bool",
+                            "default": true,
+                            "desc": "either True or False value that you want to assign",
+                            "overload": null,
+                            "functionName": "BOOLEAN",
+                            "param": "status",
+                            "value": false
+                        }
+                    },
+                    "initCtrls": {},
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Boolean",
+                            "desc": "Boolean node"
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/BOOLEAN/BOOLEAN.py",
+                    "selected": true
+                },
+                "position": {
+                    "x": -314.0085897305894,
+                    "y": -285.87440886982256
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -314.0085897305894,
+                    "y": -285.87440886982256
+                },
+                "dragging": false
+            },
+            {
+                "width": 236,
+                "height": 198,
+                "id": "NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e",
+                "type": "CONTROL_FLOW",
+                "data": {
+                    "id": "NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e",
+                    "label": "NOT OR",
+                    "func": "NOT_OR",
+                    "type": "CONTROL_FLOW",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Boolean",
+                            "desc": "The input boolean to which we apply the NOT OR operation.",
+                            "multiple": false
+                        },
+                        {
+                            "name": "a",
+                            "id": "a",
+                            "type": "Boolean",
+                            "desc": "The input boolean to which we apply the NOT OR operation.",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Boolean",
+                            "desc": "The boolean result from the operation of the inputs."
+                        }
+                    ],
+                    "path": "CONTROL_FLOW/LOGICAL_OPERATORS/NOT_OR/NOT_OR.py",
+                    "selected": false
+                },
+                "position": {
+                    "x": 159.0181326892972,
+                    "y": -131.4958459997772
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 159.0181326892972,
+                    "y": -131.4958459997772
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "BOOLEAN-1ae06ff9-112a-49b7-a49a-6981056c54d0->NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e_a1b0ab74-45ae-4fe2-91d8-11e8257cbf7e",
+                "source": "BOOLEAN-1ae06ff9-112a-49b7-a49a-6981056c54d0",
+                "target": "NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Boolean"
+                }
+            },
+            {
+                "id": "BOOLEAN-6ecbe422-83c0-48b1-899d-ca0b1d50c91f->NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e_8eff9b44-5625-42f1-b940-d9136f4686fe",
+                "source": "BOOLEAN-6ecbe422-83c0-48b1-899d-ca0b1d50c91f",
+                "target": "NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e",
+                "sourceHandle": "default",
+                "targetHandle": "a",
+                "data": {
+                    "outputType": "Boolean"
+                }
+            },
+            {
+                "id": "NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e->TEXT_VIEW-b4f49971-09c4-4ad9-a4a2-417eae73808c_e8f3c00c-f682-45fb-aeea-95a92564a1b6",
+                "source": "NOT_OR-93d6f904-9dce-4e1f-afc4-4c82d1e5e76e",
+                "target": "TEXT_VIEW-b4f49971-09c4-4ad9-a4a2-417eae73808c",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Boolean"
+                }
+            }
+        ]
+    },
+    "textNodes": []
+}

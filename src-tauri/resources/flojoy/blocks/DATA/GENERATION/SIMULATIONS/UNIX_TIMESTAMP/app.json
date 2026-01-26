@@ -1,0 +1,818 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "id": "RAND-2c8f3a6e-310e-488a-a3b0-861de42c8f54",
+                "type": "DATA",
+                "data": {
+                    "id": "RAND-2c8f3a6e-310e-488a-a3b0-861de42c8f54",
+                    "label": "RAND",
+                    "func": "RAND",
+                    "type": "DATA",
+                    "ctrls": {
+                        "distribution": {
+                            "type": "select",
+                            "default": "normal",
+                            "options": [
+                                "normal",
+                                "uniform",
+                                "poisson"
+                            ],
+                            "desc": "the distribution over the random samples",
+                            "overload": {
+                                "uniform": [
+                                    "size",
+                                    "lower_bound",
+                                    "upper_bound"
+                                ],
+                                "normal": [
+                                    "size",
+                                    "normal_mean",
+                                    "normal_standard_deviation"
+                                ],
+                                "poisson": [
+                                    "size",
+                                    "poisson_events"
+                                ]
+                            },
+                            "functionName": "RAND",
+                            "param": "distribution",
+                            "value": "normal"
+                        },
+                        "size": {
+                            "type": "int",
+                            "default": 1000,
+                            "desc": "the size of the output. =1 outputs Scalar, >1 outputs Vector",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "size",
+                            "value": 1
+                        },
+                        "lower_bound": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "the lower bound of the output interval",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "lower_bound",
+                            "value": 0
+                        },
+                        "upper_bound": {
+                            "type": "float",
+                            "default": 1,
+                            "desc": "the upper bound of the output interval",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "upper_bound",
+                            "value": 1
+                        },
+                        "normal_mean": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "the mean or \"center\" of the normal distribution",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "normal_mean",
+                            "value": 100
+                        },
+                        "normal_standard_deviation": {
+                            "type": "float",
+                            "default": 1,
+                            "desc": "the spread or \"width\" of the normal distribution",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "normal_standard_deviation",
+                            "value": 10
+                        },
+                        "poisson_events": {
+                            "type": "float",
+                            "default": 1,
+                            "desc": "the expected number of events occurring in a fixed time-interval when distribution is poisson",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "poisson_events",
+                            "value": 1
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": "unused in this node",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector|Scalar",
+                            "desc": "Vector if size > 1\nv: the random samples\n\nScalar if size = 1\nc: the random number"
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/RAND/RAND.py"
+                },
+                "position": {
+                    "x": -670.6202608264015,
+                    "y": -1123.8087359947274
+                },
+                "width": 216,
+                "height": 197,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -670.6202608264015,
+                    "y": -1123.8087359947274
+                },
+                "dragging": false
+            },
+            {
+                "id": "UNIX_TIMESTAMP-d7d80ec6-7362-4191-aad5-78d9d8fa2ba2",
+                "type": "DATA",
+                "data": {
+                    "id": "UNIX_TIMESTAMP-d7d80ec6-7362-4191-aad5-78d9d8fa2ba2",
+                    "label": "UNIX TIMESTAMP",
+                    "func": "UNIX_TIMESTAMP",
+                    "type": "DATA",
+                    "ctrls": {
+                        "dc_type": {
+                            "type": "select",
+                            "default": "Scalar",
+                            "options": [
+                                "Scalar",
+                                "Vector"
+                            ],
+                            "desc": "The type of DataContainer to return.",
+                            "overload": null,
+                            "functionName": "UNIX_TIMESTAMP",
+                            "param": "dc_type",
+                            "value": "Scalar"
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Scalar",
+                            "desc": "A value to timestamp",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Scalar|Vector|OrderedPair",
+                            "desc": null
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/UNIX_TIMESTAMP/UNIX_TIMESTAMP.py"
+                },
+                "position": {
+                    "x": -242.16485387583498,
+                    "y": -1124.5532553784706
+                },
+                "width": 216,
+                "height": 233,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -242.16485387583498,
+                    "y": -1124.5532553784706
+                },
+                "dragging": false
+            },
+            {
+                "id": "TIMER-ca59e144-453d-4a6c-b83c-78f0036d681e",
+                "type": "CONTROL_FLOW",
+                "data": {
+                    "id": "TIMER-ca59e144-453d-4a6c-b83c-78f0036d681e",
+                    "label": "TIMER 2",
+                    "func": "TIMER",
+                    "type": "CONTROL_FLOW",
+                    "ctrls": {
+                        "sleep_time": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "number of seconds to sleep",
+                            "overload": null,
+                            "functionName": "TIMER",
+                            "param": "sleep_time",
+                            "value": 1
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": null,
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": "Returns the input if one was passed in."
+                        }
+                    ],
+                    "path": "CONTROL_FLOW/TIMERS/TIMER/TIMER.py"
+                },
+                "position": {
+                    "x": 203.9235665558208,
+                    "y": -1099.13848283938
+                },
+                "width": 236,
+                "height": 140,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 203.9235665558208,
+                    "y": -1099.13848283938
+                },
+                "dragging": false
+            },
+            {
+                "id": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48",
+                "type": "CONTROL_FLOW",
+                "data": {
+                    "id": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48",
+                    "label": "APPEND",
+                    "func": "APPEND",
+                    "type": "CONTROL_FLOW",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "primary_dp",
+                            "id": "primary_dp",
+                            "type": "OrderedPair|Matrix|DataFrame|Scalar|Vector",
+                            "desc": "Input that ends up \"on top\" of the resulting DataContainer.",
+                            "multiple": false
+                        },
+                        {
+                            "name": "secondary_dp",
+                            "id": "secondary_dp",
+                            "type": "OrderedPair|Matrix|DataFrame|Scalar|Vector",
+                            "desc": "Input that ends up \"on the bottom\" of the resulting DataContainer.",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedPair|Matrix|DataFrame|Vector|Scalar",
+                            "desc": null
+                        }
+                    ],
+                    "path": "CONTROL_FLOW/LOOPS/APPEND/APPEND.py"
+                },
+                "position": {
+                    "x": 1276.9227822088324,
+                    "y": -793.7092007862093
+                },
+                "width": 216,
+                "height": 198,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 1276.9227822088324,
+                    "y": -793.7092007862093
+                },
+                "dragging": false
+            },
+            {
+                "id": "UNIX_TIMESTAMP-4b42cb5e-57a8-4726-9a7e-22f0f99e51fb",
+                "type": "DATA",
+                "data": {
+                    "id": "UNIX_TIMESTAMP-4b42cb5e-57a8-4726-9a7e-22f0f99e51fb",
+                    "label": "UNIX TIMESTAMP 2",
+                    "func": "UNIX_TIMESTAMP",
+                    "type": "DATA",
+                    "ctrls": {
+                        "dc_type": {
+                            "type": "select",
+                            "default": "Scalar",
+                            "options": [
+                                "Scalar",
+                                "Vector"
+                            ],
+                            "desc": "The type of DataContainer to return.",
+                            "overload": null,
+                            "functionName": "UNIX_TIMESTAMP",
+                            "param": "dc_type",
+                            "value": "Scalar"
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Scalar",
+                            "desc": "A value to timestamp",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Scalar|Vector|OrderedPair",
+                            "desc": null
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/UNIX_TIMESTAMP/UNIX_TIMESTAMP.py"
+                },
+                "position": {
+                    "x": 917.8577539628104,
+                    "y": -1067.9866339485854
+                },
+                "width": 216,
+                "height": 269,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 917.8577539628104,
+                    "y": -1067.9866339485854
+                },
+                "dragging": false
+            },
+            {
+                "id": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8",
+                "type": "CONTROL_FLOW",
+                "data": {
+                    "id": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8",
+                    "label": "LOOP 1",
+                    "func": "LOOP",
+                    "type": "CONTROL_FLOW",
+                    "ctrls": {
+                        "num_loops": {
+                            "type": "int",
+                            "default": -1,
+                            "desc": "number of times to iterate through body nodes, default is \"-1\" meaning infinity.",
+                            "overload": null,
+                            "functionName": "LOOP",
+                            "param": "num_loops",
+                            "value": 100
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": null,
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "body",
+                            "id": "body",
+                            "type": "Any",
+                            "desc": "Forwards the input DataContainer to the body."
+                        },
+                        {
+                            "name": "end",
+                            "id": "end",
+                            "type": "Any",
+                            "desc": "Forwards the input DataContainer to the end."
+                        }
+                    ],
+                    "path": "CONTROL_FLOW/LOOPS/LOOP/LOOP.py"
+                },
+                "position": {
+                    "x": 206.58369074566326,
+                    "y": -840.3369395236846
+                },
+                "width": 236,
+                "height": 198,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 206.58369074566326,
+                    "y": -840.3369395236846
+                },
+                "dragging": false
+            },
+            {
+                "id": "FEEDBACK-64a10596-dff0-442a-a07f-ce1a4e9ca980",
+                "type": "DATA",
+                "data": {
+                    "id": "FEEDBACK-64a10596-dff0-442a-a07f-ce1a4e9ca980",
+                    "label": "FEEDBACK",
+                    "func": "FEEDBACK",
+                    "type": "DATA",
+                    "ctrls": {
+                        "referred_node": {
+                            "type": "NodeReference",
+                            "default": null,
+                            "desc": "The node ID to capture the result from.",
+                            "overload": null,
+                            "functionName": "FEEDBACK",
+                            "param": "referred_node",
+                            "value": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48"
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": null,
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": "The result of the specified node ID, or the result of the parent node if it was not found."
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/FEEDBACK/FEEDBACK.py"
+                },
+                "position": {
+                    "x": 568.602077644472,
+                    "y": -673.8489797088461
+                },
+                "width": 216,
+                "height": 197,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 568.602077644472,
+                    "y": -673.8489797088461
+                },
+                "dragging": false
+            },
+            {
+                "id": "RAND-80e7c4ea-bf2d-4aeb-9fb5-1e84438abd8a",
+                "type": "DATA",
+                "data": {
+                    "id": "RAND-80e7c4ea-bf2d-4aeb-9fb5-1e84438abd8a",
+                    "label": "RAND 1",
+                    "func": "RAND",
+                    "type": "DATA",
+                    "ctrls": {
+                        "distribution": {
+                            "type": "select",
+                            "default": "normal",
+                            "options": [
+                                "normal",
+                                "uniform",
+                                "poisson"
+                            ],
+                            "desc": "the distribution over the random samples",
+                            "overload": {
+                                "uniform": [
+                                    "size",
+                                    "lower_bound",
+                                    "upper_bound"
+                                ],
+                                "normal": [
+                                    "size",
+                                    "normal_mean",
+                                    "normal_standard_deviation"
+                                ],
+                                "poisson": [
+                                    "size",
+                                    "poisson_events"
+                                ]
+                            },
+                            "functionName": "RAND",
+                            "param": "distribution",
+                            "value": "normal"
+                        },
+                        "size": {
+                            "type": "int",
+                            "default": 1000,
+                            "desc": "the size of the output. =1 outputs Scalar, >1 outputs Vector",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "size",
+                            "value": 1
+                        },
+                        "lower_bound": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "the lower bound of the output interval",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "lower_bound",
+                            "value": 0
+                        },
+                        "upper_bound": {
+                            "type": "float",
+                            "default": 1,
+                            "desc": "the upper bound of the output interval",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "upper_bound",
+                            "value": 1
+                        },
+                        "normal_mean": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "the mean or \"center\" of the normal distribution",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "normal_mean",
+                            "value": 100
+                        },
+                        "normal_standard_deviation": {
+                            "type": "float",
+                            "default": 1,
+                            "desc": "the spread or \"width\" of the normal distribution",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "normal_standard_deviation",
+                            "value": 10
+                        },
+                        "poisson_events": {
+                            "type": "float",
+                            "default": 1,
+                            "desc": "the expected number of events occurring in a fixed time-interval when distribution is poisson",
+                            "overload": null,
+                            "functionName": "RAND",
+                            "param": "poisson_events",
+                            "value": 1
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": "unused in this node",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector|Scalar",
+                            "desc": "Vector if size > 1\nv: the random samples\n\nScalar if size = 1\nc: the random number"
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/RAND/RAND.py"
+                },
+                "position": {
+                    "x": 572.5116078210998,
+                    "y": -1066.4123600127482
+                },
+                "width": 216,
+                "height": 197,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 572.5116078210998,
+                    "y": -1066.4123600127482
+                },
+                "dragging": false
+            },
+            {
+                "id": "TIMER-8ec35a48-d203-4476-9b71-e1c9cb2f9e26",
+                "type": "CONTROL_FLOW",
+                "data": {
+                    "id": "TIMER-8ec35a48-d203-4476-9b71-e1c9cb2f9e26",
+                    "label": "TIMER 1",
+                    "func": "TIMER",
+                    "type": "CONTROL_FLOW",
+                    "ctrls": {
+                        "sleep_time": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "number of seconds to sleep",
+                            "overload": null,
+                            "functionName": "TIMER",
+                            "param": "sleep_time",
+                            "value": 0.5
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": null,
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Any",
+                            "desc": "Returns the input if one was passed in."
+                        }
+                    ],
+                    "path": "CONTROL_FLOW/TIMERS/TIMER/TIMER.py"
+                },
+                "position": {
+                    "x": 1980.703046540871,
+                    "y": -765.6866825519197
+                },
+                "width": 236,
+                "height": 140,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 1980.703046540871,
+                    "y": -765.6866825519197
+                },
+                "dragging": false
+            },
+            {
+                "id": "LINE-786e52e6-1357-416d-9960-0c7ced9d204a",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "LINE-786e52e6-1357-416d-9960-0c7ced9d204a",
+                    "label": "LINE",
+                    "func": "LINE",
+                    "type": "VISUALIZATION",
+                    "ctrls": {
+                        "xaxis_title": {
+                            "type": "str",
+                            "default": "",
+                            "desc": "Choose the label for the x axis.",
+                            "overload": null,
+                            "functionName": "LINE",
+                            "param": "xaxis_title",
+                            "value": ""
+                        },
+                        "yaxis_title": {
+                            "type": "str",
+                            "default": "",
+                            "desc": "Choose the label for the y axis.",
+                            "overload": null,
+                            "functionName": "LINE",
+                            "param": "yaxis_title",
+                            "value": ""
+                        },
+                        "x_log_scale": {
+                            "type": "bool",
+                            "default": false,
+                            "desc": null,
+                            "overload": null,
+                            "functionName": "LINE",
+                            "param": "x_log_scale",
+                            "value": false
+                        },
+                        "y_log_scale": {
+                            "type": "bool",
+                            "default": false,
+                            "desc": null,
+                            "overload": null,
+                            "functionName": "LINE",
+                            "param": "y_log_scale",
+                            "value": false
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedPair|DataFrame|Matrix|Vector",
+                            "desc": "the DataContainer to be visualized",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly Line visualization of the input data"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/LINE/LINE.py"
+                },
+                "position": {
+                    "x": 1596.813428229114,
+                    "y": -823.2439585173903
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 1596.813428229114,
+                    "y": -823.2439585173903
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "RAND-2c8f3a6e-310e-488a-a3b0-861de42c8f54->UNIX_TIMESTAMP-d7d80ec6-7362-4191-aad5-78d9d8fa2ba2_0e42c5b6-55c3-430c-8915-54ab3196500d",
+                "source": "RAND-2c8f3a6e-310e-488a-a3b0-861de42c8f54",
+                "target": "UNIX_TIMESTAMP-d7d80ec6-7362-4191-aad5-78d9d8fa2ba2",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Vector"
+                }
+            },
+            {
+                "id": "UNIX_TIMESTAMP-d7d80ec6-7362-4191-aad5-78d9d8fa2ba2->TIMER-ca59e144-453d-4a6c-b83c-78f0036d681e_58a5e1b1-8e34-4949-b66f-c615711c4fd4",
+                "source": "UNIX_TIMESTAMP-d7d80ec6-7362-4191-aad5-78d9d8fa2ba2",
+                "target": "TIMER-ca59e144-453d-4a6c-b83c-78f0036d681e",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Scalar"
+                }
+            },
+            {
+                "id": "TIMER-ca59e144-453d-4a6c-b83c-78f0036d681e->LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8_5d17892b-98b8-416e-931c-2df17420fbcf",
+                "source": "TIMER-ca59e144-453d-4a6c-b83c-78f0036d681e",
+                "target": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Any"
+                }
+            },
+            {
+                "id": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8->RAND-80e7c4ea-bf2d-4aeb-9fb5-1e84438abd8a_848d378f-2bf7-4c03-b76f-d0d7f21999f3",
+                "source": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8",
+                "target": "RAND-80e7c4ea-bf2d-4aeb-9fb5-1e84438abd8a",
+                "sourceHandle": "body",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Any"
+                }
+            },
+            {
+                "id": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8->FEEDBACK-64a10596-dff0-442a-a07f-ce1a4e9ca980_5dbd989f-c61f-48cb-9e8c-8713f2c746bf",
+                "source": "LOOP-23ac2803-29a8-4e96-af07-04e7bf0d36c8",
+                "target": "FEEDBACK-64a10596-dff0-442a-a07f-ce1a4e9ca980",
+                "sourceHandle": "body",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Any"
+                }
+            },
+            {
+                "id": "RAND-80e7c4ea-bf2d-4aeb-9fb5-1e84438abd8a->UNIX_TIMESTAMP-4b42cb5e-57a8-4726-9a7e-22f0f99e51fb_735b0f91-f41b-4b0f-9a2b-1ca1fdc49a58",
+                "source": "RAND-80e7c4ea-bf2d-4aeb-9fb5-1e84438abd8a",
+                "target": "UNIX_TIMESTAMP-4b42cb5e-57a8-4726-9a7e-22f0f99e51fb",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Vector"
+                }
+            },
+            {
+                "id": "UNIX_TIMESTAMP-4b42cb5e-57a8-4726-9a7e-22f0f99e51fb->APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48_8dba60da-c95c-49f9-9e62-1611845c2ff4",
+                "source": "UNIX_TIMESTAMP-4b42cb5e-57a8-4726-9a7e-22f0f99e51fb",
+                "target": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48",
+                "sourceHandle": "default",
+                "targetHandle": "secondary_dp",
+                "data": {
+                    "outputType": "Scalar"
+                }
+            },
+            {
+                "id": "FEEDBACK-64a10596-dff0-442a-a07f-ce1a4e9ca980->APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48_7584140a-3f40-4e0e-8aa1-a6a119d2abcf",
+                "source": "FEEDBACK-64a10596-dff0-442a-a07f-ce1a4e9ca980",
+                "target": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48",
+                "sourceHandle": "default",
+                "targetHandle": "primary_dp",
+                "data": {
+                    "outputType": "Any"
+                }
+            },
+            {
+                "id": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48->LINE-786e52e6-1357-416d-9960-0c7ced9d204a_ff84ace3-05a5-46d4-b83f-93b9451e712f",
+                "source": "APPEND-44d02537-f0f6-4db2-bd73-b8a9c8c5cc48",
+                "target": "LINE-786e52e6-1357-416d-9960-0c7ced9d204a",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "OrderedPair"
+                }
+            },
+            {
+                "id": "LINE-786e52e6-1357-416d-9960-0c7ced9d204a->TIMER-8ec35a48-d203-4476-9b71-e1c9cb2f9e26_45c20ad3-bb85-42bc-b0e9-a81f28629d7e",
+                "source": "LINE-786e52e6-1357-416d-9960-0c7ced9d204a",
+                "target": "TIMER-8ec35a48-d203-4476-9b71-e1c9cb2f9e26",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Plotly"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}

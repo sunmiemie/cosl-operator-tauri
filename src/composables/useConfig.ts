@@ -47,6 +47,10 @@ export interface AppConfig {
   
   // 安全设置
   lockerPassword: string   // 锁定密码 (MD5 加密后存储)
+  
+  // Flojoy Python 环境设置
+  flojoyPythonPath: string       // Python 解释器路径
+  flojoyEnvInitialized: boolean  // 环境是否已初始化（依赖已安装）
 }
 
 // 默认配置
@@ -76,6 +80,9 @@ const defaultConfig: AppConfig = {
   hiddenMenus: [],
   // 安全设置默认值（默认密码: 12345678）
   lockerPassword: DEFAULT_LOCKER_PASSWORD,
+  // Flojoy Python 环境默认值
+  flojoyPythonPath: '',
+  flojoyEnvInitialized: false,
 }
 
 // 当前配置
@@ -123,6 +130,8 @@ export async function initializeConfig(): Promise<AppConfig> {
       const autoReUpload = await store.get<boolean>('autoReUpload')
       const hiddenMenus = await store.get<string[]>('hiddenMenus')
       const lockerPassword = await store.get<string>('lockerPassword')
+      const flojoyPythonPath = await store.get<string>('flojoyPythonPath')
+      const flojoyEnvInitialized = await store.get<boolean>('flojoyEnvInitialized')
 
       // 检查是否需要写入默认值（首次启动）
       let needsSave = false
@@ -188,6 +197,16 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('lockerPassword', defaultConfig.lockerPassword)
         needsSave = true
       }
+      
+      // Flojoy Python 环境配置
+      if (flojoyPythonPath === null || flojoyPythonPath === undefined) {
+        await store.set('flojoyPythonPath', defaultConfig.flojoyPythonPath)
+        needsSave = true
+      }
+      if (flojoyEnvInitialized === null || flojoyEnvInitialized === undefined) {
+        await store.set('flojoyEnvInitialized', defaultConfig.flojoyEnvInitialized)
+        needsSave = true
+      }
 
       // 保存默认配置到文件
       if (needsSave) {
@@ -210,6 +229,8 @@ export async function initializeConfig(): Promise<AppConfig> {
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,
         hiddenMenus: hiddenMenus ?? defaultConfig.hiddenMenus,
         lockerPassword: lockerPassword ?? defaultConfig.lockerPassword,
+        flojoyPythonPath: flojoyPythonPath ?? defaultConfig.flojoyPythonPath,
+        flojoyEnvInitialized: flojoyEnvInitialized ?? defaultConfig.flojoyEnvInitialized,
       }
 
       // 监听配置变更事件（跨窗口同步）
