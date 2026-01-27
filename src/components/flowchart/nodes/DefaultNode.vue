@@ -8,6 +8,11 @@ import { computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import { Icon } from '@iconify/vue'
 
+// 禁用自动属性继承，避免 fragment 警告
+defineOptions({
+  inheritAttrs: false,
+})
+
 interface IOPort {
   name: string
   id: string
@@ -60,6 +65,19 @@ const normalizedOutputs = computed(() => {
   }))
 })
 
+// 计算每个 handle 的 top 位置（百分比）
+// 使用 space-evenly 逻辑：(index + 1) / (count + 1) * 100%
+function getHandleTop(index: number, total: number): string {
+  return `${((index + 1) / (total + 1)) * 100}%`
+}
+
+// 计算节点高度 - 对齐 Studio: maxInputOutput * 58 + 38
+const nodeHeight = computed(() => {
+  const maxIO = Math.max(normalizedInputs.value.length, normalizedOutputs.value.length)
+  // 最小高度 96px，每个 IO 端口 58px，基础 padding 38px
+  return Math.max(96, maxIO * 58 + 38)
+})
+
 // 状态图标
 const statusIcon = computed(() => {
   switch (props.data.status) {
@@ -90,60 +108,63 @@ const statusClass = computed(() => {
 </script>
 
 <template>
-  <!-- 直接渲染节点内容，不添加额外包装层 -->
-  <!-- 输入连接点 - 使用 Studio 的 id 作为 handle ID -->
-  <Handle
-    v-for="(input, index) in normalizedInputs"
-    :key="input.id"
-    :id="input.id"
-    type="target"
-    :position="Position.Left"
-    class="node-handle input-handle"
-    :style="{ top: `${((index + 1) / (normalizedInputs.length + 1)) * 100}%` }"
-    :title="`${input.name} (${input.type})`"
-  />
-  
-  <!-- 节点主体 -->
-  <div class="node-body" :class="[statusClass, { 'is-selected': selected }]">
-    <!-- 状态图标 -->
-    <Icon
-      v-if="statusIcon"
-      :icon="statusIcon"
-      class="status-icon"
-      :class="{ spinning: data.status === 'running' }"
+  <!-- 节点容器 -->
+  <div
+    class="default-node"
+    :class="[statusClass, { 'is-selected': selected }]"
+    :style="{ minHeight: nodeHeight + 'px' }"
+  >
+    <!-- 输入连接点 - 使用 Studio 的 id 作为 handle ID -->
+    <Handle
+      v-for="(input, index) in normalizedInputs"
+      :key="'input-' + input.id"
+      :id="input.id"
+      type="target"
+      :position="Position.Left"
+      class="handle-left"
+      :style="{ top: getHandleTop(index, normalizedInputs.length) }"
+      :title="`${input.name} (${input.type})`"
     />
-    
-    <!-- 节点标签 -->
-    <div class="node-label">{{ data.label }}</div>
-    
-    <!-- 函数名（如果与 label 不同） -->
-    <div v-if="data.func && data.func !== data.label" class="block-key">
-      {{ data.func }}
+
+    <!-- 节点内容 -->
+    <div class="node-content">
+      <!-- 状态图标 -->
+      <Icon
+        v-if="statusIcon"
+        :icon="statusIcon"
+        class="status-icon"
+        :class="{ spinning: data.status === 'running' }"
+      />
+
+      <!-- 节点标签 -->
+      <div class="node-label">{{ data.label }}</div>
+
+      <!-- 函数名（如果与 label 不同） -->
+      <div v-if="data.func && data.func !== data.label" class="block-key">
+        {{ data.func }}
+      </div>
     </div>
+
+    <!-- 输出连接点 - 使用 Studio 的 id 作为 handle ID -->
+    <Handle
+      v-for="(output, index) in normalizedOutputs"
+      :key="'output-' + output.id"
+      :id="output.id"
+      type="source"
+      :position="Position.Right"
+      class="handle-right"
+      :style="{ top: getHandleTop(index, normalizedOutputs.length) }"
+      :title="`${output.name} (${output.type})`"
+    />
   </div>
-  
-  <!-- 输出连接点 - 使用 Studio 的 id 作为 handle ID -->
-  <Handle
-    v-for="(output, index) in normalizedOutputs"
-    :key="output.id"
-    :id="output.id"
-    type="source"
-    :position="Position.Right"
-    class="node-handle output-handle"
-    :style="{ top: `${((index + 1) / (normalizedOutputs.length + 1)) * 100}%` }"
-    :title="`${output.name} (${output.type})`"
-  />
 </template>
 
 <style scoped>
-/* 节点主体样式 - 对齐 Studio DefaultBlock */
-/* Studio 节点尺寸：小节点约 150x120，大节点约 216x233 */
-.node-body {
-  /* 使用 Studio 典型的最小尺寸 */
+/* 节点主体样式 */
+.default-node {
   min-width: 150px;
-  min-height: 80px;
   max-width: 250px;
-  padding: 16px 20px;
+  padding: 16px 24px;
   background: var(--color-bg-2, #fff);
   border: 2px solid var(--color-primary, #3b82f6);
   border-radius: 8px;
@@ -151,29 +172,38 @@ const statusClass = computed(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
   position: relative;
   transition: box-shadow 0.2s ease;
   box-sizing: border-box;
 }
 
-.node-body.is-selected {
+.default-node.is-selected {
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
   border-color: #2563eb;
 }
 
-.node-body.status-running {
+.default-node.status-running {
   border-color: var(--color-warning, #f59e0b);
   box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
 }
 
-.node-body.status-success {
+.default-node.status-success {
   border-color: var(--color-success, #22c55e);
 }
 
-.node-body.status-error {
+.default-node.status-error {
   border-color: var(--color-danger, #ef4444);
   box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+/* 节点内容 */
+.node-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
 }
 
 .status-icon {
@@ -203,7 +233,6 @@ const statusClass = computed(() => {
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* 允许最多 2 行 */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -221,28 +250,33 @@ const statusClass = computed(() => {
   white-space: nowrap;
 }
 
-/* Handle 样式 - 与 Studio 对齐 */
-.node-handle {
+/* Handle 样式 - 覆盖 Vue Flow 默认样式 */
+.handle-left,
+.handle-right {
   width: 12px !important;
   height: 12px !important;
   background: var(--color-primary, #3b82f6) !important;
   border: 2px solid #fff !important;
   border-radius: 50% !important;
-  /* 确保 handle 定位正确 */
-  position: absolute !important;
 }
 
-.node-handle:hover {
+/* 左侧 Handle - 需要覆盖 Vue Flow 的默认 left 定位 */
+.handle-left {
+  left: -6px !important;
+  /* 覆盖 Vue Flow 的 translateY(-50%) */
+  transform: translateY(-50%) !important;
+}
+
+/* 右侧 Handle - 需要覆盖 Vue Flow 的默认 right 定位 */
+.handle-right {
+  right: -6px !important;
+  /* 覆盖 Vue Flow 的 translateY(-50%) */
+  transform: translateY(-50%) !important;
+}
+
+.handle-left:hover,
+.handle-right:hover {
   background: var(--color-primary-dark, #2563eb) !important;
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.8);
-  /* 不使用 transform，避免位移问题 */
-}
-
-.input-handle {
-  left: -6px !important;
-}
-
-.output-handle {
-  right: -6px !important;
 }
 </style>

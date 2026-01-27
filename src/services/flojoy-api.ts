@@ -4,98 +4,20 @@
  * 数据结构对齐 Studio
  */
 import ky, { HTTPError } from 'ky'
-import { z } from 'zod'
+import {
+  blockManifestSchema,
+  blockMetadataSchema,
+  LegacyDeviceInfoSchema,
+  type BlockManifest,
+  type BlockMetadata,
+  type BlockDefinition,
+  type BlockSection,
+  type LegacyDeviceInfo,
+} from '@/types'
 
-// ========== 类型定义（对齐 Studio） ==========
-
-// Block IO 定义
-const BlockIOSchema = z.object({
-  name: z.string(),
-  id: z.string(),
-  type: z.string(),
-  desc: z.string().nullable(),
-})
-
-const BlockInputSchema = BlockIOSchema.extend({
-  multiple: z.boolean(),
-})
-
-const BlockOutputSchema = BlockIOSchema
-
-// Block 参数值
-const BlockParameterValue = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.null(),
-  z.undefined(),
-])
-
-// Block 参数定义
-const BlockParameterSchema = z.object({
-  type: z.string(),
-  default: BlockParameterValue,
-  options: z.union([z.string(), z.number()]).array().optional(),
-  desc: z.string().nullable(),
-  overload: z.record(z.string(), z.array(z.string())).nullable(),
-})
-
-// pip 依赖
-const PipDependencySchema = z.object({
-  name: z.string(),
-  v: z.string().nullable(),
-})
-
-// Block 定义（Manifest 叶子节点）
-const BlockDefinitionSchema = z.object({
-  name: z.string(),
-  key: z.string(),
-  type: z.string(),
-  inputs: z.array(BlockInputSchema).optional(),
-  outputs: z.array(BlockOutputSchema).optional(),
-  parameters: z.record(z.string(), BlockParameterSchema).optional(),
-  init_parameters: z.record(z.string(), BlockParameterSchema).optional(),
-  pip_dependencies: z.array(PipDependencySchema).optional(),
-  children: z.null(),
-})
-
-export type BlockDefinition = z.infer<typeof BlockDefinitionSchema>
-
-// Block 分类节点（Manifest 父节点）
-type BlockSectionType = {
-  name: string
-  key?: string
-  children: (BlockSectionType | BlockDefinition)[]
-}
-
-const BlockSectionSchema: z.ZodType<BlockSectionType> = z.object({
-  name: z.string(),
-  key: z.string().optional(),
-  children: z
-    .union([z.lazy(() => BlockSectionSchema), BlockDefinitionSchema])
-    .array(),
-})
-
-// Block Manifest（树结构）
-export const BlockManifestTreeSchema = z.object({
-  name: z.literal('ROOT'),
-  children: z.union([BlockSectionSchema, BlockDefinitionSchema]).array(),
-})
-
-export type BlockManifestTree = z.infer<typeof BlockManifestTreeSchema>
-export type BlockSection = z.infer<typeof BlockSectionSchema>
-
-// Block Metadata（平铺结构）
-export const BlockMetadataSchema = z.record(
-  z.string(),
-  z.object({
-    metadata: z.string(),
-    path: z.string(),
-    full_path: z.string(),
-  })
-)
-
-export type BlockMetadata = z.infer<typeof BlockMetadataSchema>
+// Re-export types for backwards compatibility
+export type { BlockDefinition, BlockSection, BlockMetadata }
+export type BlockManifestTree = BlockManifest
 
 // 兼容旧格式的 Block 元数据项
 export interface BlockMetadataItem {
@@ -110,15 +32,8 @@ export interface BlockMetadataItem {
   pip_dependencies?: string[]
 }
 
-// 设备信息
-export const DeviceInfoSchema = z.object({
-  serial_devices: z.array(z.string()).optional(),
-  visa_devices: z.array(z.string()).optional(),
-  cameras: z.array(z.string()).optional(),
-  nidaqmx_devices: z.array(z.string()).optional(),
-  nidmm_devices: z.array(z.string()).optional(),
-})
-export type DeviceInfo = z.infer<typeof DeviceInfoSchema>
+// Re-export device types
+export type DeviceInfo = LegacyDeviceInfo
 
 // 流程图节点数据（简化版，用于 API 调用）
 export interface FlowchartNode {
@@ -161,7 +76,7 @@ let currentApiUrl = 'http://127.0.0.1:5392'
 let apiClient = ky.create({
   prefixUrl: currentApiUrl,
   timeout: 30000,
-  // 不使用 credentials: 'include'，避免与 Access-Control-Allow-Origin: * 冲突
+  // 不使用 credentials: 'include'，避免与 CORS 冲突
 })
 
 /**
@@ -203,7 +118,7 @@ export async function checkHealth(): Promise<boolean> {
 export async function getManifestTree(blocksPath?: string): Promise<BlockManifestTree> {
   const searchParams = blocksPath ? { blocks_path: blocksPath } : undefined
   const response = await apiClient.get('blocks/manifest', { searchParams }).json()
-  return BlockManifestTreeSchema.parse(response)
+  return blockManifestSchema.parse(response)
 }
 
 /**
@@ -220,7 +135,7 @@ export async function getBlockMetadata(
     searchParams.custom_dir_changed = customDirChanged
   }
   const response = await apiClient.get('blocks/metadata', { searchParams }).json()
-  return BlockMetadataSchema.parse(response)
+  return blockMetadataSchema.parse(response)
 }
 
 /**
@@ -288,7 +203,7 @@ export async function getDeviceInfo(
       include_nidmm_drivers: discoverNIDMM,
     },
   }).json()
-  return DeviceInfoSchema.parse(response)
+  return LegacyDeviceInfoSchema.parse(response)
 }
 
 /**

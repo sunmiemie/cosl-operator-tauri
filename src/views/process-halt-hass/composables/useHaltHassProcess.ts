@@ -5,23 +5,41 @@
  */
 import { ref, reactive, computed } from 'vue'
 import type { Node, Edge } from '@vue-flow/core'
+import { http } from '@/services/http'
+import { useAuth } from '@/composables/useAuth'
 import { useFileSystem } from '@/composables/useFileSystem'
+import {
+  saveHaltHassProcess,
+  loadHaltHassProcess,
+  getHaltHassProcessList,
+  getHaltHassVersionList,
+  submitHaltHassToCheck,
+  type HaltHassProcessListItem,
+  type HaltHassVersionItem,
+} from '@/services/halt-hass-api'
 import {
   HaltHassProcessJson,
   HaltHassMetadata,
-  HaltHassTestParams,
   HaltHassEditForm,
   BlockData,
   RunSettings,
+  InstallationStep,
+  InstallationGuide,
   defaultRunSettings,
   createEmptyHaltHassJson,
   createEmptyEditForm,
 } from '../types'
 import {
   serializeFlowchart,
-  deserializeFlowchart,
   resetAllNodeStatus,
 } from '@/services/flojoy-adapter'
+
+// 树节点接口
+export interface TreeNode {
+  id: number
+  label: string
+  children?: TreeNode[]
+}
 
 // 暂存项类型
 interface TempItem {
@@ -33,36 +51,43 @@ interface TempItem {
 }
 
 export function useHaltHassProcess() {
+  const { getAuthHeaders } = useAuth()
   const fileSystem = useFileSystem()
 
   // ========== 状态 ==========
-  
+
   // 当前工艺 JSON 数据
   const processJson = ref<HaltHassProcessJson>(createEmptyHaltHassJson())
-  
+
   // 编辑表单状态
   const editForm = reactive<HaltHassEditForm>(createEmptyEditForm())
-  
+
   // 加载状态
   const isLoading = ref(false)
-  
+
   // 保存状态
   const isSaving = ref(false)
-  
+
   // 错误信息
   const errorMessage = ref<string | null>(null)
-  
+
   // 暂存列表
   const tempList = ref<TempItem[]>([])
 
+  // 电路板型号树数据
+  const treeData = ref<TreeNode[]>([])
+
+  // 是否在线模式
+  const isOnline = ref(true)
+
   // ========== 计算属性 ==========
-  
+
   // 元信息快捷访问
   const metadata = computed(() => processJson.value.metadata)
-  
-  // 测试参数快捷访问
-  const testParams = computed(() => processJson.value.testParams)
-  
+
+  // 安装指导快捷访问
+  const installGuide = computed(() => processJson.value.installGuide)
+
   // 流程图数据快捷访问
   const flowchart = computed(() => processJson.value.flowchart)
   
@@ -89,13 +114,58 @@ export function useHaltHassProcess() {
     editForm.hasUnsavedChanges = true
   }
 
-  // 更新测试参数
-  function updateTestParams(updates: Partial<HaltHassTestParams>) {
-    processJson.value.testParams = {
-      ...processJson.value.testParams,
-      ...updates,
-    }
+  // ========== 安装指导相关方法 ==========
+
+  // 更新整个安装指导
+  function updateInstallGuide(guide: InstallationGuide) {
+    processJson.value.installGuide = guide
     editForm.hasUnsavedChanges = true
+  }
+
+  // 添加安装步骤
+  function addInstallStep(step?: Partial<InstallationStep>) {
+    const steps = processJson.value.installGuide.steps
+    const newId = steps.length > 0 ? Math.max(...steps.map((s) => s.id)) + 1 : 1
+    const newStep: InstallationStep = {
+      id: newId,
+      title: step?.title || '',
+      content: step?.content || '',
+      images: step?.images || [],
+      video: step?.video,
+    }
+    processJson.value.installGuide.steps.push(newStep)
+    editForm.hasUnsavedChanges = true
+    return newStep
+  }
+
+  // 更新安装步骤
+  function updateInstallStep(stepId: number, updates: Partial<InstallationStep>) {
+    const steps = processJson.value.installGuide.steps
+    const index = steps.findIndex((s) => s.id === stepId)
+    if (index !== -1) {
+      steps[index] = { ...steps[index], ...updates }
+      editForm.hasUnsavedChanges = true
+    }
+  }
+
+  // 删除安装步骤
+  function deleteInstallStep(stepId: number) {
+    const steps = processJson.value.installGuide.steps
+    const index = steps.findIndex((s) => s.id === stepId)
+    if (index !== -1) {
+      steps.splice(index, 1)
+      editForm.hasUnsavedChanges = true
+    }
+  }
+
+  // 移动安装步骤（重新排序）
+  function moveInstallStep(fromIndex: number, toIndex: number) {
+    const steps = processJson.value.installGuide.steps
+    if (fromIndex >= 0 && fromIndex < steps.length && toIndex >= 0 && toIndex < steps.length) {
+      const [removed] = steps.splice(fromIndex, 1)
+      steps.splice(toIndex, 0, removed)
+      editForm.hasUnsavedChanges = true
+    }
   }
 
   // 更新流程图数据（使用适配层序列化）
@@ -161,8 +231,13 @@ export function useHaltHassProcess() {
       const data = JSON.parse(text) as HaltHassProcessJson
 
       // 验证基本结构
-      if (!data.metadata || !data.testParams || !data.flowchart) {
+      if (!data.metadata || !data.flowchart) {
         throw new Error('无效的工艺文件格式')
+      }
+
+      // 确保 installGuide 存在（兼容旧格式）
+      if (!data.installGuide) {
+        data.installGuide = { steps: [] }
       }
 
       processJson.value = data
@@ -209,29 +284,36 @@ export function useHaltHassProcess() {
   async function saveToTemp(): Promise<boolean> {
     try {
       isSaving.value = true
-      
+
       // 更新时间戳
       processJson.value.metadata.updatedAt = new Date().toISOString()
-      
+
+      // 获取第一个电路板组的 ID（兼容暂存系统）
+      const firstBoardId = metadata.value.boardGroup.length > 0
+        ? metadata.value.boardGroup[0].id
+        : -1
+
       const success = await fileSystem.saveTempProcess(
         'halt-hass' as any,
-        metadata.value.boardModelId,
+        firstBoardId,
         metadata.value.name || 'unnamed',
         metadata.value.version,
         editForm.isEdit,
         editForm.processId > 0 ? editForm.processId : undefined,
+        // 使用 any 来适配 HALT-HASS 的多电路板组结构
         {
           name: metadata.value.name,
           version: metadata.value.version,
-          boardModelId: metadata.value.boardModelId,
+          boardModelId: firstBoardId,
+          boardGroup: metadata.value.boardGroup,
           json: processJson.value,
-        },
+        } as any,
       )
-      
+
       if (success) {
         editForm.hasUnsavedChanges = false
       }
-      
+
       return success
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : '暂存失败'
@@ -242,18 +324,129 @@ export function useHaltHassProcess() {
     }
   }
 
-  // TODO: 上传工艺到后端
-  async function uploadProcess(): Promise<boolean> {
-    console.warn('TODO: uploadProcess - 后端接口待对接')
-    errorMessage.value = '上传功能暂未实现，请使用导出功能'
-    return false
+  // 上传工艺到后端
+  async function uploadProcess(userId?: number): Promise<boolean> {
+    try {
+      isSaving.value = true
+      errorMessage.value = null
+
+      // 更新时间戳
+      processJson.value.metadata.updatedAt = new Date().toISOString()
+
+      // 调用保存 API
+      const result = await saveHaltHassProcess(
+        processJson.value,
+        editForm.isEdit && editForm.processId > 0 ? editForm.processId : undefined,
+        userId
+      )
+
+      if (result.success && result.data) {
+        // 更新编辑状态
+        editForm.processId = result.data.id
+        editForm.isEdit = true
+        editForm.hasUnsavedChanges = false
+        console.log('工艺上传成功, ID:', result.data.id)
+        return true
+      } else {
+        errorMessage.value = result.error || '上传失败'
+        return false
+      }
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '上传失败'
+      console.error('上传工艺失败:', error)
+      return false
+    } finally {
+      isSaving.value = false
+    }
   }
 
-  // TODO: 从后端拉取工艺
-  async function fetchProcess(_processId: number): Promise<boolean> {
-    console.warn('TODO: fetchProcess - 后端接口待对接')
-    errorMessage.value = '拉取功能暂未实现，请使用导入功能'
-    return false
+  // 从后端拉取工艺
+  async function fetchProcess(processId: number): Promise<boolean> {
+    try {
+      isLoading.value = true
+      errorMessage.value = null
+
+      const result = await loadHaltHassProcess(processId)
+
+      if (result.success && result.data) {
+        processJson.value = result.data
+        editForm.processId = processId
+        editForm.isEdit = true
+        editForm.hasUnsavedChanges = false
+        console.log('工艺加载成功:', result.data.metadata.name)
+        return true
+      } else {
+        errorMessage.value = result.error || '加载失败'
+        return false
+      }
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '加载失败'
+      console.error('加载工艺失败:', error)
+      return false
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  // 提交工艺审核
+  async function submitToCheck(): Promise<boolean> {
+    if (editForm.processId <= 0) {
+      errorMessage.value = '请先保存工艺到服务器'
+      return false
+    }
+
+    try {
+      isSaving.value = true
+      const result = await submitHaltHassToCheck(editForm.processId)
+
+      if (result.success) {
+        console.log('工艺已提交审核')
+        return true
+      } else {
+        errorMessage.value = result.error || '提交审核失败'
+        return false
+      }
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '提交审核失败'
+      console.error('提交审核失败:', error)
+      return false
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  // 获取后端工艺列表
+  async function fetchProcessList(params?: {
+    currentPage?: number
+    pageSize?: number
+    name?: string
+    status?: string
+    boardGroupId?: string
+  }): Promise<HaltHassProcessListItem[]> {
+    try {
+      const result = await getHaltHassProcessList(params || {})
+      if (result.success && result.data) {
+        return result.data.list
+      }
+      return []
+    } catch (error) {
+      console.error('获取工艺列表失败:', error)
+      return []
+    }
+  }
+
+  // 获取工艺版本列表
+  async function fetchVersionList(boardGroupId: string): Promise<HaltHassVersionItem[]> {
+    try {
+      const result = await getHaltHassVersionList(boardGroupId)
+      if (result.success && result.data) {
+        return result.data
+      }
+      return []
+    } catch (error) {
+      console.error('获取版本列表失败:', error)
+      return []
+    }
   }
 
   // 加载暂存的工艺（通过文件名）
@@ -319,6 +512,24 @@ export function useHaltHassProcess() {
     }
   }
 
+  // 获取电路板型号树数据
+  async function fetchTreeData(): Promise<void> {
+    try {
+      const response = await http.get<{ data: { list: TreeNode[] } }>(
+        '/equipment/instrument/list',
+        getAuthHeaders(),
+        { currentPage: '1', size: '999999', isTree: 'true' }
+      )
+      if (response.success && response.data?.data) {
+        treeData.value = response.data.data.list
+        isOnline.value = true
+      }
+    } catch (error) {
+      console.error('获取电路板型号树失败:', error)
+      isOnline.value = false
+    }
+  }
+
   return {
     // 状态
     processJson,
@@ -327,18 +538,26 @@ export function useHaltHassProcess() {
     isSaving,
     errorMessage,
     tempList,
-    
+    treeData,
+    isOnline,
+
     // 计算属性
     metadata,
-    testParams,
+    installGuide,
     flowchart,
     canSave,
-    
+
     // 基础方法
     resetProcess,
     updateMetadata,
-    updateTestParams,
-    
+
+    // 安装指导方法
+    updateInstallGuide,
+    addInstallStep,
+    updateInstallStep,
+    deleteInstallStep,
+    moveInstallStep,
+
     // 流程图方法
     updateFlowchart,
     updateRunSettings,
@@ -346,7 +565,7 @@ export function useHaltHassProcess() {
     resetNodeStatuses,
     getRunSettings,
     getObserveBlocks,
-    
+
     // 文件操作
     importFromFile,
     exportToFile,
@@ -356,5 +575,11 @@ export function useHaltHassProcess() {
     loadTempProcess,
     loadFromTemp,
     fetchTempList,
+    fetchTreeData,
+
+    // 后端 API 操作
+    submitToCheck,
+    fetchProcessList,
+    fetchVersionList,
   }
 }

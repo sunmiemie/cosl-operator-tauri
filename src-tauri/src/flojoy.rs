@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
+use tauri::path::BaseDirectory;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -51,39 +52,20 @@ impl Default for FlojoyBackendState {
 }
 
 /// 获取 Flojoy 后端目录路径
+/// 根据 Tauri 官方文档，使用 resolve 方法解析资源路径
+/// 参考: https://v2.tauri.app/zh-cn/develop/resources/
 fn get_flojoy_dir(app: &AppHandle) -> PathBuf {
-    // 生产模式：使用 resource_dir
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let prod_path = resource_dir.join("flojoy");
-        if prod_path.exists() {
-            return prod_path;
+    // 使用 Tauri 官方 API 解析资源路径
+    // tauri.conf.json 配置: "resources/flojoy/**/*" (数组格式保留路径结构)
+    // 解析路径需要与配置中的源路径一致
+    println!("resource_path: {:?}", app.path().resolve("resources/flojoy", BaseDirectory::Resource));
+    match app.path().resolve("resources/flojoy", BaseDirectory::Resource) {
+        Ok(resource_path) => resource_path,
+        Err(e) => {
+            eprintln!("Failed to resolve flojoy resource path: {}", e);
+            PathBuf::from("resources/flojoy")
         }
     }
-    
-    // 开发模式：从可执行文件路径推断
-    if let Ok(exe_path) = std::env::current_exe() {
-        // exe 在 target/debug 或 target/release 下
-        // 需要向上找到 src-tauri/resources/flojoy
-        if let Some(target_dir) = exe_path.parent() {
-            // target/debug -> src-tauri
-            let src_tauri = target_dir.parent().and_then(|p| p.parent());
-            if let Some(src_tauri) = src_tauri {
-                let dev_path = src_tauri.join("resources").join("flojoy");
-                if dev_path.exists() {
-                    return dev_path;
-                }
-            }
-        }
-    }
-    
-    // 最后尝试当前工作目录
-    let cwd_path = PathBuf::from("src-tauri/resources/flojoy");
-    if cwd_path.exists() {
-        return cwd_path;
-    }
-    
-    // 默认返回（可能不存在）
-    PathBuf::from("resources/flojoy")
 }
 
 /// 配置 Python 解释器路径
@@ -419,30 +401,99 @@ pub fn start_flojoy_backend(
 
     // 获取 poetry 路径
     let poetry_path = get_poetry_path(&py_path);
+    
+    // 工作目录应该是 flojoy 根目录（不是 captain 子目录）
+    // 因为 main.py 中使用 "from captain.routes import ..." 这样的导入
+    // Python 需要从 flojoy/ 目录运行才能正确解析 captain 模块
+    let working_dir = backend_dir.clone();
+    
+    // 规范化路径，去掉 Windows 扩展路径前缀 \\?\
+    let working_dir_str = working_dir.to_string_lossy().to_string();
+    let working_dir_clean = if working_dir_str.starts_with(r"\\?\") {
+        PathBuf::from(&working_dir_str[4..])
+    } else {
+        working_dir.clone()
+    };
+    
+    println!("[Flojoy] 后端目录: {:?}", backend_dir);
+    println!("[Flojoy] 工作目录: {:?}", working_dir_clean);
+    println!("[Flojoy] Poetry 路径: {}", poetry_path);
+    
+    // 检查 main.py 是否存在（入口在 flojoy/main.py，使用 uvicorn 运行 captain.main:app）
+    let main_py = working_dir_clean.join("main.py");
+    if !main_py.exists() {
+        return Err(format!("main.py 不存在: {:?}", main_py));
+    }
+    println!("[Flojoy] main.py 存在: {:?}", main_py);
+
+    // 获取 Python 所在目录，用于设置 PATH 环境变量
+    let python_dir = std::path::Path::new(&*py_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    
+    // 构建新的 PATH，将 Python 目录放在最前面
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = if python_dir.is_empty() {
+        current_path
+    } else {
+        format!("{};{}", python_dir, current_path)
+    };
+    
+    println!("[Flojoy] Python 目录: {}", python_dir);
 
     // 首先尝试直接使用 poetry
+    // 使用 Stdio::inherit() 以便在控制台看到错误输出
+    // 设置 PATH 环境变量确保 Poetry 使用正确的 Python
+    // 从 flojoy 根目录运行 main.py（入口文件，使用 uvicorn 运行 captain.main:app）
     let child_result = create_hidden_command(&poetry_path)
         .args(["run", "python", "main.py", "--port", &port.to_string()])
-        .current_dir(&backend_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .current_dir(&working_dir_clean)
+        .env("PATH", &new_path)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn();
 
-    let child = match child_result {
+    let mut child = match child_result {
         Ok(c) => c,
-        Err(_) => {
+        Err(e1) => {
+            println!("[Flojoy] poetry 直接启动失败: {}, 尝试 python -m poetry", e1);
             // 如果 poetry 命令失败，尝试通过 python -m poetry
             create_hidden_command(&*py_path)
                 .args(["-m", "poetry", "run", "python", "main.py", "--port", &port.to_string()])
-                .current_dir(&backend_dir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .current_dir(&working_dir_clean)
+                .env("PATH", &new_path)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
                 .spawn()
-                .map_err(|e| format!("启动后端失败: {}", e))?
+                .map_err(|e2| format!("启动后端失败: poetry: {}, python -m: {}", e1, e2))?
         }
     };
 
     let pid = child.id();
+    println!("[Flojoy] 进程已 spawn，PID: {}", pid);
+    
+    // 等待更长时间检查进程是否立即退出（Python 启动可能需要时间）
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            // 进程已退出，说明启动失败
+            return Err(format!(
+                "Flojoy 后端启动后退出，退出码: {:?}，工作目录: {:?}",
+                status.code(),
+                working_dir_clean
+            ));
+        }
+        Ok(None) => {
+            // 进程仍在运行，正常
+            println!("[Flojoy] 后端进程正在运行，PID: {}", pid);
+        }
+        Err(e) => {
+            return Err(format!("检查进程状态失败: {}", e));
+        }
+    }
+    
     *process_guard = Some(child);
 
     // 更新后端目录

@@ -9,6 +9,7 @@ import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import { type BlockManifestTree, type BlockDefinition, type BlockSection } from '@/services/flojoy-api'
 import { useBlockManifest } from '@/composables/useBlockManifest'
+import BlockDocPopover from './BlockDocPopover.vue'
 
 // 使用共享的 manifest composable
 const { manifest: sharedManifest, loadManifest: loadSharedManifest, isLoading: manifestLoading } = useBlockManifest()
@@ -26,6 +27,11 @@ const props = withDefaults(defineProps<Props>(), {
   width: 280,
 })
 
+// Use props to avoid TS6133 (props is used in template)
+const sidebarWidth = computed(() =>
+  typeof props.width === 'number' ? `${props.width}px` : props.width
+)
+
 // Emits
 const emit = defineEmits<{
   // 选择 block
@@ -37,6 +43,16 @@ const emit = defineEmits<{
 // 状态
 const searchQuery = ref('')
 const expandedCategories = ref<Set<string>>(new Set())
+const activeTab = ref<'all' | 'recent'>('all')
+
+// Recent blocks (stored in local state, max 10)
+const recentBlocks = ref<BlockDefinition[]>([])
+const MAX_RECENT = 10
+
+// Hover documentation state
+const hoveredBlock = ref<BlockDefinition | null>(null)
+const hoverPosition = ref<{ x: number; y: number } | null>(null)
+let hoverTimeout: ReturnType<typeof setTimeout> | null = null
 
 // 使用共享的 manifest 和 loading 状态
 const manifest = sharedManifest
@@ -138,7 +154,7 @@ const filteredTree = computed(() => {
   if (!manifest.value) return null
   if (!searchQuery.value) return manifest.value
 
-  const filtered = filterTreeNode(manifest.value, searchQuery.value)
+  const filtered = filterTreeNode(manifest.value as BlockManifestTree, searchQuery.value)
   return {
     name: 'ROOT' as const,
     children: filtered,
@@ -156,10 +172,12 @@ function getCategoryIcon(category: string | undefined): string {
 }
 
 // 收集所有叶子节点（用于展开/折叠计数）
-function collectLeaves(node: BlockManifestTree | BlockSection | BlockDefinition): BlockDefinition[] {
-  if (isLeaf(node)) return [node]
-  if (!node.children) return []
-  return node.children.flatMap(child => collectLeaves(child))
+function collectLeaves(node: unknown): BlockDefinition[] {
+  if (!node || typeof node !== 'object') return []
+  const n = node as Record<string, unknown>
+  if (isLeaf(n as BlockDefinition)) return [n as BlockDefinition]
+  if (!('children' in n) || !Array.isArray(n.children)) return []
+  return (n.children as unknown[]).flatMap(child => collectLeaves(child))
 }
 
 // 切换分类展开/折叠
@@ -223,11 +241,11 @@ function onBlockClick(block: BlockDefinition) {
 }
 
 // 递归收集所有分类 key（用于展开全部）
-function collectAllCategoryKeys(tree: BlockManifestTree | null): string[] {
+function collectAllCategoryKeys(tree: BlockManifestTree | Readonly<BlockManifestTree> | null): string[] {
   if (!tree?.children) return []
   const keys: string[] = []
-  
-  function collectKeys(nodes: (BlockSection | BlockDefinition)[], prefix = '') {
+
+  function collectKeys(nodes: readonly (BlockSection | BlockDefinition | Readonly<BlockSection> | Readonly<BlockDefinition>)[], prefix = '') {
     for (const node of nodes) {
       if (!isLeaf(node)) {
         const key = prefix ? `${prefix}-${node.name}` : node.name
@@ -238,7 +256,7 @@ function collectAllCategoryKeys(tree: BlockManifestTree | null): string[] {
       }
     }
   }
-  
+
   collectKeys(tree.children)
   return keys
 }
@@ -246,7 +264,7 @@ function collectAllCategoryKeys(tree: BlockManifestTree | null): string[] {
 // 展开所有
 function handleExpandAll() {
   if (manifest.value) {
-    const allKeys = collectAllCategoryKeys(manifest.value)
+    const allKeys = collectAllCategoryKeys(manifest.value as unknown as BlockManifestTree)
     expandedCategories.value = new Set(allKeys)
   }
 }
@@ -263,9 +281,109 @@ watch(searchQuery, (query) => {
   }
 })
 
+// Add block to recent list
+function addToRecent(block: BlockDefinition) {
+  // Remove if already exists
+  const filtered = recentBlocks.value.filter(b => b.key !== block.key)
+  // Add to front
+  recentBlocks.value = [block, ...filtered].slice(0, MAX_RECENT)
+  // Persist to localStorage
+  try {
+    localStorage.setItem('flojoy-recent-blocks', JSON.stringify(recentBlocks.value.map(b => b.key)))
+  } catch (e) {
+    console.warn('Failed to save recent blocks:', e)
+  }
+}
+
+// Load recent blocks from localStorage
+function loadRecentBlocks() {
+  try {
+    const saved = localStorage.getItem('flojoy-recent-blocks')
+    if (saved && manifest.value) {
+      const keys = JSON.parse(saved) as string[]
+      const blocksMap = new Map<string, BlockDefinition>()
+
+      // Recursively find all blocks by key from manifest
+      function collectBlocks(node: unknown) {
+        if (!node || typeof node !== 'object') return
+        const n = node as Record<string, unknown>
+        if (isLeaf(n as BlockDefinition)) {
+          const block = n as BlockDefinition
+          if (block.key && keys.includes(block.key)) {
+            blocksMap.set(block.key, block)
+          }
+          return
+        }
+        if ('children' in n && Array.isArray(n.children)) {
+          for (const child of n.children) {
+            collectBlocks(child)
+          }
+        }
+      }
+
+      collectBlocks(manifest.value)
+
+      // Preserve order from saved keys
+      const blocks: BlockDefinition[] = []
+      for (const key of keys) {
+        const block = blocksMap.get(key)
+        if (block) {
+          blocks.push(block)
+        }
+      }
+      recentBlocks.value = blocks.slice(0, MAX_RECENT)
+    }
+  } catch (e) {
+    console.warn('Failed to load recent blocks:', e)
+  }
+}
+
+// Hover documentation handlers
+function onBlockHover(event: MouseEvent, block: unknown) {
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout)
+  }
+  hoverTimeout = setTimeout(() => {
+    hoveredBlock.value = block as BlockDefinition
+    const rect = (event.target as HTMLElement).getBoundingClientRect()
+    hoverPosition.value = {
+      x: rect.right + 10,
+      y: rect.top,
+    }
+  }, 300) // 300ms delay before showing
+}
+
+function onBlockLeave() {
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout)
+    hoverTimeout = null
+  }
+  hoveredBlock.value = null
+  hoverPosition.value = null
+}
+
+// Enhanced drag start - also add to recent
+function onDragStartEnhanced(event: DragEvent, block: BlockDefinition, category?: string) {
+  addToRecent(block)
+  onDragStart(event, block, category)
+}
+
+// Enhanced click - also add to recent
+function onBlockClickEnhanced(block: BlockDefinition) {
+  addToRecent(block)
+  onBlockClick(block)
+}
+
 // 初始化
 onMounted(() => {
   loadManifest()
+})
+
+// Load recent blocks when manifest is loaded
+watch(manifest, (newManifest) => {
+  if (newManifest) {
+    loadRecentBlocks()
+  }
 })
 
 // 暴露方法
@@ -275,31 +393,49 @@ defineExpose({
 </script>
 
 <template>
-  <div v-if="visible" class="block-sidebar" :style="{ width: typeof width === 'number' ? `${width}px` : width }">
+  <div v-if="props.visible" class="block-sidebar" :style="{ width: sidebarWidth }">
     <!-- 搜索框 -->
     <div class="sidebar-header">
       <div class="sidebar-title">
         <Icon icon="mdi:puzzle" />
         <span>Blocks</span>
       </div>
-      <div class="search-box">
-        <Icon icon="mdi:magnify" class="search-icon" />
-        <input
-          v-model="searchQuery"
-          type="text"
-          class="search-input"
-          placeholder="搜索 Block..."
-        />
-        <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
-          <Icon icon="mdi:close" />
-        </button>
+      <div class="flex items-center justify-center w-full m-4">
+        <div class="search-box">
+          <Icon icon="mdi:magnify" class="search-icon" />
+          <input v-model="searchQuery" type="text" class="search-input" placeholder="搜索 Block..." />
+          <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
+            <Icon icon="mdi:close" />
+          </button>
+        </div>
+        <div class="sidebar-actions">
+          <button class="action-icon" title="展开全部" @click="handleExpandAll">
+            <Icon icon="mdi:arrow-expand-vertical" />
+          </button>
+          <button class="action-icon" title="折叠全部" @click="handleCollapseAll">
+            <Icon icon="mdi:arrow-collapse-vertical" />
+          </button>
+        </div>
       </div>
-      <div class="sidebar-actions">
-        <button class="action-icon" title="展开全部" @click="handleExpandAll">
-          <Icon icon="mdi:arrow-expand-vertical" />
+
+      <!-- Tab navigation -->
+      <div class="tab-navigation">
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'all' }"
+          @click="activeTab = 'all'"
+        >
+          <Icon icon="mdi:view-grid" />
+          <span>全部</span>
         </button>
-        <button class="action-icon" title="折叠全部" @click="handleCollapseAll">
-          <Icon icon="mdi:arrow-collapse-vertical" />
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'recent' }"
+          @click="activeTab = 'recent'"
+        >
+          <Icon icon="mdi:history" />
+          <span>最近</span>
+          <span v-if="recentBlocks.length > 0" class="tab-badge">{{ recentBlocks.length }}</span>
         </button>
       </div>
     </div>
@@ -308,6 +444,39 @@ defineExpose({
     <div v-if="loading" class="loading-state">
       <Icon icon="mdi:loading" class="spinning" />
       <span>加载中...</span>
+    </div>
+
+    <!-- Recent Blocks Tab -->
+    <div v-else-if="activeTab === 'recent'" class="blocks-list">
+      <div v-if="recentBlocks.length === 0" class="empty-state">
+        <Icon icon="mdi:history" />
+        <span>暂无最近使用</span>
+        <p class="empty-hint">拖放或点击 Block 后将显示在这里</p>
+      </div>
+      <template v-else>
+        <div class="recent-section-title">
+          <Icon icon="mdi:clock-outline" />
+          <span>最近使用的 Blocks</span>
+        </div>
+        <div
+          v-for="block in recentBlocks"
+          :key="block.key"
+          class="block-item"
+          :style="{
+            color: getCategoryColor(block.type).text,
+            background: getCategoryColor(block.type).bg,
+            borderColor: getCategoryColor(block.type).border,
+          }"
+          draggable="true"
+          @dragstart="onDragStartEnhanced($event, block, block.type)"
+          @click="onBlockClickEnhanced(block)"
+          @mouseenter="onBlockHover($event, block)"
+          @mouseleave="onBlockLeave"
+        >
+          <Icon :icon="getCategoryIcon(block.type)" class="block-icon" />
+          <span class="block-name">{{ block.key || block.name }}</span>
+        </div>
+      </template>
     </div>
 
     <!-- 无数据 -->
@@ -321,17 +490,12 @@ defineExpose({
       <template v-for="section in filteredTree.children" :key="section.name || section.key">
         <!-- 如果是叶子节点，直接显示 -->
         <template v-if="isLeaf(section)">
-          <div
-            class="block-item standalone"
-            :style="{
-              color: getCategoryColor(section.type).text,
-              background: getCategoryColor(section.type).bg,
-              borderColor: getCategoryColor(section.type).border,
-            }"
-            draggable="true"
-            @dragstart="onDragStart($event, section)"
-            @click="onBlockClick(section)"
-          >
+          <div class="block-item standalone" :style="{
+            color: getCategoryColor(section.type).text,
+            background: getCategoryColor(section.type).bg,
+            borderColor: getCategoryColor(section.type).border,
+          }" draggable="true" @dragstart="onDragStartEnhanced($event, section)" @click="onBlockClickEnhanced(section)"
+            @mouseenter="onBlockHover($event, section)" @mouseleave="onBlockLeave">
             <Icon :icon="getCategoryIcon(section.type)" class="block-icon" />
             <span class="block-name">{{ section.key || section.name }}</span>
           </div>
@@ -340,21 +504,12 @@ defineExpose({
         <!-- 如果是分类节点，显示折叠面板 -->
         <div v-else class="collapse-item">
           <!-- 分类头部 -->
-          <button
-            class="collapse-header"
-            :class="{ expanded: isCategoryExpanded(section.name) }"
-            @click="toggleCategory(section.name)"
-          >
-            <Icon
-              icon="mdi:chevron-right"
-              class="collapse-arrow"
-              :class="{ rotated: isCategoryExpanded(section.name) }"
-            />
-            <Icon
-              :icon="getCategoryIcon(section.key || section.name)"
-              class="category-icon"
-              :style="{ color: getCategoryColor(section.key || section.name).text }"
-            />
+          <button class="collapse-header" :class="{ expanded: isCategoryExpanded(section.name) }"
+            @click="toggleCategory(section.name)">
+            <Icon icon="mdi:chevron-right" class="collapse-arrow"
+              :class="{ rotated: isCategoryExpanded(section.name) }" />
+            <Icon :icon="getCategoryIcon(section.key || section.name)" class="category-icon"
+              :style="{ color: getCategoryColor(section.key || section.name).text }" />
             <span class="category-name">{{ section.name }}</span>
             <span class="category-count">{{ collectLeaves(section).length }}</span>
           </button>
@@ -365,40 +520,31 @@ defineExpose({
               <!-- 子分类（可展开） -->
               <template v-if="!isLeaf(child)">
                 <div class="sub-collapse-item">
-                  <button
-                    class="sub-collapse-header"
+                  <button class="sub-collapse-header"
                     :class="{ expanded: isCategoryExpanded(`${section.name}-${child.name}`) }"
-                    @click="toggleCategory(`${section.name}-${child.name}`)"
-                  >
-                    <Icon
-                      icon="mdi:chevron-right"
-                      class="collapse-arrow small"
-                      :class="{ rotated: isCategoryExpanded(`${section.name}-${child.name}`) }"
-                    />
+                    @click="toggleCategory(`${section.name}-${child.name}`)">
+                    <Icon icon="mdi:chevron-right" class="collapse-arrow small"
+                      :class="{ rotated: isCategoryExpanded(`${section.name}-${child.name}`) }" />
                     <span class="subcategory-name">{{ child.name }}</span>
                     <span class="subcategory-count">{{ collectLeaves(child).length }}</span>
                   </button>
-                  
+
                   <div v-if="isCategoryExpanded(`${section.name}-${child.name}`)" class="sub-collapse-content">
                     <template v-for="grandChild in child.children" :key="grandChild.name || grandChild.key">
                       <!-- 如果孙子节点还是分类，用可折叠组件 -->
                       <template v-if="!isLeaf(grandChild)">
                         <div class="deep-collapse-item">
-                          <button
-                            class="deep-collapse-header"
+                          <button class="deep-collapse-header"
                             :class="{ expanded: isCategoryExpanded(`${section.name}-${child.name}-${grandChild.name}`) }"
-                            @click="toggleCategory(`${section.name}-${child.name}-${grandChild.name}`)"
-                          >
-                            <Icon
-                              icon="mdi:chevron-right"
-                              class="collapse-arrow tiny"
-                              :class="{ rotated: isCategoryExpanded(`${section.name}-${child.name}-${grandChild.name}`) }"
-                            />
+                            @click="toggleCategory(`${section.name}-${child.name}-${grandChild.name}`)">
+                            <Icon icon="mdi:chevron-right" class="collapse-arrow tiny"
+                              :class="{ rotated: isCategoryExpanded(`${section.name}-${child.name}-${grandChild.name}`) }" />
                             <span class="deep-name">{{ grandChild.name }}</span>
                             <span class="deep-count">{{ collectLeaves(grandChild).length }}</span>
                           </button>
-                          
-                          <div v-if="isCategoryExpanded(`${section.name}-${child.name}-${grandChild.name}`)" class="deep-collapse-content">
+
+                          <div v-if="isCategoryExpanded(`${section.name}-${child.name}-${grandChild.name}`)"
+                            class="deep-collapse-content">
                             <template v-for="leaf in grandChild.children" :key="leaf.key || leaf.name">
                               <!-- 第4层分类 -->
                               <template v-if="!isLeaf(leaf)">
@@ -406,58 +552,47 @@ defineExpose({
                                   <div class="fourth-level-title">{{ leaf.name }}</div>
                                   <div class="fourth-level-items">
                                     <template v-for="deepLeaf in leaf.children" :key="deepLeaf.key">
-                                      <div
-                                        v-if="isLeaf(deepLeaf)"
-                                        class="block-item"
-                                        :style="{
-                                          color: getCategoryColor(section.key || section.name).text,
-                                          background: getCategoryColor(section.key || section.name).bg,
-                                          borderColor: getCategoryColor(section.key || section.name).border,
-                                        }"
-                                        draggable="true"
-                                        @dragstart="onDragStart($event, deepLeaf, section.key || section.name)"
-                                        @click="onBlockClick(deepLeaf)"
-                                      >
+                                      <div v-if="isLeaf(deepLeaf)" class="block-item" :style="{
+                                        color: getCategoryColor(section.key || section.name).text,
+                                        background: getCategoryColor(section.key || section.name).bg,
+                                        borderColor: getCategoryColor(section.key || section.name).border,
+                                      }" draggable="true"
+                                        @dragstart="onDragStartEnhanced($event, deepLeaf, section.key || section.name)"
+                                        @click="onBlockClickEnhanced(deepLeaf)"
+                                        @mouseenter="onBlockHover($event, deepLeaf)"
+                                        @mouseleave="onBlockLeave">
                                         <span class="block-name">{{ deepLeaf.key || deepLeaf.name }}</span>
                                       </div>
                                     </template>
                                   </div>
                                 </div>
                               </template>
-                              
+
                               <!-- 叶子节点 -->
-                              <div
-                                v-else
-                                class="block-item"
-                                :style="{
-                                  color: getCategoryColor(section.key || section.name).text,
-                                  background: getCategoryColor(section.key || section.name).bg,
-                                  borderColor: getCategoryColor(section.key || section.name).border,
-                                }"
-                                draggable="true"
-                                @dragstart="onDragStart($event, leaf, section.key || section.name)"
-                                @click="onBlockClick(leaf)"
-                              >
+                              <div v-else class="block-item" :style="{
+                                color: getCategoryColor(section.key || section.name).text,
+                                background: getCategoryColor(section.key || section.name).bg,
+                                borderColor: getCategoryColor(section.key || section.name).border,
+                              }" draggable="true" @dragstart="onDragStartEnhanced($event, leaf, section.key || section.name)"
+                                @click="onBlockClickEnhanced(leaf)"
+                                @mouseenter="onBlockHover($event, leaf)"
+                                @mouseleave="onBlockLeave">
                                 <span class="block-name">{{ leaf.key || leaf.name }}</span>
                               </div>
                             </template>
                           </div>
                         </div>
                       </template>
-                      
+
                       <!-- 叶子节点（直接在第2层下） -->
-                      <div
-                        v-else
-                        class="block-item"
-                        :style="{
-                          color: getCategoryColor(section.key || section.name).text,
-                          background: getCategoryColor(section.key || section.name).bg,
-                          borderColor: getCategoryColor(section.key || section.name).border,
-                        }"
-                        draggable="true"
-                        @dragstart="onDragStart($event, grandChild, section.key || section.name)"
-                        @click="onBlockClick(grandChild)"
-                      >
+                      <div v-else class="block-item" :style="{
+                        color: getCategoryColor(section.key || section.name).text,
+                        background: getCategoryColor(section.key || section.name).bg,
+                        borderColor: getCategoryColor(section.key || section.name).border,
+                      }" draggable="true" @dragstart="onDragStartEnhanced($event, grandChild, section.key || section.name)"
+                        @click="onBlockClickEnhanced(grandChild)"
+                        @mouseenter="onBlockHover($event, grandChild)"
+                        @mouseleave="onBlockLeave">
                         <span class="block-name">{{ grandChild.key || grandChild.name }}</span>
                       </div>
                     </template>
@@ -466,18 +601,14 @@ defineExpose({
               </template>
 
               <!-- 叶子节点 -->
-              <div
-                v-else
-                class="block-item"
-                :style="{
-                  color: getCategoryColor(section.key || section.name).text,
-                  background: getCategoryColor(section.key || section.name).bg,
-                  borderColor: getCategoryColor(section.key || section.name).border,
-                }"
-                draggable="true"
-                @dragstart="onDragStart($event, child, section.key || section.name)"
-                @click="onBlockClick(child)"
-              >
+              <div v-else class="block-item" :style="{
+                color: getCategoryColor(section.key || section.name).text,
+                background: getCategoryColor(section.key || section.name).bg,
+                borderColor: getCategoryColor(section.key || section.name).border,
+              }" draggable="true" @dragstart="onDragStartEnhanced($event, child, section.key || section.name)"
+                @click="onBlockClickEnhanced(child)"
+                @mouseenter="onBlockHover($event, child)"
+                @mouseleave="onBlockLeave">
                 <span class="block-name">{{ child.key || child.name }}</span>
               </div>
             </template>
@@ -485,6 +616,13 @@ defineExpose({
         </div>
       </template>
     </div>
+
+    <!-- Hover documentation popover -->
+    <BlockDocPopover
+      v-if="hoveredBlock && hoverPosition"
+      :block="hoveredBlock"
+      :position="hoverPosition"
+    />
   </div>
 </template>
 
@@ -515,10 +653,11 @@ defineExpose({
 
 /* 搜索框 */
 .search-box {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  flex: 1;
+  padding: 0 8px;
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -533,11 +672,14 @@ defineExpose({
 .search-icon {
   color: var(--color-text-muted);
   font-size: 18px;
+  flex-shrink: 0;
 }
 
 .search-input {
   flex: 1;
+  width: 100%;
   height: 36px;
+  padding-right: 28px; /* 为清除按钮预留空间 */
   border: none;
   background: transparent;
   color: var(--color-text-primary);
@@ -553,6 +695,10 @@ defineExpose({
 }
 
 .search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -572,9 +718,9 @@ defineExpose({
 
 .sidebar-actions {
   display: flex;
-  justify-content: flex-end;
   gap: 4px;
-  margin-top: 8px;
+  align-items: center;
+  margin-left: 4px;
 }
 
 .action-icon {
@@ -617,8 +763,13 @@ defineExpose({
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .blocks-list {
@@ -848,5 +999,71 @@ defineExpose({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Tab navigation */
+.tab-navigation {
+  display: flex;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px;
+  background: var(--color-bg-primary);
+  border-radius: 8px;
+}
+
+.tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+
+.tab-btn.active {
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.tab-badge {
+  padding: 2px 6px;
+  background: var(--color-accent-blue);
+  color: white;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Recent blocks section */
+.recent-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  margin-bottom: 8px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.empty-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
 }
 </style>

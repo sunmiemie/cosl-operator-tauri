@@ -130,18 +130,27 @@ export const defaultRunSettings: RunSettings = {
 
 // ========== HALT-HASS 工艺类型 ==========
 
+// 电路板组项
+export interface BoardGroupItem {
+  id: number
+  name: string
+}
+
 // HALT-HASS 工艺元信息
 export interface HaltHassMetadata {
   // 工艺名称
   name: string
   // 版本号
   version: string
-  // 机型/型号 ID
-  boardModelId: number
-  // 机型/型号名称
-  boardModel: string
+  // 电路板组（多选）
+  boardGroup: BoardGroupItem[]
   // 描述/说明
   description: string
+  // 基础版本（用于迭代）
+  baseVersion?: {
+    processId: number
+    version: string
+  }
   // 创建时间
   createdAt?: string
   // 更新时间
@@ -150,21 +159,24 @@ export interface HaltHassMetadata {
   createdBy?: string
 }
 
-// HALT-HASS 测试参数
-export interface HaltHassTestParams {
-  // 温度范围（摄氏度）
-  temperatureMin: number
-  temperatureMax: number
-  // 温度变化速率（°C/min）
-  temperatureRate: number
-  // 振动强度（G）
-  vibrationLevel: number
-  // 测试持续时间（分钟）
-  duration: number
-  // 循环次数
-  cycles: number
-  // 其他自定义参数
-  customParams?: Record<string, unknown>
+// ========== 安装指导类型 ==========
+
+// 单个安装步骤
+export interface InstallationStep {
+  id: number
+  // 步骤标题
+  title: string
+  // 文字说明
+  content: string
+  // 图片列表（base64 或 URL）
+  images: string[]
+  // 视频（可选，URL 或 base64）
+  video?: string
+}
+
+// 安装指导
+export interface InstallationGuide {
+  steps: InstallationStep[]
 }
 
 // HALT-HASS 流程图数据
@@ -183,8 +195,8 @@ export interface HaltHassFlowchart {
 export interface HaltHassProcessJson {
   // 元信息
   metadata: HaltHassMetadata
-  // 测试参数
-  testParams: HaltHassTestParams
+  // 安装指导
+  installGuide: InstallationGuide
   // 流程图数据
   flowchart: HaltHassFlowchart
 }
@@ -195,17 +207,11 @@ export function createEmptyHaltHassJson(): HaltHassProcessJson {
     metadata: {
       name: '',
       version: '1.0.0',
-      boardModelId: -1,
-      boardModel: '待选择',
+      boardGroup: [],
       description: '',
     },
-    testParams: {
-      temperatureMin: -40,
-      temperatureMax: 85,
-      temperatureRate: 10,
-      vibrationLevel: 5,
-      duration: 60,
-      cycles: 1,
+    installGuide: {
+      steps: [],
     },
     flowchart: {
       nodes: [],

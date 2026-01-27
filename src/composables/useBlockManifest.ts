@@ -10,6 +10,7 @@ import {
   type BlockDefinition,
   type BlockSection,
 } from '@/services/flojoy-api'
+import type { ParamDefinition } from '@/types'
 
 // 全局缓存 manifest
 const manifest = ref<BlockManifestTree | null>(null)
@@ -58,7 +59,7 @@ function findBlockByKey(key: string): BlockDefinition | null {
  */
 function getBlockParameters(
   func: string
-): Record<string, { type: string; default: unknown; options?: unknown[]; desc?: string | null }> | null {
+): Record<string, ParamDefinition> | null {
   const block = findBlockByKey(func)
   if (!block) return null
   return block.parameters || null
@@ -69,7 +70,7 @@ function getBlockParameters(
  */
 function getBlockInitParameters(
   func: string
-): Record<string, { type: string; default: unknown; options?: unknown[]; desc?: string | null }> | null {
+): Record<string, ParamDefinition> | null {
   const block = findBlockByKey(func)
   if (!block) return null
   return block.init_parameters || null

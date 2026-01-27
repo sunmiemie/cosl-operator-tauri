@@ -17,6 +17,15 @@ import DefaultNode from './nodes/DefaultNode.vue'
 import DataNode from './nodes/DataNode.vue'
 import HardwareNode from './nodes/HardwareNode.vue'
 import VisualizationNode from './nodes/VisualizationNode.vue'
+// 新增专业化节点类型
+import AINode from './nodes/AINode.vue'
+import DSPNode from './nodes/DSPNode.vue'
+import MathNode from './nodes/MathNode.vue'
+import CtrlFlowNode from './nodes/CtrlFlowNode.vue'
+import NumpyNode from './nodes/NumpyNode.vue'
+import ScipyNode from './nodes/ScipyNode.vue'
+import DebuggingNode from './nodes/DebuggingNode.vue'
+import TextNode from './nodes/TextNode.vue'
 
 // 导入节点编辑面板
 import NodeEditPanel from './NodeEditPanel.vue'
@@ -65,29 +74,48 @@ const showEditPanel = ref(false)
 // 防止循环更新的标志
 let isSettingData = false
 
-// 自定义节点类型 - 注册所有 Studio 使用的类型，统一使用 DefaultNode 渲染
+// 自定义节点类型 - 注册所有 Studio 使用的类型
 // Studio 常见类型：default, DATA, CONTROL_FLOW, CONDITIONALS, LOOPS, TIMERS, HARDWARE, etc.
 const nodeTypes = {
   // 基础类型
   default: markRaw(DefaultNode),
   // Studio 大写类型（直接对齐 Studio 格式）
-  DATA: markRaw(DefaultNode),
-  CONTROL_FLOW: markRaw(DefaultNode),
-  CONDITIONALS: markRaw(DefaultNode),
-  LOOPS: markRaw(DefaultNode),
-  TIMERS: markRaw(DefaultNode),
-  HARDWARE: markRaw(DefaultNode),
-  VISUALIZATION: markRaw(DefaultNode),
-  SIGNAL_ANALYZERS: markRaw(DefaultNode),
-  INSTRUMENTS: markRaw(DefaultNode),
-  SERIAL: markRaw(DefaultNode),
-  VISA: markRaw(DefaultNode),
+  DATA: markRaw(DataNode),
+  CONTROL_FLOW: markRaw(CtrlFlowNode),
+  CONDITIONALS: markRaw(CtrlFlowNode),
+  LOOPS: markRaw(CtrlFlowNode),
+  TIMERS: markRaw(CtrlFlowNode),
+  HARDWARE: markRaw(HardwareNode),
+  VISUALIZATION: markRaw(VisualizationNode),
+  SIGNAL_ANALYZERS: markRaw(DSPNode),
+  INSTRUMENTS: markRaw(HardwareNode),
+  SERIAL: markRaw(HardwareNode),
+  VISA: markRaw(HardwareNode),
+  // 新增专业化类型
+  AI_ML: markRaw(AINode),
+  DSP: markRaw(DSPNode),
+  MATH: markRaw(MathNode),
+  NUMPY: markRaw(NumpyNode),
+  SCIPY: markRaw(ScipyNode),
+  DEBUGGING: markRaw(DebuggingNode),
+  TEXT: markRaw(TextNode),
+  // ETL/Transform
+  ETL: markRaw(DataNode),
+  TRANSFORM: markRaw(DataNode),
+  GENERATORS: markRaw(DataNode),
   // 小写类型（兼容我们之前的格式）
-  data: markRaw(DefaultNode),
-  hardware: markRaw(DefaultNode),
-  visualization: markRaw(DefaultNode),
-  control_flow: markRaw(DefaultNode),
-  conditionals: markRaw(DefaultNode),
+  data: markRaw(DataNode),
+  hardware: markRaw(HardwareNode),
+  visualization: markRaw(VisualizationNode),
+  control_flow: markRaw(CtrlFlowNode),
+  conditionals: markRaw(CtrlFlowNode),
+  ai_ml: markRaw(AINode),
+  dsp: markRaw(DSPNode),
+  math: markRaw(MathNode),
+  numpy: markRaw(NumpyNode),
+  scipy: markRaw(ScipyNode),
+  debugging: markRaw(DebuggingNode),
+  text: markRaw(TextNode),
 }
 
 // 生成唯一 ID
@@ -108,7 +136,7 @@ const {
   onNodeDoubleClick,
   fitView,
   project,
-} = useVueFlow({ id: flowId })
+} = useVueFlow(flowId)
 
 // 计算高度样式
 const containerStyle = computed(() => ({
@@ -424,6 +452,8 @@ onMounted(() => {
   box-shadow: none !important;
   background: transparent !important;
   padding: 0 !important;
+  /* 确保 handles 可以显示在节点边界外 */
+  overflow: visible !important;
 }
 
 /* 选中状态由节点组件内部处理 */
@@ -444,7 +474,15 @@ onMounted(() => {
 :deep(.vue-flow__handle:hover) {
   background: #2563eb;
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.8);
-  /* 不使用 transform，避免位移 */
+}
+
+/* 确保 handle 位置正确 - 覆盖 Vue Flow 默认行为 */
+:deep(.vue-flow__handle-left) {
+  left: -6px;
+}
+
+:deep(.vue-flow__handle-right) {
+  right: -6px;
 }
 
 /* 连线样式 */

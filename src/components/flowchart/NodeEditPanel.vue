@@ -10,6 +10,8 @@ import { ElMessage } from 'element-plus'
 import type { Node } from '@vue-flow/core'
 import type { BlockData, CtrlData, BlockParameterValue } from '@/views/process-halt-hass/types'
 import { useBlockManifest } from '@/composables/useBlockManifest'
+import type { BlockResult } from '@/types'
+import ResultPanel from './ResultPanel.vue'
 
 // 使用 Block Manifest composable 获取最新的参数定义
 const { loadManifest, getParamOptions } = useBlockManifest()
@@ -22,11 +24,17 @@ interface Props {
   otherNodes?: Node<BlockData>[]
   // 是否显示
   visible: boolean
+  // 节点执行结果
+  nodeResult?: BlockResult | null
+  // 主题
+  theme?: 'light' | 'dark'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   otherNodes: () => [],
   visible: false,
+  nodeResult: null,
+  theme: 'light',
 })
 
 // Emits
@@ -46,11 +54,13 @@ const emit = defineEmits<{
 // 状态
 const isEditingLabel = ref(false)
 const editedLabel = ref('')
+const activeTab = ref<'params' | 'result'>('params')
 
 // 计算属性
 const nodeData = computed(() => props.node?.data)
 const hasCtrls = computed(() => nodeData.value?.ctrls && Object.keys(nodeData.value.ctrls).length > 0)
 const hasInitCtrls = computed(() => nodeData.value?.initCtrls && Object.keys(nodeData.value.initCtrls).length > 0)
+const hasResult = computed(() => !!props.nodeResult)
 
 // 节点引用选项
 const nodeReferenceOptions = computed(() =>
@@ -63,6 +73,7 @@ const nodeReferenceOptions = computed(() =>
 // 监听节点变化，重置编辑状态
 watch(() => props.node?.id, () => {
   isEditingLabel.value = false
+  activeTab.value = 'params'
   if (props.node) {
     editedLabel.value = props.node.data?.label || ''
   }
@@ -244,9 +255,30 @@ onMounted(() => {
       <span class="info-label">类型:</span>
       <span class="info-value">{{ nodeData?.func || nodeData?.blockKey || node.type }}</span>
     </div>
-    
+
+    <!-- 标签页切换 -->
+    <div class="tab-nav">
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'params' }"
+        @click="activeTab = 'params'"
+      >
+        <Icon icon="mdi:tune-variant" />
+        参数
+      </button>
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'result', 'has-result': hasResult }"
+        @click="activeTab = 'result'"
+      >
+        <Icon icon="mdi:chart-line" />
+        结果
+        <span v-if="hasResult" class="result-dot" />
+      </button>
+    </div>
+
     <!-- 参数列表 -->
-    <div class="params-scrollbar">
+    <div v-show="activeTab === 'params'" class="params-scrollbar">
       <div class="params-content">
         <!-- 初始化参数 -->
         <template v-if="hasInitCtrls">
@@ -487,7 +519,16 @@ onMounted(() => {
         </div>
       </div>
     </div>
-    
+
+    <!-- 结果面板 -->
+    <div v-show="activeTab === 'result'" class="result-scrollbar">
+      <ResultPanel
+        :result="nodeResult"
+        :theme="theme"
+        :node-label="nodeData?.label"
+      />
+    </div>
+
     <!-- 底部操作 -->
     <div class="panel-footer">
       <button class="action-btn btn-danger" @click="handleDelete">
@@ -603,6 +644,57 @@ onMounted(() => {
 .info-value {
   color: var(--color-text-primary);
   font-family: var(--font-mono);
+}
+
+/* 标签页导航 */
+.tab-nav {
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 16px;
+  gap: 4px;
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.tab-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+
+.tab-btn.active {
+  color: var(--color-accent-blue);
+  border-bottom-color: var(--color-accent-blue);
+}
+
+.tab-btn.has-result .result-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  background: var(--color-accent-green, #22c55e);
+  border-radius: 50%;
+}
+
+/* 结果面板容器 */
+.result-scrollbar {
+  flex: 1;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .params-scrollbar {
