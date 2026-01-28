@@ -284,6 +284,7 @@ function previewImage(url: string) {
   overflow: hidden;
   transition: all 0.3s ease;
   border: 1px solid transparent;
+  flex-shrink: 0;
 }
 
 .install-step-card:hover {

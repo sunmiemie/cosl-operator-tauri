@@ -165,6 +165,8 @@ function handleMoveDown(index: number) {
   flex-direction: column;
   gap: 20px;
   height: 100%;
+  max-height: calc(100vh - 200px);
+  overflow: hidden;
 }
 
 /* 头部 */
@@ -176,6 +178,7 @@ function handleMoveDown(index: number) {
   background: var(--color-bg-secondary);
   border-radius: 12px;
   border: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .header-info {
@@ -228,11 +231,12 @@ function handleMoveDown(index: number) {
 /* 步骤列表 */
 .steps-list {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow-y: auto;
   padding-right: 4px;
+  overflow-y: auto;
 }
 
 .steps-list::-webkit-scrollbar {
@@ -322,6 +326,7 @@ function handleMoveDown(index: number) {
   background: var(--color-bg-secondary);
   border-radius: 8px;
   border: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .stat-item {

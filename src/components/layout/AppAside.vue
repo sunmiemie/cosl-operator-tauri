@@ -49,7 +49,7 @@ const menuGroups: MenuGroup[] = [
     icon: 'mdi:test-tube',
     label: '测试台检测',
     children: [
-      { icon: 'mdi:snowflake-thermometer', activeIcon: 'mdi:snowflake-thermometer', label: 'Halt-Hass', path: '/halt-hass' },
+      { icon: 'mdi:play-box-outline', activeIcon: 'mdi:play-box', label: 'HALT-HASS测试', path: '/halt-hass-test' },
       { icon: 'mdi:gas-burner', activeIcon: 'mdi:gas-burner', label: '高温高压井', path: '/high-temp-pressure' },
       { icon: 'mdi:vibrate', activeIcon: 'mdi:vibrate', label: '振动台', path: '/vibration' },
       { icon: 'mdi:water-sync', activeIcon: 'mdi:water-sync', label: '水循环', path: '/water-cycle' },

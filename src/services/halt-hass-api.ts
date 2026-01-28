@@ -3,7 +3,13 @@
  * 提供与 cnooc-backend 的 HALT-HASS 工艺管理接口对接
  */
 import { http, type ApiResponse } from './http'
-import type { HaltHassProcessJson, BoardGroupItem } from '@/views/process-halt-hass/types'
+import type {
+  HaltHassProcessJson,
+  BoardGroupItem,
+  BoardGroup,
+  CreateBoardGroupParams,
+  HaltHassJob,
+} from '@/views/process-halt-hass/types'
 
 // ==================== 类型定义 ====================
 
@@ -194,13 +200,20 @@ export async function saveHaltHassProcess(
     return { success: false, error: updateResult.error }
   } else {
     // 创建
-    return createHaltHassProcess({
+    const createResult = await createHaltHassProcess({
       name: metadata.name,
       version: metadata.version,
       boardGroupIds,
       processJson,
       userId,
     })
+
+    if (createResult.success && createResult.data) {
+      // 后端返回格式: {code: 0, data: {id: N}}，需要解包嵌套的 data
+      const responseData = createResult.data as unknown as { code: number; data: { id: number } }
+      return { success: true, data: { id: responseData.data?.id } }
+    }
+    return { success: false, error: createResult.error || '创建失败' }
   }
 }
 
@@ -216,10 +229,16 @@ export async function loadHaltHassProcess(
     return { success: false, error: result.error || '获取工艺详情失败' }
   }
 
-  const detail = result.data
+  // 后端返回格式: {code: 0, data: HaltHassProcessDetail}，需要解包嵌套的 data
+  const responseData = result.data as unknown as { code: number; data: HaltHassProcessDetail }
+  const detail = responseData.data
+
+  if (!detail) {
+    return { success: false, error: '工艺数据为空' }
+  }
 
   if (!detail.processJson) {
-    return { success: false, error: '工艺数据为空' }
+    return { success: false, error: '工艺 JSON 数据为空' }
   }
 
   // 确保数据结构完整
@@ -244,7 +263,77 @@ export async function loadHaltHassProcess(
         maximumConcurrentWorkers: 1,
       },
     },
+    // 保存审核反馈
+    feedback: detail.feedback || [],
   }
 
   return { success: true, data: processJson }
+}
+
+// ==================== 电路板组 API ====================
+
+/**
+ * 电路板组列表响应
+ */
+export interface BoardGroupListResponse {
+  list: BoardGroup[]
+  total: number
+}
+
+/**
+ * 获取电路板组列表
+ */
+export async function getBoardGroupList(params?: {
+  currentPage?: number
+  pageSize?: number
+  name?: string
+}): Promise<ApiResponse<BoardGroupListResponse>> {
+  const queryParams: Record<string, string> = {}
+  if (params?.currentPage) queryParams.currentPage = String(params.currentPage)
+  if (params?.pageSize) queryParams.pageSize = String(params.pageSize)
+  if (params?.name) queryParams.name = params.name
+
+  return http.get<BoardGroupListResponse>('/equipment/board-group/list/', {}, queryParams)
+}
+
+/**
+ * 获取电路板组详情
+ */
+export async function getBoardGroupDetail(id: number): Promise<ApiResponse<BoardGroup>> {
+  return http.get<BoardGroup>(`/equipment/board-group/detail/${id}/`)
+}
+
+/**
+ * 创建电路板组
+ */
+export async function createBoardGroup(
+  data: CreateBoardGroupParams
+): Promise<ApiResponse<{ id: number }>> {
+  return http.post<{ id: number }>('/equipment/board-group/create/', data)
+}
+
+/**
+ * 更新电路板组
+ */
+export async function updateBoardGroup(
+  id: number,
+  data: Partial<CreateBoardGroupParams>
+): Promise<ApiResponse<void>> {
+  return http.put<void>(`/equipment/board-group/update/${id}/`, data)
+}
+
+/**
+ * 删除电路板组
+ */
+export async function deleteBoardGroup(id: number): Promise<ApiResponse<void>> {
+  return http.delete<void>(`/equipment/board-group/delete/${id}/`)
+}
+
+// ==================== 我的待处理 API ====================
+
+/**
+ * 获取我的待处理 HALT-HASS 工艺列表
+ */
+export async function getHaltHassMyJob(): Promise<ApiResponse<HaltHassJob[]>> {
+  return http.get<HaltHassJob[]>('/test/halt-hass/myjob/')
 }

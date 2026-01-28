@@ -14,6 +14,10 @@ import {
   getHaltHassProcessList,
   getHaltHassVersionList,
   submitHaltHassToCheck,
+  getBoardGroupList,
+  createBoardGroup as createBoardGroupApi,
+  getHaltHassMyJob,
+  deleteHaltHassProcess,
   type HaltHassProcessListItem,
   type HaltHassVersionItem,
 } from '@/services/halt-hass-api'
@@ -28,6 +32,9 @@ import {
   defaultRunSettings,
   createEmptyHaltHassJson,
   createEmptyEditForm,
+  BoardGroup,
+  HaltHassJob,
+  CreateBoardGroupParams,
 } from '../types'
 import {
   serializeFlowchart,
@@ -79,6 +86,18 @@ export function useHaltHassProcess() {
 
   // 是否在线模式
   const isOnline = ref(true)
+
+  // 我的待处理工艺列表
+  const myJobData = ref<HaltHassJob[]>([])
+
+  // 电路板组列表
+  const boardGroups = ref<BoardGroup[]>([])
+
+  // 选中的电路板组（单选）
+  const selectedBoardGroup = ref<BoardGroup | null>(null)
+
+  // 基于电路板组的版本列表
+  const versionsByBoardGroup = ref<HaltHassVersionItem[]>([])
 
   // ========== 计算属性 ==========
 
@@ -399,9 +418,16 @@ export function useHaltHassProcess() {
       isSaving.value = true
       const result = await submitHaltHassToCheck(editForm.processId)
 
-      if (result.success) {
-        console.log('工艺已提交审核')
-        return true
+      if (result.success && result.data) {
+        // 后端返回格式: {code: 0, msg: '成功'} 或 {code: 1, msg: '错误'}
+        const responseData = result.data as unknown as { code: number; msg?: string }
+        if (responseData.code === 0) {
+          console.log('工艺已提交审核')
+          return true
+        } else {
+          errorMessage.value = responseData.msg || '提交审核失败'
+          return false
+        }
       } else {
         errorMessage.value = result.error || '提交审核失败'
         return false
@@ -426,7 +452,9 @@ export function useHaltHassProcess() {
     try {
       const result = await getHaltHassProcessList(params || {})
       if (result.success && result.data) {
-        return result.data.list
+        // 后端返回格式: {code: 0, data: {list: [...], total: N}}，需要解包嵌套的 data
+        const responseData = result.data as unknown as { code: number; data: { list: HaltHassProcessListItem[]; total: number } }
+        return responseData.data?.list || []
       }
       return []
     } catch (error) {
@@ -440,7 +468,9 @@ export function useHaltHassProcess() {
     try {
       const result = await getHaltHassVersionList(boardGroupId)
       if (result.success && result.data) {
-        return result.data
+        // 后端返回格式: {code: 0, data: [...]}，需要解包嵌套的 data
+        const responseData = result.data as unknown as { code: number; data: HaltHassVersionItem[] }
+        return responseData.data || []
       }
       return []
     } catch (error) {
@@ -530,6 +560,132 @@ export function useHaltHassProcess() {
     }
   }
 
+  // ========== 我的待处理相关方法 ==========
+
+  // 获取我的待处理工艺列表
+  async function fetchMyJobData(): Promise<void> {
+    try {
+      const result = await getHaltHassMyJob()
+      if (result.success && result.data) {
+        // 后端返回格式: {code: 0, data: [...]}，需要解包嵌套的 data
+        const responseData = result.data as unknown as { code: number; data: HaltHassJob[] }
+        myJobData.value = responseData.data || []
+      } else {
+        myJobData.value = []
+      }
+    } catch (error) {
+      console.error('获取我的待处理列表失败:', error)
+      myJobData.value = []
+    }
+  }
+
+  // 删除工艺
+  async function deleteProcess(processId: number): Promise<boolean> {
+    try {
+      const result = await deleteHaltHassProcess(processId)
+      if (result.success && result.data) {
+        // 后端返回格式: {code: 0, msg: '成功'} 或 {code: 1, msg: '错误'}
+        const responseData = result.data as unknown as { code: number; msg?: string }
+        if (responseData.code === 0) {
+          // 从列表中移除
+          myJobData.value = myJobData.value.filter(item => item.id !== processId)
+          return true
+        }
+      }
+      return false
+    } catch (error) {
+      console.error('删除工艺失败:', error)
+      return false
+    }
+  }
+
+  // ========== 电路板组相关方法 ==========
+
+  // 获取电路板组列表
+  async function fetchBoardGroups(): Promise<void> {
+    try {
+      const result = await getBoardGroupList({ pageSize: 999 })
+      if (result.success && result.data) {
+        // 后端返回格式: {code: 0, data: {list: [...], total: N}}，需要解包嵌套的 data
+        const responseData = result.data as unknown as { code: number; data: { list: BoardGroup[]; total: number } }
+        boardGroups.value = responseData.data?.list || []
+      } else {
+        boardGroups.value = []
+      }
+    } catch (error) {
+      console.error('获取电路板组列表失败:', error)
+      boardGroups.value = []
+    }
+  }
+
+  // 创建电路板组
+  async function createBoardGroup(data: CreateBoardGroupParams): Promise<{ success: boolean; id?: number; error?: string }> {
+    try {
+      const result = await createBoardGroupApi(data)
+      if (result.success && result.data) {
+        // 后端返回格式: {code: 0, data: {id: N}}，需要解包嵌套的 data
+        const responseData = result.data as unknown as { code: number; data: { id: number } }
+        // 刷新列表
+        await fetchBoardGroups()
+        return { success: true, id: responseData.data?.id }
+      }
+      return { success: false, error: result.error || '创建失败' }
+    } catch (error) {
+      console.error('创建电路板组失败:', error)
+      return { success: false, error: error instanceof Error ? error.message : '创建失败' }
+    }
+  }
+
+  // 选择电路板组
+  function selectBoardGroup(group: BoardGroup | null) {
+    selectedBoardGroup.value = group
+    if (group) {
+      // 更新 metadata 中的 boardGroup
+      processJson.value.metadata.boardGroup = [{
+        id: group.id,
+        name: group.name,
+      }]
+      editForm.hasUnsavedChanges = true
+    } else {
+      processJson.value.metadata.boardGroup = []
+    }
+  }
+
+  // 按电路板组获取已有版本列表
+  async function fetchVersionsByBoardGroup(groupId: number): Promise<void> {
+    try {
+      const result = await getHaltHassVersionList(String(groupId))
+      if (result.success && result.data) {
+        // 后端返回格式: {code: 0, data: [...]}，需要解包嵌套的 data
+        const responseData = result.data as unknown as { code: number; data: HaltHassVersionItem[] }
+        versionsByBoardGroup.value = responseData.data || []
+      } else {
+        versionsByBoardGroup.value = []
+      }
+    } catch (error) {
+      console.error('获取版本列表失败:', error)
+      versionsByBoardGroup.value = []
+    }
+  }
+
+  // 加载指定版本的工艺数据（用于基于版本迭代）
+  async function loadVersionForIteration(processId: number): Promise<boolean> {
+    const success = await fetchProcess(processId)
+    if (success) {
+      // 重置编辑状态，因为这是基于已有版本创建新版本
+      editForm.isEdit = false
+      editForm.processId = -1
+      editForm.hasUnsavedChanges = true
+      // 清空版本号，让用户输入新版本
+      processJson.value.metadata.baseVersion = {
+        processId,
+        version: processJson.value.metadata.version,
+      }
+      processJson.value.metadata.version = ''
+    }
+    return success
+  }
+
   return {
     // 状态
     processJson,
@@ -540,6 +696,10 @@ export function useHaltHassProcess() {
     tempList,
     treeData,
     isOnline,
+    myJobData,
+    boardGroups,
+    selectedBoardGroup,
+    versionsByBoardGroup,
 
     // 计算属性
     metadata,
@@ -581,5 +741,16 @@ export function useHaltHassProcess() {
     submitToCheck,
     fetchProcessList,
     fetchVersionList,
+
+    // 我的待处理
+    fetchMyJobData,
+    deleteProcess,
+
+    // 电路板组管理
+    fetchBoardGroups,
+    createBoardGroup,
+    selectBoardGroup,
+    fetchVersionsByBoardGroup,
+    loadVersionForIteration,
   }
 }

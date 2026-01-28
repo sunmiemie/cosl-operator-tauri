@@ -130,10 +130,47 @@ export const defaultRunSettings: RunSettings = {
 
 // ========== HALT-HASS 工艺类型 ==========
 
-// 电路板组项
+// 电路板组项（用于 metadata 中的简化引用）
 export interface BoardGroupItem {
   id: number
   name: string
+}
+
+// 电路板型号项（电路板组内的成员）
+export interface BoardModelItem {
+  id: number
+  name: string
+  code?: string
+}
+
+// 电路板组（完整结构，用于电路板组管理）
+export interface BoardGroup {
+  id: number
+  name: string
+  description: string
+  boards: BoardModelItem[]
+  createdAt?: string
+  updatedAt?: string
+  userId?: number
+}
+
+// 创建电路板组的参数
+export interface CreateBoardGroupParams {
+  name: string
+  description?: string
+  boardModelIds: number[]
+}
+
+// HALT-HASS 工作项（我的待处理列表）
+export interface HaltHassJob {
+  id: number
+  name: string
+  version: string
+  status: number  // 0=已创建, 1=待审核, 2=待修改, 3=可使用
+  boardGroups: BoardGroupItem[]
+  feedback: string[]
+  createdAt: string
+  auditNum?: number
 }
 
 // HALT-HASS 工艺元信息
@@ -199,6 +236,8 @@ export interface HaltHassProcessJson {
   installGuide: InstallationGuide
   // 流程图数据
   flowchart: HaltHassFlowchart
+  // 审核反馈（可选）
+  feedback?: string[]
 }
 
 // 创建空的 HALT-HASS 工艺 JSON

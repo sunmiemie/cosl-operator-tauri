@@ -8,7 +8,6 @@ import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 // 导入自定义组件
-import AppDrawer from '@/components/common/AppDrawer.vue'
 import type { Node, Edge } from '@vue-flow/core'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -16,7 +15,9 @@ import { v4 as uuidv4 } from 'uuid'
 import { FlowchartEditor, BlockSidebar, ControlBar } from '@/components/flowchart'
 
 // 导入新增组件
-import BoardGroupSelector from './components/BoardGroupSelector.vue'
+import BoardGroupListSelector from './components/BoardGroupListSelector.vue'
+import CreateBoardGroupDialog from './components/CreateBoardGroupDialog.vue'
+import JobDrawer from './components/JobDrawer.vue'
 import InstallGuideEditor from './components/InstallGuideEditor.vue'
 
 // 导入 composables
@@ -24,10 +25,11 @@ import { useHaltHassProcess } from './composables/useHaltHassProcess'
 import { useLayout } from '@/composables/useLayout'
 import { useFlojoyBackend } from '@/composables/useFlojoyBackend'
 import { useFlojoySocket } from '@/composables/useFlojoySocket'
+import { useAuth } from '@/composables/useAuth'
 import { runFlowchart, cancelFlowchartRun, configureApi } from '@/services/flojoy-api'
 
 // 导入类型和适配器
-import type { BlockData } from './types'
+import type { BlockData, HaltHassJob, CreateBoardGroupParams } from './types'
 import {
   prepareRunFlowchartArgs,
   deserializeFromStudioFormat,
@@ -60,6 +62,9 @@ const {
   serverStatus,
 } = useFlojoySocket()
 
+// 认证信息
+const { userInfo } = useAuth()
+
 // 使用 HALT-HASS 工艺管理
 const {
   processJson,
@@ -70,6 +75,10 @@ const {
   treeData,
   isOnline,
   tempList,
+  myJobData,
+  boardGroups,
+  selectedBoardGroup,
+  versionsByBoardGroup,
   resetProcess,
   updateMetadata,
   updateFlowchart,
@@ -82,6 +91,13 @@ const {
   uploadProcess,
   fetchProcess,
   submitToCheck,
+  fetchMyJobData,
+  deleteProcess,
+  fetchBoardGroups,
+  createBoardGroup,
+  selectBoardGroup,
+  fetchVersionsByBoardGroup,
+  loadVersionForIteration,
 } = useHaltHassProcess()
 
 // 流程图编辑器引用
@@ -90,8 +106,10 @@ const editorRef = ref<InstanceType<typeof FlowchartEditor>>()
 // 页面状态
 const currentStep = ref(0)
 const showSidebar = ref(true)
-const showDraftDrawer = ref(false)
+const showJobDrawer = ref(false)
+const showCreateBoardGroupDialog = ref(false)
 const currentJobId = ref<string | null>(null)
+const boardGroupsLoading = ref(false)
 
 // 步骤配置（新流程：选择页 -> 安装指导 -> 流程图 -> 预览）
 const steps = [
@@ -102,7 +120,6 @@ const steps = [
 ]
 
 // 基于版本迭代
-const existingVersions = ref<{ id: number; name: string; version: string }[]>([])
 const selectedBaseVersion = ref<number | null>(null)
 
 // 流程图数据
@@ -119,6 +136,8 @@ const previewJson = computed(() => {
     flowchart: {
       nodes: flowchartNodes.value,
       edges: flowchartEdges.value,
+      observeBlocks: processJson.value.flowchart.observeBlocks,
+      runSettings: processJson.value.flowchart.runSettings,
     },
   }, null, 2)
 })
@@ -141,31 +160,29 @@ function handleExit() {
 
 // ========== 基于版本迭代 ==========
 
-// 选择基础版本
-function selectBaseVersion(row: { id: number; name: string; version: string }) {
+// 选择基础版本进行迭代
+async function selectBaseVersion(row: { id: number; name: string; version: string }) {
   selectedBaseVersion.value = row.id
-  updateMetadata({
-    baseVersion: {
-      processId: row.id,
-      version: row.version,
+
+  // 加载该版本的工艺数据
+  const success = await loadVersionForIteration(row.id)
+  if (success) {
+    // 恢复流程图数据
+    if (processJson.value.flowchart.nodes.length > 0) {
+      flowchartNodes.value = processJson.value.flowchart.nodes
+      flowchartEdges.value = processJson.value.flowchart.edges
     }
-  })
-  // TODO: 从后端加载该版本的数据
-  ElMessage.info(`已选择基础版本: ${row.name} v${row.version}`)
+    ElMessage.success(`已加载基础版本: ${row.name} v${row.version}`)
+  } else {
+    ElMessage.error('加载版本数据失败')
+    selectedBaseVersion.value = null
+  }
 }
 
 // 清除基础版本选择
 function clearBaseVersionSelection() {
   selectedBaseVersion.value = null
   updateMetadata({ baseVersion: undefined })
-}
-
-// 获取已有版本列表（TODO: 从后端获取）
-async function fetchExistingVersions() {
-  // TODO: 调用后端 API 获取已有版本
-  // const response = await http.get('/test/addprocess/halt-hass/list/', ...)
-  // existingVersions.value = response.data
-  console.log('TODO: 获取已有版本列表')
 }
 
 // 新建工艺（保留已填写的 metadata）
@@ -175,23 +192,6 @@ function handleNew() {
   flowchartNodes.value = []
   flowchartEdges.value = []
   currentStep.value = 1
-}
-
-// 加载暂存工艺
-async function handleLoadDraft(fileName: string) {
-  const success = await loadFromTemp(fileName)
-  if (success) {
-    // 恢复流程图数据
-    if (processJson.value.flowchart.nodes.length > 0) {
-      flowchartNodes.value = processJson.value.flowchart.nodes
-      flowchartEdges.value = processJson.value.flowchart.edges
-    }
-    showDraftDrawer.value = false
-    currentStep.value = 1
-    ElMessage.success('加载成功')
-  } else {
-    ElMessage.error('加载失败')
-  }
 }
 
 // 加载/导入流程图文件（支持 Studio 原生格式）
@@ -323,9 +323,21 @@ async function handleSave() {
     return
   }
 
-  const success = await uploadProcess()
+  // 保存前同步流程图数据到 processJson
+  updateFlowchart(flowchartNodes.value as Node<BlockData>[], flowchartEdges.value)
+
+  // 传递当前用户 ID
+  const success = await uploadProcess(userInfo.value?.id)
   if (success) {
     ElMessage.success('保存成功')
+    // 返回选择页
+    currentStep.value = 0
+    resetProcess()
+    flowchartNodes.value = []
+    flowchartEdges.value = []
+    selectedBaseVersion.value = null
+    // 刷新我的待处理列表
+    fetchMyJobData()
   } else {
     ElMessage.error(errorMessage.value || '保存失败')
   }
@@ -455,6 +467,160 @@ function nextStep() {
   }
 }
 
+// ========== JobDrawer 相关方法 ==========
+
+// 打开工作抽屉
+async function openJobDrawer() {
+  showJobDrawer.value = true
+  // 刷新我的待处理列表
+  await fetchMyJobData()
+}
+
+// 提交审核（从工作抽屉）
+async function handleSubmitFromJob(processId: number) {
+  const confirmed = await ElMessageBox.confirm(
+    '确认提交工艺进行审核？',
+    '提交审核',
+    {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'info',
+    }
+  ).catch(() => false)
+
+  if (!confirmed) return
+
+  // 先加载工艺，再提交
+  const loadSuccess = await fetchProcess(processId)
+  if (!loadSuccess) {
+    ElMessage.error('加载工艺失败')
+    return
+  }
+
+  const success = await submitToCheck()
+  if (success) {
+    ElMessage.success('已提交审核')
+    fetchMyJobData() // 刷新列表
+  } else {
+    ElMessage.error(errorMessage.value || '提交失败')
+  }
+}
+
+// 编辑工艺（从工作抽屉）
+async function handleEditFromJob(row: HaltHassJob) {
+  const success = await fetchProcess(row.id)
+  if (success) {
+    // 恢复流程图数据
+    if (processJson.value.flowchart.nodes.length > 0) {
+      flowchartNodes.value = processJson.value.flowchart.nodes
+      flowchartEdges.value = processJson.value.flowchart.edges
+    }
+    // 设置选中的电路板组
+    if (row.boardGroups.length > 0) {
+      const group = boardGroups.value.find(g => g.id === row.boardGroups[0].id)
+      if (group) {
+        selectBoardGroup(group)
+      }
+    }
+    showJobDrawer.value = false
+    currentStep.value = 1
+    ElMessage.success(`已加载工艺: ${row.name}`)
+  } else {
+    ElMessage.error('加载工艺失败')
+  }
+}
+
+// 删除工艺（从工作抽屉）
+async function handleDeleteFromJob(processId: number) {
+  const confirmed = await ElMessageBox.confirm(
+    '确定要删除这个工艺吗？此操作不可恢复。',
+    '删除确认',
+    {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+    }
+  ).catch(() => false)
+
+  if (!confirmed) return
+
+  const success = await deleteProcess(processId)
+  if (success) {
+    ElMessage.success('删除成功')
+  } else {
+    ElMessage.error('删除失败')
+  }
+}
+
+// 继续编辑暂存（从工作抽屉）
+async function handleContinueEdit(item: { fileName: string; name: string }) {
+  const success = await loadFromTemp(item.fileName)
+  if (success) {
+    // 恢复流程图数据
+    if (processJson.value.flowchart.nodes.length > 0) {
+      flowchartNodes.value = processJson.value.flowchart.nodes
+      flowchartEdges.value = processJson.value.flowchart.edges
+    }
+    showJobDrawer.value = false
+    currentStep.value = 1
+    ElMessage.success('加载成功')
+  } else {
+    ElMessage.error('加载失败')
+  }
+}
+
+// 删除暂存文件
+async function handleDeleteTemp(_fileName: string) {
+  // TODO: 实现删除暂存文件
+  ElMessage.info('删除暂存功能待实现')
+}
+
+// ========== 电路板组相关方法 ==========
+
+// 刷新电路板组列表
+async function refreshBoardGroups() {
+  boardGroupsLoading.value = true
+  await fetchBoardGroups()
+  boardGroupsLoading.value = false
+}
+
+// 打开创建电路板组对话框
+function openCreateBoardGroupDialog() {
+  showCreateBoardGroupDialog.value = true
+}
+
+// 创建电路板组确认
+async function handleCreateBoardGroup(data: CreateBoardGroupParams) {
+  const result = await createBoardGroup(data)
+  if (result.success) {
+    ElMessage.success('电路板组创建成功')
+    showCreateBoardGroupDialog.value = false
+    // 自动选中新创建的组
+    const newGroup = boardGroups.value.find(g => g.id === result.id)
+    if (newGroup) {
+      selectBoardGroup(newGroup)
+    }
+  } else {
+    ElMessage.error(result.error || '创建失败')
+  }
+}
+
+// 选择电路板组时获取版本列表，并同步到 processJson
+watch(selectedBoardGroup, async (group) => {
+  // 同步更新 processJson.metadata.boardGroup
+  if (group) {
+    processJson.value.metadata.boardGroup = [{
+      id: group.id,
+      name: group.name,
+    }]
+    editForm.hasUnsavedChanges = true
+    await fetchVersionsByBoardGroup(group.id)
+  } else {
+    processJson.value.metadata.boardGroup = []
+  }
+})
+
 // 初始化后端连接
 onMounted(async () => {
   // 配置 API
@@ -474,8 +640,11 @@ onMounted(async () => {
   // 获取暂存列表
   fetchTempList()
 
-  // 获取已有版本列表（后端 API 待对接）
-  fetchExistingVersions()
+  // 获取电路板组列表
+  refreshBoardGroups()
+
+  // 获取我的待处理列表
+  fetchMyJobData()
 })
 
 // 清理
@@ -510,10 +679,12 @@ watch(currentStep, (step) => {
 
           <div class="header-actions">
             <!-- 工作菜单 -->
-            <button class="work-btn" @click="showDraftDrawer = true">
+            <button class="work-btn" @click="openJobDrawer">
               <Icon icon="mdi:briefcase-outline" />
               <span>工作</span>
-              <span v-if="tempList.length > 0" class="badge">{{ tempList.length }}</span>
+              <span v-if="myJobData.length + tempList.length > 0" class="badge">
+                {{ myJobData.length + tempList.length }}
+              </span>
             </button>
 
             <!-- 模式切换 -->
@@ -538,44 +709,57 @@ watch(currentStep, (step) => {
           </div>
         </div>
 
-        <!-- 主内容区：电路板选择和版本配置 -->
+        <!-- 主内容区：电路板组选择和版本配置 -->
         <div class="selection-content">
           <div class="selection-main">
-            <!-- 左侧：电路板型号树 -->
+            <!-- 左侧：电路板组选择 -->
             <div class="tree-panel-wrapper">
-              <BoardGroupSelector
-                v-model="processJson.metadata.boardGroup"
-                :tree-data="treeData"
-                :is-online="isOnline"
+              <BoardGroupListSelector
+                v-model="selectedBoardGroup"
+                :board-groups="boardGroups"
+                :loading="boardGroupsLoading"
+                @create="openCreateBoardGroupDialog"
+                @refresh="refreshBoardGroups"
               />
             </div>
 
-            <!-- 右侧：已选电路板 + 工艺信息配置 -->
+            <!-- 右侧：工艺信息配置 -->
             <div class="right-panel-wrapper">
-              <!-- 已选择的电路板标签 -->
+              <!-- 已选择的电路板组信息 -->
               <div class="config-section">
                 <div class="section-header">
                   <Icon icon="mdi:check-circle-outline" class="section-icon success" />
                   <span>已选择的电路板组</span>
-                  <span v-if="processJson.metadata.boardGroup.length > 0" class="board-count">
-                    {{ processJson.metadata.boardGroup.length }}
-                  </span>
                 </div>
                 <div class="section-content">
-                  <template v-if="processJson.metadata.boardGroup.length > 0">
-                    <div class="selected-tags">
-                      <div v-for="board in processJson.metadata.boardGroup" :key="board.id" class="board-tag">
-                        <Icon icon="mdi:chip" class="tag-icon" />
-                        <span>{{ board.name }}</span>
-                        <button class="tag-remove" @click="processJson.metadata.boardGroup = processJson.metadata.boardGroup.filter(b => b.id !== board.id)">
-                          <Icon icon="mdi:close" />
-                        </button>
+                  <template v-if="selectedBoardGroup">
+                    <div class="selected-group-info">
+                      <div class="group-name">{{ selectedBoardGroup.name }}</div>
+                      <div v-if="selectedBoardGroup.description" class="group-desc">
+                        {{ selectedBoardGroup.description }}
+                      </div>
+                      <div class="group-boards">
+                        <span class="boards-label">包含电路板型号：</span>
+                        <div class="board-tags">
+                          <span
+                            v-for="board in selectedBoardGroup.boards"
+                            :key="board.id"
+                            class="board-tag-small"
+                          >
+                            <Icon icon="mdi:chip" />
+                            {{ board.name }}
+                          </span>
+                        </div>
                       </div>
                     </div>
+                    <button class="clear-selection-btn" @click="selectBoardGroup(null)">
+                      <Icon icon="mdi:close" />
+                      取消选择
+                    </button>
                   </template>
                   <div v-else class="empty-boards">
                     <Icon icon="mdi:arrow-left-bold" />
-                    <span>请从左侧选择电路板型号</span>
+                    <span>请从左侧选择电路板组</span>
                   </div>
                 </div>
               </div>
@@ -607,7 +791,7 @@ watch(currentStep, (step) => {
                   </div>
 
                   <!-- 版本迭代选择 -->
-                  <div v-if="existingVersions.length > 0" class="version-section">
+                  <div v-if="selectedBoardGroup && versionsByBoardGroup.length > 0" class="version-section">
                     <div class="version-section-header">
                       <div class="version-section-title">
                         <Icon icon="mdi:history" />
@@ -622,7 +806,7 @@ watch(currentStep, (step) => {
                         清除选择
                       </button>
                     </div>
-                    <p class="version-section-desc">单击表格内容选择基础版本</p>
+                    <p class="version-section-desc">单击表格内容选择基础版本，加载已有工艺数据进行迭代</p>
                     <div class="version-table-wrapper">
                       <table class="version-table">
                         <thead>
@@ -634,7 +818,7 @@ watch(currentStep, (step) => {
                         </thead>
                         <tbody>
                           <tr
-                            v-for="row in existingVersions"
+                            v-for="row in versionsByBoardGroup"
                             :key="row.id"
                             :class="{ selected: selectedBaseVersion === row.id }"
                             @click="selectBaseVersion(row)"
@@ -664,7 +848,7 @@ watch(currentStep, (step) => {
 
           <button
             class="primary-btn"
-            :disabled="processJson.metadata.boardGroup.length === 0 || !processJson.metadata.name.trim() || !processJson.metadata.version"
+            :disabled="!selectedBoardGroup || !processJson.metadata.name.trim() || !processJson.metadata.version"
             @click="handleNew"
           >
             开始编辑
@@ -776,6 +960,11 @@ watch(currentStep, (step) => {
 
         <!-- 底部按钮栏 -->
         <div v-if="currentStep > 0" class="bottom-bar">
+          <!-- 审核反馈提示 -->
+          <div v-if="processJson.feedback?.length" class="feedback-alert">
+            <Icon icon="mdi:comment-alert-outline" class="feedback-icon" />
+            <span class="feedback-text">审核反馈: {{ processJson.feedback[processJson.feedback.length - 1] }}</span>
+          </div>
           <button v-if="currentStep > 1" class="btn-secondary" @click="prevStep">
             <Icon icon="mdi:arrow-left" />
             上一步
@@ -809,31 +998,25 @@ watch(currentStep, (step) => {
       </div>
     </Transition>
 
-    <!-- 暂存列表抽屉 -->
-    <AppDrawer
-      v-model="showDraftDrawer"
-      title="暂存列表"
-      direction="rtl"
-      size="400px"
-    >
-      <div class="draft-list">
-        <template v-if="tempList.length > 0">
-          <div
-            v-for="item in tempList"
-            :key="item.fileName"
-            class="draft-item"
-            @click="handleLoadDraft(item.fileName)"
-          >
-            <div class="draft-info">
-              <span class="draft-name">{{ item.name }}</span>
-              <span class="draft-version">v{{ item.version }}</span>
-            </div>
-            <span class="draft-mode">{{ item.mode }}</span>
-          </div>
-        </template>
-        <p v-else class="empty-text">暂无暂存的工艺</p>
-      </div>
-    </AppDrawer>
+    <!-- 工作抽屉 -->
+    <JobDrawer
+      v-model:visible="showJobDrawer"
+      :my-job-data="myJobData"
+      :temp-process-data="tempList"
+      @submit-process="handleSubmitFromJob"
+      @edit-process="handleEditFromJob"
+      @delete-process="handleDeleteFromJob"
+      @continue-edit="handleContinueEdit"
+      @delete-temp="handleDeleteTemp"
+    />
+
+    <!-- 创建电路板组对话框 -->
+    <CreateBoardGroupDialog
+      v-model:visible="showCreateBoardGroupDialog"
+      :tree-data="treeData"
+      :loading="isSaving"
+      @confirm="handleCreateBoardGroup"
+    />
   </div>
 </template>
 
@@ -1087,6 +1270,77 @@ watch(currentStep, (step) => {
   height: 80px;
   color: var(--color-text-tertiary, #94a3b8);
   font-size: 14px;
+}
+
+/* 已选电路板组信息 */
+.selected-group-info {
+  margin-bottom: 12px;
+}
+
+.selected-group-info .group-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1e293b);
+  margin-bottom: 4px;
+}
+
+.selected-group-info .group-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary, #64748b);
+  margin-bottom: 8px;
+}
+
+.group-boards {
+  margin-top: 8px;
+}
+
+.boards-label {
+  font-size: 12px;
+  color: var(--color-text-tertiary, #94a3b8);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.board-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.board-tag-small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--color-bg-tertiary, #f1f5f9);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary, #64748b);
+}
+
+.board-tag-small :deep(svg) {
+  font-size: 12px;
+  color: var(--color-primary, #3b82f6);
+}
+
+.section-content .clear-selection-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-text-tertiary, #94a3b8);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 8px;
+}
+
+.section-content .clear-selection-btn:hover {
+  border-color: var(--color-error, #ef4444);
+  color: var(--color-error, #ef4444);
 }
 
 /* 表单行样式 */
@@ -1443,12 +1697,16 @@ watch(currentStep, (step) => {
 /* 主内容区 */
 .main-content {
   flex: 1;
-  overflow: auto;
-  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .step-content {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding-top: 0.5rem;
 }
 
@@ -1585,6 +1843,32 @@ watch(currentStep, (step) => {
 
 .btn-secondary:hover {
   background: var(--color-bg-3, #f1f5f9);
+}
+
+/* 审核反馈提示 */
+.feedback-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  margin-right: auto;
+}
+
+.feedback-icon {
+  font-size: 18px;
+  color: #f59e0b;
+}
+
+.feedback-text {
+  font-size: 13px;
+  color: #b45309;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 抽屉 */

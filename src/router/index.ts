@@ -25,10 +25,10 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '仪表盘', requiresAuth: true }
       },
       {
-        path: 'halt-hass',
-        name: 'HaltHass',
-        component: () => import('@/views/halt-hass/index.vue'),
-        meta: { title: 'Halt-Hass', requiresAuth: true }
+        path: 'halt-hass-test',
+        name: 'HaltHassTest',
+        component: () => import('@/views/halt-hass-test/index.vue'),
+        meta: { title: 'HALT-HASS测试', requiresAuth: true }
       },
       {
         path: 'high-temp-pressure',
