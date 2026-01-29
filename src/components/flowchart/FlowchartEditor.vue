@@ -118,6 +118,19 @@ const nodeTypes = {
   text: markRaw(TextNode),
 }
 
+// 规范化节点类型的辅助函数 - 确保未注册的类型使用 default 替代
+function normalizeNodeTypes(inputNodes: Node[]): Node[] {
+  const registeredTypes = Object.keys(nodeTypes)
+  return inputNodes.map(node => {
+    const nodeType = node.type || 'default'
+    if (!registeredTypes.includes(nodeType)) {
+      console.warn(`[normalizeNodeTypes] 未注册的节点类型: "${nodeType}", 使用 default 类型替代. 节点ID: ${node.id}, label: ${node.data?.label}`)
+      return { ...node, type: 'default' }
+    }
+    return node
+  })
+}
+
 // 生成唯一 ID
 const flowId = `flowchart-editor-${uuidv4().slice(0, 8)}`
 
@@ -291,30 +304,26 @@ function getFlowchartData() {
   }
 }
 
-// 设置流程图数据（直接使用 Studio 格式，不做类型转换）
+// 设置流程图数据
 function setFlowchartData(newNodes: Node[], newEdges: Edge[]) {
-  console.log('[setFlowchartData] 设置数据:', { 
-    newNodes: newNodes.length, 
-    newEdges: newEdges.length,
-  })
-  
   // 设置标志防止循环更新
   isSettingData = true
-  
+
   try {
     // 清空现有节点和边
     nodes.value = []
     edges.value = []
-    
-    // 直接添加新节点和边（保持原始 Studio 格式）
-    if (newNodes.length > 0) {
-      addNodes(newNodes)
+
+    // 规范化节点类型，确保使用已注册的类型
+    const normalizedNodes = normalizeNodeTypes(newNodes)
+
+    // 添加规范化后的节点和边
+    if (normalizedNodes.length > 0) {
+      addNodes(normalizedNodes)
     }
     if (newEdges.length > 0) {
       addEdges(newEdges)
     }
-    
-    console.log('[setFlowchartData] 完成，当前节点数:', nodes.value.length)
   } finally {
     // 延迟重置标志，确保所有响应式更新完成
     setTimeout(() => {
@@ -373,9 +382,10 @@ defineExpose({
 
 // 初始化
 onMounted(() => {
-  // 设置初始节点和边
+  // 设置初始节点和边（规范化节点类型）
   if (props.initialNodes.length > 0) {
-    addNodes(props.initialNodes)
+    const normalizedNodes = normalizeNodeTypes(props.initialNodes)
+    addNodes(normalizedNodes)
   }
   if (props.initialEdges.length > 0) {
     addEdges(props.initialEdges)

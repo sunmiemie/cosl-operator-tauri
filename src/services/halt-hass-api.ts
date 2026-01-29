@@ -241,6 +241,39 @@ export async function loadHaltHassProcess(
     return { success: false, error: '工艺 JSON 数据为空' }
   }
 
+  // 默认运行设置
+  const defaultRunSettings = {
+    nodeDelay: 0,
+    maximumRuntime: 3000,
+    maximumConcurrentWorkers: 1,
+  }
+
+  // 获取流程图数据
+  let flowchartData = detail.processJson.flowchart
+  let nodes: any[] = []
+  let edges: any[] = []
+
+  // 检测数据格式并处理
+  if (flowchartData) {
+    // 检查是否是 Studio 格式（有 rfInstance 包装）
+    if ((flowchartData as any).rfInstance) {
+      const rfInstance = (flowchartData as any).rfInstance
+      nodes = rfInstance.nodes || []
+      edges = rfInstance.edges || []
+    } else {
+      // 我们自己的格式
+      nodes = flowchartData.nodes || []
+      edges = flowchartData.edges || []
+    }
+  }
+
+  const flowchart = {
+    nodes,
+    edges,
+    observeBlocks: flowchartData?.observeBlocks || [],
+    runSettings: flowchartData?.runSettings || defaultRunSettings,
+  }
+
   // 确保数据结构完整
   const processJson: HaltHassProcessJson = {
     metadata: {
@@ -253,16 +286,7 @@ export async function loadHaltHassProcess(
       createdBy: detail.userName || detail.processJson.metadata?.createdBy,
     },
     installGuide: detail.processJson.installGuide || { steps: [] },
-    flowchart: detail.processJson.flowchart || {
-      nodes: [],
-      edges: [],
-      observeBlocks: [],
-      runSettings: {
-        nodeDelay: 0,
-        maximumRuntime: 3000,
-        maximumConcurrentWorkers: 1,
-      },
-    },
+    flowchart,
     // 保存审核反馈
     feedback: detail.feedback || [],
   }

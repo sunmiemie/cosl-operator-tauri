@@ -39,12 +39,19 @@ interface Props {
 
 const props = defineProps<Props>()
 
+// 安全访问 data（防止 undefined）
+const safeData = computed(() => props.data || {
+  label: props.id || 'Unknown',
+  inputs: [],
+  outputs: [],
+})
+
 // 处理 inputs，确保有默认值和正确的 ID
 const normalizedInputs = computed(() => {
-  if (!props.data.inputs || props.data.inputs.length === 0) {
+  if (!safeData.value.inputs || safeData.value.inputs.length === 0) {
     return [{ name: 'default', id: 'default', type: 'Any' }]
   }
-  return props.data.inputs.map((input, idx) => ({
+  return safeData.value.inputs.map((input, idx) => ({
     name: input.name || 'default',
     // 优先使用 Studio 的 id，否则使用 name
     id: input.id || input.name || `input-${idx}`,
@@ -54,10 +61,10 @@ const normalizedInputs = computed(() => {
 
 // 处理 outputs，确保有默认值和正确的 ID
 const normalizedOutputs = computed(() => {
-  if (!props.data.outputs || props.data.outputs.length === 0) {
+  if (!safeData.value.outputs || safeData.value.outputs.length === 0) {
     return [{ name: 'default', id: 'default', type: 'Any' }]
   }
-  return props.data.outputs.map((output, idx) => ({
+  return safeData.value.outputs.map((output, idx) => ({
     name: output.name || 'default',
     // 优先使用 Studio 的 id，否则使用 name
     id: output.id || output.name || `output-${idx}`,
@@ -80,7 +87,7 @@ const nodeHeight = computed(() => {
 
 // 状态图标
 const statusIcon = computed(() => {
-  switch (props.data.status) {
+  switch (safeData.value.status) {
     case 'running':
       return 'mdi:loading'
     case 'success':
@@ -94,7 +101,7 @@ const statusIcon = computed(() => {
 
 // 状态颜色
 const statusClass = computed(() => {
-  switch (props.data.status) {
+  switch (safeData.value.status) {
     case 'running':
       return 'status-running'
     case 'success':
@@ -133,15 +140,15 @@ const statusClass = computed(() => {
         v-if="statusIcon"
         :icon="statusIcon"
         class="status-icon"
-        :class="{ spinning: data.status === 'running' }"
+        :class="{ spinning: safeData.status === 'running' }"
       />
 
       <!-- 节点标签 -->
-      <div class="node-label">{{ data.label }}</div>
+      <div class="node-label">{{ safeData.label || id }}</div>
 
       <!-- 函数名（如果与 label 不同） -->
-      <div v-if="data.func && data.func !== data.label" class="block-key">
-        {{ data.func }}
+      <div v-if="safeData.func && safeData.func !== safeData.label" class="block-key">
+        {{ safeData.func }}
       </div>
     </div>
 

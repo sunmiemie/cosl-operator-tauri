@@ -313,7 +313,7 @@ export function useHaltHassProcess() {
         : -1
 
       const success = await fileSystem.saveTempProcess(
-        'halt-hass' as any,
+        'halt-hass',
         firstBoardId,
         metadata.value.name || 'unnamed',
         metadata.value.version,
@@ -529,7 +529,7 @@ export function useHaltHassProcess() {
   // 获取暂存列表
   async function fetchTempList(): Promise<void> {
     try {
-      const files = await fileSystem.getTempProcessList('halt-hass' as any)
+      const files = await fileSystem.getTempProcessList('halt-hass')
       tempList.value = files.map((file) => ({
         fileName: file.fileName,
         name: file.name || '未命名',
@@ -539,6 +539,20 @@ export function useHaltHassProcess() {
     } catch (error) {
       console.error('获取暂存列表失败:', error)
       tempList.value = []
+    }
+  }
+
+  // 删除暂存工艺
+  async function deleteTempProcess(fileName: string): Promise<boolean> {
+    try {
+      const success = await fileSystem.deleteTempProcess(fileName)
+      if (success) {
+        await fetchTempList()
+      }
+      return success
+    } catch (error) {
+      console.error('删除暂存工艺失败:', error)
+      return false
     }
   }
 
@@ -735,6 +749,7 @@ export function useHaltHassProcess() {
     loadTempProcess,
     loadFromTemp,
     fetchTempList,
+    deleteTempProcess,
     fetchTreeData,
 
     // 后端 API 操作

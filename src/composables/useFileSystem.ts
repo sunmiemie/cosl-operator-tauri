@@ -19,7 +19,7 @@ const TEMP_DIR = 'temp/processes'
 const QUICK_STEP_DIR = 'quick'
 
 // 工艺类型
-export type ProcessType = 'eyes' | 'xray'
+export type ProcessType = 'eyes' | 'xray' | 'halt-hass'
 
 // 暂存工艺信息接口
 export interface TempProcessInfo {
@@ -162,16 +162,32 @@ export function useFileSystem() {
     try {
       // 移除 .json 后缀
       const baseName = fileName.replace(/\.json$/, '')
-      const parts = baseName.split('-')
-      
-      if (parts.length < 5) return null
-      
-      const type = parts[0] as ProcessType
-      const boardModelId = parseInt(parts[1], 10)
-      const name = parts[2]
-      const version = parts[3]
-      const modeStr = parts.slice(4).join('-') // 处理名称中可能有的 -
-      
+
+      // 尝试匹配已知的工艺类型前缀（halt-hass 包含 -，需要特殊处理）
+      let type: ProcessType
+      let rest: string
+
+      if (baseName.startsWith('halt-hass-')) {
+        type = 'halt-hass'
+        rest = baseName.substring('halt-hass-'.length)
+      } else if (baseName.startsWith('eyes-')) {
+        type = 'eyes'
+        rest = baseName.substring('eyes-'.length)
+      } else if (baseName.startsWith('xray-')) {
+        type = 'xray'
+        rest = baseName.substring('xray-'.length)
+      } else {
+        return null
+      }
+
+      const parts = rest.split('-')
+      if (parts.length < 4) return null
+
+      const boardModelId = parseInt(parts[0], 10)
+      const name = parts[1]
+      const version = parts[2]
+      const modeStr = parts.slice(3).join('-') // 处理名称中可能有的 -
+
       // 解析模式
       if (modeStr === '编辑') {
         return {
@@ -194,7 +210,7 @@ export function useFileSystem() {
           processId
         }
       }
-      
+
       return null
     } catch {
       return null

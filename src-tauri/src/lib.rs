@@ -3,6 +3,9 @@ mod camera;
 mod scanner;
 mod cache;
 mod flojoy;
+mod ocr;
+
+use tauri::{Manager, RunEvent};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -15,9 +18,37 @@ fn open_devtools(webview: tauri::Webview) {
     webview.open_devtools();
 }
 
+/// 停止 Flojoy 后端（内部使用）
+fn cleanup_flojoy_backend(state: &flojoy::FlojoyBackendState) {
+    if let Ok(mut process_guard) = state.process.lock() {
+        if let Some(ref mut child) = *process_guard {
+            println!("[Flojoy] 应用退出，正在停止后端进程...");
+
+            #[cfg(target_os = "windows")]
+            {
+                use std::process::Command;
+                let pid = child.id();
+                // 使用 taskkill 强制终止进程树
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/F", "/T"])
+                    .output();
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = child.kill();
+            }
+
+            let _ = child.wait();
+            *process_guard = None;
+            println!("[Flojoy] 后端进程已停止");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -25,6 +56,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // 注册 Flojoy 后端状态管理
         .manage(flojoy::FlojoyBackendState::default())
+        // 注册 OCR 状态管理
+        .manage(ocr::OcrState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -67,7 +100,31 @@ pub fn run() {
             flojoy::get_flojoy_backend_pid,
             flojoy::set_flojoy_backend_port,
             flojoy::init_flojoy_backend_dir,
+            // OCR 图像识别
+            ocr::init_ocr,
+            ocr::is_ocr_initialized,
+            ocr::set_ocr_regions,
+            ocr::get_ocr_regions,
+            ocr::add_ocr_region,
+            ocr::remove_ocr_region,
+            ocr::clear_ocr_regions,
+            ocr::ocr_recognize,
+            ocr::ocr_recognize_regions,
+            ocr::start_ocr_stream,
+            ocr::stop_ocr_stream,
+            ocr::is_ocr_streaming,
+            ocr::release_ocr,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 运行应用并处理退出事件
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            // 应用退出时，停止 Flojoy 后端
+            if let Some(state) = app_handle.try_state::<flojoy::FlojoyBackendState>() {
+                cleanup_flojoy_backend(state.inner());
+            }
+        }
+    });
 }

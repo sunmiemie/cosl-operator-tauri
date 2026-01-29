@@ -40,7 +40,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/flojoy/**/*"
+      "resources/flojoy/**/*",
+      "resources/models/*"
     ]
   }
 }

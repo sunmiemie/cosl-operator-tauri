@@ -28,8 +28,8 @@ pub struct FlojoyBackendState {
     python_path: Mutex<String>,
     /// Flojoy 后端目录（resources/flojoy）
     backend_dir: Mutex<String>,
-    /// 后端进程
-    process: Mutex<Option<Child>>,
+    /// 后端进程（pub 供 lib.rs 访问以便清理）
+    pub process: Mutex<Option<Child>>,
     /// 后端端口
     port: Mutex<u16>,
     /// Poetry 是否已安装

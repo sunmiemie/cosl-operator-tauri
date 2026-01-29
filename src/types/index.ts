@@ -197,3 +197,16 @@ export {
   getDefaultWidgetForType,
   getAllowedWidgetsForType,
 } from './control'
+
+// ========== OCR Types ==========
+export {
+  type OcrRegion,
+  type TextBox,
+  type OcrRegionResult,
+  type OcrFrameResult,
+  type OcrInitOptions,
+  type OcrStreamOptions,
+  type OcrEventType,
+  type OcrResultEventPayload,
+  type OcrErrorEventPayload,
+} from './ocr'

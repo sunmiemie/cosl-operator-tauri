@@ -3,7 +3,7 @@
  * HALT-HASS 工艺编辑页面
  * 使用 Vue Flow 实现流程图编辑
  */
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -88,6 +88,8 @@ const {
   fetchTreeData,
   fetchTempList,
   loadFromTemp,
+  saveToTemp,
+  deleteTempProcess,
   uploadProcess,
   fetchProcess,
   submitToCheck,
@@ -167,10 +169,12 @@ async function selectBaseVersion(row: { id: number; name: string; version: strin
   // 加载该版本的工艺数据
   const success = await loadVersionForIteration(row.id)
   if (success) {
-    // 恢复流程图数据
-    if (processJson.value.flowchart.nodes.length > 0) {
-      flowchartNodes.value = processJson.value.flowchart.nodes
-      flowchartEdges.value = processJson.value.flowchart.edges
+    // 恢复流程图数据（使用可选链确保安全访问）
+    const nodes = processJson.value.flowchart?.nodes || []
+    const edges = processJson.value.flowchart?.edges || []
+    if (nodes.length > 0) {
+      flowchartNodes.value = nodes
+      flowchartEdges.value = edges
     }
     ElMessage.success(`已加载基础版本: ${row.name} v${row.version}`)
   } else {
@@ -188,9 +192,12 @@ function clearBaseVersionSelection() {
 // 新建工艺（保留已填写的 metadata）
 function handleNew() {
   // 注意：不调用 resetProcess()，因为用户已经在选择页填写了 metadata
-  // 只重置流程图数据
-  flowchartNodes.value = []
-  flowchartEdges.value = []
+  // 如果已选择基础版本进行迭代，保留已加载的流程图数据
+  if (!selectedBaseVersion.value) {
+    // 只有新建时才重置流程图数据
+    flowchartNodes.value = []
+    flowchartEdges.value = []
+  }
   currentStep.value = 1
 }
 
@@ -226,8 +233,6 @@ async function handleLoad() {
       if (data.name) {
         processJson.value.metadata.name = data.name
       }
-      
-      console.log('[handleLoad] Studio 格式解析成功:', { nodes: nodes.length, edges: edges.length })
     } else if (data.flowchart) {
       // 我们自己的格式（带 flowchart 字段）
       loadedNodes = data.flowchart.nodes || []
@@ -313,6 +318,26 @@ async function handleExport() {
     URL.revokeObjectURL(url)
     
     ElMessage.success('导出成功（使用浏览器下载）')
+  }
+}
+
+// 暂存工艺到本地
+async function handleSaveTemp() {
+  if (!canSave.value) {
+    ElMessage.warning('请先填写工艺名称')
+    return
+  }
+
+  // 暂存前同步流程图数据到 processJson
+  updateFlowchart(flowchartNodes.value as Node<BlockData>[], flowchartEdges.value)
+
+  const success = await saveToTemp()
+  if (success) {
+    ElMessage.success('暂存成功')
+    // 刷新暂存列表
+    fetchTempList()
+  } else {
+    ElMessage.error(errorMessage.value || '暂存失败')
   }
 }
 
@@ -510,10 +535,12 @@ async function handleSubmitFromJob(processId: number) {
 async function handleEditFromJob(row: HaltHassJob) {
   const success = await fetchProcess(row.id)
   if (success) {
-    // 恢复流程图数据
-    if (processJson.value.flowchart.nodes.length > 0) {
-      flowchartNodes.value = processJson.value.flowchart.nodes
-      flowchartEdges.value = processJson.value.flowchart.edges
+    // 恢复流程图数据（使用可选链确保安全访问）
+    const nodes = processJson.value.flowchart?.nodes || []
+    const edges = processJson.value.flowchart?.edges || []
+    if (nodes.length > 0) {
+      flowchartNodes.value = nodes
+      flowchartEdges.value = edges
     }
     // 设置选中的电路板组
     if (row.boardGroups.length > 0) {
@@ -557,10 +584,12 @@ async function handleDeleteFromJob(processId: number) {
 async function handleContinueEdit(item: { fileName: string; name: string }) {
   const success = await loadFromTemp(item.fileName)
   if (success) {
-    // 恢复流程图数据
-    if (processJson.value.flowchart.nodes.length > 0) {
-      flowchartNodes.value = processJson.value.flowchart.nodes
-      flowchartEdges.value = processJson.value.flowchart.edges
+    // 恢复流程图数据（使用可选链确保安全访问）
+    const nodes = processJson.value.flowchart?.nodes || []
+    const edges = processJson.value.flowchart?.edges || []
+    if (nodes.length > 0) {
+      flowchartNodes.value = nodes
+      flowchartEdges.value = edges
     }
     showJobDrawer.value = false
     currentStep.value = 1
@@ -571,9 +600,23 @@ async function handleContinueEdit(item: { fileName: string; name: string }) {
 }
 
 // 删除暂存文件
-async function handleDeleteTemp(_fileName: string) {
-  // TODO: 实现删除暂存文件
-  ElMessage.info('删除暂存功能待实现')
+async function handleDeleteTemp(fileName: string) {
+  try {
+    await ElMessageBox.confirm('确定要删除该暂存工艺吗？', '删除确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+
+    const success = await deleteTempProcess(fileName)
+    if (success) {
+      ElMessage.success('删除成功')
+    } else {
+      ElMessage.error('删除失败')
+    }
+  } catch {
+    // 用户取消
+  }
 }
 
 // ========== 电路板组相关方法 ==========
@@ -889,9 +932,9 @@ watch(currentStep, (step) => {
           </div>
           
           <div class="top-actions">
-            <button class="action-btn" @click="handleExport" :disabled="!canSave">
-              <Icon icon="mdi:download" />
-              导出
+            <button class="action-btn" @click="handleSaveTemp" :disabled="!canSave || isSaving">
+              <Icon icon="mdi:content-save-outline" />
+              {{ isSaving ? '暂存中...' : '暂存' }}
             </button>
           </div>
         </div>

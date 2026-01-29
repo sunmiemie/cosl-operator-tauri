@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
+import { ElMessageBox } from 'element-plus'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/composables/useAuth'
 import { useAppLock } from '@/composables/useAppLock'
@@ -20,6 +22,9 @@ const showUserMenu = ref(false)
 
 // 获取当前窗口实例
 const appWindow = getCurrentWindow()
+
+// 清理取消监听函数
+let unlistenCloseRequested: (() => void) | null = null
 
 // 初始化最大化状态
 appWindow.isMaximized().then((maximized) => {
@@ -41,9 +46,66 @@ async function toggleMaximize() {
   isMaximized.value = await appWindow.isMaximized()
 }
 
-async function closeWindow() {
-  await appWindow.close()
+// 停止 Flojoy 后端
+async function stopFlojoyBackend() {
+  try {
+    await invoke('stop_flojoy_backend')
+  } catch (error) {
+    console.error('停止 Flojoy 后端失败:', error)
+  }
 }
+
+// 关闭窗口（带确认弹窗）
+async function closeWindow() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要退出应用程序吗？',
+      '退出确认',
+      {
+        confirmButtonText: '确定退出',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    // 用户点击确认，停止后端并关闭窗口
+    await stopFlojoyBackend()
+    await appWindow.destroy()
+  } catch {
+    // 用户点击取消，不做任何操作
+  }
+}
+
+// 监听窗口关闭请求事件（Alt+F4 或任务栏关闭）
+onMounted(async () => {
+  unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
+    // 阻止默认关闭行为
+    event.preventDefault()
+
+    try {
+      await ElMessageBox.confirm(
+        '确定要退出应用程序吗？',
+        '退出确认',
+        {
+          confirmButtonText: '确定退出',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      )
+      // 用户点击确认，停止后端并关闭窗口
+      await stopFlojoyBackend()
+      await appWindow.destroy()
+    } catch {
+      // 用户点击取消，不做任何操作
+    }
+  })
+})
+
+// 清理监听器
+onUnmounted(() => {
+  if (unlistenCloseRequested) {
+    unlistenCloseRequested()
+  }
+})
 
 // 登出处理
 async function handleLogout() {
