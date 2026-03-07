@@ -31,3 +31,29 @@ test('目录生成拒绝无效结束时间', () => {
     /测试结束时间无效/
   )
 })
+
+test('目录生成拒绝有限但超出 Date 范围的时间', () => {
+  for (const completedAtMs of [Number.MAX_VALUE, 8.64e15 + 1, -8.64e15 - 1]) {
+    assert.throws(
+      () => buildHighTempPressureExportFolderName({ orderNumbers: ['TASK-001'], completedAtMs }),
+      /测试结束时间无效/
+    )
+  }
+})
+
+test('工单号中的路径分隔符和 Windows 非法字符不会进入目录名', () => {
+  const name = buildHighTempPressureExportFolderName({
+    orderNumbers: ['../TASK/2026\\A:<B>?*|"\u0000'],
+    completedAtMs: new Date(2026, 8, 23).getTime(),
+  })
+  assert.doesNotMatch(name, /[<>:"/\\|?*\u0000-\u001f]/)
+  assert.match(name, /TASK-2026-A/)
+})
+
+test('超长 Unicode 工单号保留完整字符且目录长度受限', () => {
+  const name = buildHighTempPressureExportFolderName({
+    orderNumbers: ['🔧'.repeat(300)], completedAtMs: new Date(2026, 8, 23).getTime(),
+  })
+  assert.ok(name.length < 255)
+  assert.ok(name.includes('🔧'.repeat(80)))
+})
