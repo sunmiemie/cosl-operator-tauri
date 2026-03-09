@@ -24,18 +24,18 @@ interface ScheduledTask {
 
 // ============ Constants ============
 const STARTUP_GUIDE_STEPS = [
-  { badge: "第一步", text: "接通冷水机电源，旋转“启动开关”至启动位置，确认指示灯亮起。", warning: null },
-  { badge: "第二步", text: "打开液压控制箱，检查并按下绿色的“ON”启动按钮。", warning: null },
-  { badge: "第三步", text: "找到高温烤箱盖的操纵杆，按其提示竖直向下拉动，打开箱盖。", warning: null },
-  { badge: "第四步", text: "待高温烤箱盖完全打开后，再将仪器平稳放入，并将测试线从箱体侧面的预留孔洞引出。", warning: null },
-  { badge: "第五步", text: "测试线引出后，必须用高温胶带对孔洞进行密封。", warning: "严禁不作密封！否则将造成热量散失，导致实际温度低于设定值。" },
-  { badge: "第六步", text: "握住操纵杆，依提示向上拉动，关闭高温烤箱盖。关闭后，请确认盖口已完全密封。", warning: null },
-  { badge: "第七步", text: "将高温烤箱控制箱的电源开关从“OFF”拨至“ON”位置，等待系统界面启动。", warning: null },
-  { badge: "第八步", text: "在系统界面上，点击对应的功能按钮进入操作界面。", warning: null },
-  { badge: "第九步", text: "点击“定值控制”，随后进入“设置”界面。", warning: null },
-  { badge: "第十步", text: "手动点击“温度设置”按钮，输入设定的温度数值，检查无误后点击“OK”进行确认。", warning: null },
-  { badge: "第十一步", text: "观察界面的温度是否设置成功，确认设定温度值（SV）是否与输入值一致。", warning: null },
-  { badge: "第十二步", text: "点击界面上的“运行”按钮。此时按钮状态将切换为“停止”，设备正式开始工作。", warning: null }
+  { badge: '第一步', text: '接通冷水机电源，旋转"启动开关"至启动位置，确认指示灯亮起。', warning: null, images: ['/guide/step1.jpg'] },
+  { badge: '第二步', text: '打开液压控制箱，检查并按下绿色的"ON"启动按钮。', warning: null, images: ['/guide/step2.jpg'] },
+  { badge: '第三步', text: '找到高温烤箱盖的操纵杆，按其提示竖直向下拉动，打开箱盖。', warning: null, images: ['/guide/step3.jpg', '/guide/step3-2.jpg'] },
+  { badge: '第四步', text: '待高温烤箱盖完全打开后，再将仪器平稳放入，并将测试线从箱体侧面的预留孔洞引出。', warning: null, images: ['/guide/step4.jpg'] },
+  { badge: '第五步', text: '测试线引出后，必须用高温胶带对孔洞进行密封。', warning: '严禁不作密封！否则将造成热量散失，导致实际温度低于设定值。', images: ['/guide/step5.jpg'] },
+  { badge: '第六步', text: '握住操纵杆，依提示向上拉动，关闭高温烤箱盖。关闭后，请确认盖口已完全密封。', warning: null, images: ['/guide/step6.jpg'] },
+  { badge: '第七步', text: '将高温烤箱控制箱的电源开关从"OFF"拨至"ON"位置，等待系统界面启动。', warning: null, images: ['/guide/step7.jpg'] },
+  { badge: '第八步', text: '在系统界面上，点击对应的功能按钮进入操作界面。', warning: null, images: ['/guide/step8.jpg'] },
+  { badge: '第九步', text: '点击"定值控制"，随后进入"设置"界面。', warning: null, images: ['/guide/step9.jpg'] },
+  { badge: '第十步', text: '手动点击"温度设置"按钮，输入设定的温度数值，检查无误后点击"OK"进行确认。', warning: null, images: ['/guide/step10.jpg', '/guide/step10-2.jpg'] },
+  { badge: '第十一步', text: '观察界面的温度是否设置成功，确认设定温度值（SV）是否与输入值一致。', warning: null, images: ['/guide/step11.jpg'] },
+  { badge: '第十二步', text: '点击界面上的"运行"按钮。此时按钮状态将切换为"停止"，设备正式开始工作。', warning: null, images: ['/guide/step12.jpg'] }
 ]
 
 // ============ State ============
@@ -616,6 +616,9 @@ function stopTest() {
               <div class="guide-card">
                 <div class="guide-badge">{{ STARTUP_GUIDE_STEPS[guideStepIndex].badge }}</div>
                 <p class="guide-text">{{ STARTUP_GUIDE_STEPS[guideStepIndex].text }}</p>
+                <div v-if="STARTUP_GUIDE_STEPS[guideStepIndex].images.length" class="guide-images">
+                  <img v-for="(img, i) in STARTUP_GUIDE_STEPS[guideStepIndex].images" :key="i" :src="img" :alt="`${STARTUP_GUIDE_STEPS[guideStepIndex].badge} - ${i + 1}`" />
+                </div>
                 <div v-if="STARTUP_GUIDE_STEPS[guideStepIndex].warning" class="guide-warning">
                   <Icon icon="mdi:alert" />
                   {{ STARTUP_GUIDE_STEPS[guideStepIndex].warning }}
@@ -1384,6 +1387,8 @@ function stopTest() {
 }
 
 .guide-text { font-size: 18px; line-height: 1.6; }
+.guide-images { margin-top: 16px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.guide-images img { max-width: 100%; max-height: 300px; border-radius: 8px; object-fit: contain; }
 .guide-warning { margin-top: 16px; color: var(--color-error); display: flex; align-items: center; justify-content: center; gap: 8px; }
 
 .monitor-grid { display: flex; gap: 24px; }

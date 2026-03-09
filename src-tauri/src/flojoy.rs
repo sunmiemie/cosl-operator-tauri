@@ -249,6 +249,62 @@ fn get_poetry_path(python_path: &str) -> String {
     "poetry".to_string()
 }
 
+/// 确保 Flojoy 运行所需的 Poetry 依赖已安装
+fn ensure_flojoy_dependencies(
+    poetry_path: &str,
+    python_path: &str,
+    working_dir: &PathBuf,
+) -> Result<bool, String> {
+    let import_check = create_hidden_command(poetry_path)
+        .args(["run", "python", "-c", "import uvicorn"])
+        .current_dir(working_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+
+    if let Ok(out) = import_check {
+        if out.status.success() {
+            return Ok(false);
+        }
+    }
+
+    println!("[Flojoy] 检测到依赖缺失，尝试执行 poetry install --no-root");
+
+    let install_result = create_hidden_command(poetry_path)
+        .args(["install", "--no-interaction", "--no-root"])
+        .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    if let Ok(out) = install_result {
+        if out.status.success() {
+            println!("[Flojoy] Poetry 依赖安装完成");
+            return Ok(true);
+        }
+    }
+
+    if !python_path.is_empty() {
+        let fallback = create_hidden_command(python_path)
+            .args(["-m", "poetry", "install", "--no-interaction", "--no-root"])
+            .current_dir(working_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| format!("安装 Flojoy 依赖失败: {}", e))?;
+
+        if fallback.status.success() {
+            println!("[Flojoy] 通过 python -m poetry 安装依赖完成");
+            return Ok(true);
+        }
+
+        let stderr = String::from_utf8_lossy(&fallback.stderr);
+        return Err(format!("安装 Flojoy 依赖失败: {}", stderr));
+    }
+
+    Err("安装 Flojoy 依赖失败，Poetry 环境尚未完成初始化".to_string())
+}
+
 /// 安装依赖
 #[tauri::command]
 pub fn install_dependencies(state: State<FlojoyBackendState>, app: AppHandle) -> Result<String, String> {
@@ -418,6 +474,15 @@ pub fn start_flojoy_backend(
     println!("[Flojoy] 后端目录: {:?}", backend_dir);
     println!("[Flojoy] 工作目录: {:?}", working_dir_clean);
     println!("[Flojoy] Poetry 路径: {}", poetry_path);
+
+    let dependencies_installed = ensure_flojoy_dependencies(&poetry_path, &py_path, &working_dir_clean)?;
+    if dependencies_installed {
+        let mut deps_guard = state
+            .dependencies_installed
+            .lock()
+            .map_err(|e| e.to_string())?;
+        *deps_guard = true;
+    }
     
     // 检查 main.py 是否存在（入口在 flojoy/main.py，使用 uvicorn 运行 captain.main:app）
     let main_py = working_dir_clean.join("main.py");
