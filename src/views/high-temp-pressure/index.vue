@@ -26,16 +26,16 @@ const state = reactive({
 })
 
 const manualCheckTexts = [
-  '确认供电电压是否在正常范围 (380V ±10%)',
-  '检查液压泵站油位是否在正常刻度线',
-  '检查冷却水系统是否开启，水压是否正常',
-  '检查高压管路连接是否紧固，无泄漏风险',
-  '检查传感器（温度、压力）线路连接是否牢固',
-  '确认紧急停止按钮处于复位状态',
-  '检查测试釜密封圈是否完好，无破损',
-  '确认安全阀设定压力是否符合本次测试要求',
-  '检查数据采集系统是否已连接并正常运行',
-  '清理测试区域，确保无杂物阻碍操作'
+  '查阅前次设备运转记录确认设备处于正常状态',
+  '确认设备外观无异常，包括各处固定联接螺栓、软管及接头无松动',
+  '排空液压缸内存水',
+  '确认高压泵水箱浮漂及冷却水泵水位正常',
+  '确认并检查各压力表无异常',
+  '仪器尺寸及重量检查：直径＜φ240mm，长度＜9m，重量＜4吨',
+  '确认试验仪器更换专用试压护帽',
+  '确认试压介质的液面高度正常',
+  '检查上试压头密封面及O圈确认状态良好，并确保密封复置',
+  '各控制台上电检查，确保工作正常'
 ]
 
 const showStartupCheck = ref(false)
@@ -54,7 +54,7 @@ const openStartupCheck = () => {
 
 const handleStartupCheckComplete = () => {
   showStartupCheck.value = false
-  switchPanel('start')
+  showModal('confirm-start')
 }
 
 const backToStartupCheck = () => {
@@ -404,7 +404,7 @@ const handleSelectScheduledOrder = (orderId: string) => {
 
 const handleStartScheduledTest = () => {
   if (selectedScheduledOrders.value.length === 0) return
-  activeModal.value = 'confirm-start'
+  openStartupCheck()
 }
 
 const handleUnschedule = (cellKey: string, orderId: string) => {
@@ -708,7 +708,7 @@ onUnmounted(() => {
                </div>
                <div style="display:flex;gap:10px;margin-top:12px">
                  <button class="btn btn-outline" @click="backToStartupCheck" style="flex:1">上一步</button>
-                 <button class="btn btn-primary btn-lg" @click="showModal('confirm-start')" style="flex:2">开始试验</button>
+                 <button class="btn btn-primary btn-lg" @click="openStartupCheck" style="flex:2">开始试验</button>
                </div>
              </div>
              <div class="card">
