@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
+import * as echarts from 'echarts'
 
 const currentPanel = ref('dashboard')
 const activeModal = ref<string | null>(null)
@@ -11,6 +12,38 @@ const onlineSeconds = ref(54)
 const onlineTimerStr = ref('0时0分54秒')
 let timerInterval: any = null
 let testInterval: any = null
+const chartRef = ref<HTMLDivElement | null>(null)
+let chartInst: any = null
+function initChart() {
+  if (!chartRef.value) return
+  chartInst = echarts.init(chartRef.value)
+  chartInst.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['上部水温', '下部水温', '容器压力×10'], orient: 'horizontal', top: 6, right: 8 },
+    grid: { left: 40, right: 20, top: 40, bottom: 10 },
+    xAxis: { type: 'category', data: [] },
+    yAxis: { type: 'value' },
+    series: [
+      { name: '上部水温', type: 'line', showSymbol: false, smooth: true, data: [] },
+      { name: '下部水温', type: 'line', showSymbol: false, smooth: true, data: [] },
+      { name: '容器压力×10', type: 'line', showSymbol: false, smooth: true, data: [] },
+    ],
+  })
+}
+function updateChart() {
+  if (!chartInst) return
+  const len = Math.max(state.chartData.t1.length, state.chartData.p.length)
+  const x = Array.from({ length: len }, (_, i) => i + 1)
+  chartInst.setOption({
+    legend: { orient: 'horizontal', top: 6, right: 8 },
+    xAxis: { data: x },
+    series: [
+      { name: '上部水温', data: state.chartData.t1.map(v => +v.toFixed(1)) },
+      { name: '下部水温', data: state.chartData.t2.map(v => +v.toFixed(1)) },
+      { name: '容器压力×10', data: state.chartData.p.map(v => +(v * 10).toFixed(2)) },
+    ],
+  })
+}
 
 const searchKeyword = ref('')
 const draggedOrder = ref<any>(null)
@@ -21,6 +54,7 @@ const state = reactive({
   manualChecked: {} as Record<number, boolean>,
   chartData: {
     t1: [] as number[],
+    t2: [] as number[],
     p: [] as number[]
   }
 })
@@ -286,27 +320,55 @@ const confirmStart = () => {
   testRunning.value = true
   testStartTime.value = Date.now()
   switchPanel('testing')
-  
-  // Mock data simulation
+  nextTick(() => initChart())
   if (testInterval) clearInterval(testInterval)
   testInterval = setInterval(() => {
     const lastT = state.chartData.t1[state.chartData.t1.length - 1] || 25
+    const lastT2 = state.chartData.t2[state.chartData.t2.length - 1] || 25
     const lastP = state.chartData.p[state.chartData.p.length - 1] || 0
-    
-    // Simulate heating up to 180 and pressurizing to 15
     const targetT = 180
     const targetP = 15
-    
     const nextT = lastT + (targetT - lastT) * 0.05 + (Math.random() - 0.5)
+    const nextT2 = lastT2 + (targetT - lastT2) * 0.04 + (Math.random() - 0.5)
     const nextP = lastP + (targetP - lastP) * 0.05 + (Math.random() * 0.1 - 0.05)
-    
     state.chartData.t1.push(nextT)
+    state.chartData.t2.push(nextT2)
     state.chartData.p.push(nextP)
-    
     if (state.chartData.t1.length > 100) state.chartData.t1.shift()
+    if (state.chartData.t2.length > 100) state.chartData.t2.shift()
     if (state.chartData.p.length > 100) state.chartData.p.shift()
-    
     csvCount.value++
+    updateChart()
+  }, 1000)
+}
+
+function pauseTest() {
+  if (testInterval) clearInterval(testInterval)
+  testInterval = null
+  testRunning.value = false
+}
+
+function resumeTest() {
+  if (testInterval) clearInterval(testInterval)
+  if (!chartInst) nextTick(() => initChart())
+  testRunning.value = true
+  testInterval = setInterval(() => {
+    const lastT = state.chartData.t1[state.chartData.t1.length - 1] || 25
+    const lastT2 = state.chartData.t2[state.chartData.t2.length - 1] || 25
+    const lastP = state.chartData.p[state.chartData.p.length - 1] || 0
+    const targetT = 180
+    const targetP = 15
+    const nextT = lastT + (targetT - lastT) * 0.05 + (Math.random() - 0.5)
+    const nextT2 = lastT2 + (targetT - lastT2) * 0.04 + (Math.random() - 0.5)
+    const nextP = lastP + (targetP - lastP) * 0.05 + (Math.random() * 0.1 - 0.05)
+    state.chartData.t1.push(nextT)
+    state.chartData.t2.push(nextT2)
+    state.chartData.p.push(nextP)
+    if (state.chartData.t1.length > 100) state.chartData.t1.shift()
+    if (state.chartData.t2.length > 100) state.chartData.t2.shift()
+    if (state.chartData.p.length > 100) state.chartData.p.shift()
+    csvCount.value++
+    updateChart()
   }, 1000)
 }
 
@@ -439,6 +501,7 @@ onMounted(() => {
 onUnmounted(() => {
   clearInterval(timerInterval)
   clearInterval(testInterval)
+  if (chartInst) { chartInst.dispose(); chartInst = null }
 })
 </script>
 
@@ -748,30 +811,77 @@ onUnmounted(() => {
         <div v-if="currentPanel === 'testing'" class="panel">
           <div class="ocr-bar">
             <div class="ocr-mini on">
-              <div class="ocr-mini-title">上罐 · 250L容器</div>
-              <div class="ocr-mini-row"><span>上部水温</span><span class="ocr-val temp">{{ state.chartData.t1[state.chartData.t1.length-1]?.toFixed(1) || '--.-' }} °C</span></div>
-              <div class="ocr-mini-row"><span>容器压力</span><span class="ocr-val press">{{ state.chartData.p[state.chartData.p.length-1]?.toFixed(2) || '--.--' }} MPa</span></div>
+              <div class="ocr-mini-title">🔴 上罐 · 250L容器（当前识别）</div>
+              <div class="ocr-mini-row"><span class="ocr-mini-label">上部水温</span><span class="ocr-val temp">{{ state.chartData.t1[state.chartData.t1.length-1]?.toFixed(1) || '--.-' }} °C</span></div>
+              <div class="ocr-mini-row"><span class="ocr-mini-label">下部水温</span><span class="ocr-val temp">{{ state.chartData.t2[state.chartData.t2.length-1]?.toFixed(2) || '--.-' }} °C</span></div>
+              <div class="ocr-mini-row"><span class="ocr-mini-label">容器压力</span><span class="ocr-val press">{{ state.chartData.p[state.chartData.p.length-1]?.toFixed(3) || '--.--' }} MPa</span></div>
             </div>
             <div class="ocr-mini">
-               <div class="ocr-mini-title">⚡ 系统状态</div>
-               <div class="ocr-mini-row"><span>状态</span><span class="badge blue">测试中</span></div>
-               <div class="ocr-mini-row"><span>已采集</span><span>{{ csvCount }} 条</span></div>
+              <div class="ocr-mini-title">⚡ 系统状态</div>
+              <div class="ocr-mini-row"><span class="ocr-mini-label">测试状态</span><span class="badge" :class="testRunning ? 'badge-green' : ''">{{ testRunning ? '● 测试中' : '● 已暂停' }}</span></div>
+              <div class="ocr-mini-row"><span class="ocr-mini-label">已采集</span><span style="font-family:'JetBrains Mono'">{{ csvCount }} 条</span></div>
             </div>
           </div>
-          
+
           <div class="testing-grid">
             <div class="card chart-fill">
-              <div class="card-header"><div class="card-title">📈 实时监控曲线</div></div>
+              <div class="card-header">
+                <div class="card-title">📈 实时监控曲线</div>
+
+              </div>
               <div class="card-body">
-                <canvas ref="chartCanvas" style="width:100%;height:100%"></canvas>
+                <div class="chart-container" ref="chartRef"></div>
               </div>
             </div>
             <div class="right-col">
-              <div class="test-controls">
-                <button class="test-btn stop" @click="showModal('stop-test')">⏹ 测试中止</button>
-                <button class="test-btn end" @click="showModal('end-test')">✅ 测试结束</button>
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">📊 实时参数</div>
+                  <span style="font-size:11px;color:var(--color-text-secondary)">测试中</span>
+                </div>
+                <div class="card-body" style="padding:10px 14px">
+                  <div class="realtime-stats">
+                    <div class="rt-stat"><div class="rt-stat-label">上部水温</div><div class="rt-stat-val temp">{{ state.chartData.t1[state.chartData.t1.length-1]?.toFixed(1) || '--.-' }}°C</div></div>
+                    <div class="rt-stat"><div class="rt-stat-label">下部水温</div><div class="rt-stat-val temp">{{ state.chartData.t2[state.chartData.t2.length-1]?.toFixed(1) || '--.-' }}°C</div></div>
+                    <div class="rt-stat" style="grid-column:span 2"><div class="rt-stat-label">容器压力</div><div class="rt-stat-val press">{{ state.chartData.p[state.chartData.p.length-1]?.toFixed(2) || '--.--' }} MPa</div></div>
+                  </div>
+                  <div class="divider"></div>
+                  <div style="display:flex;justify-content:space-between">
+                    <div><div class="info-key">已采集数据</div><div class="info-val">{{ csvCount }} 条</div></div>
+                    <div><div class="info-key">采集状态</div><div class="info-val" style="color:var(--green-bright)">正常</div></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header"><div class="card-title">📋 当前工单</div></div>
+                <div class="card-body" style="padding:10px 14px">
+                  <div class="info-grid" style="grid-template-columns:1fr 1fr;gap:8px" v-if="currentSelected">
+                    <div class="info-item"><div class="info-key">工单编号</div><div class="info-val" style="font-size:12px">{{ currentSelected.order.no }}</div></div>
+                    <div class="info-item"><div class="info-key">器皿类型</div><div class="info-val">{{ currentSelected.order.vesselType }}</div></div>
+                    <div class="info-item"><div class="info-key">目标温度</div><div class="info-val" style="color:var(--red-bright)">{{ currentSelected.order.targetTemp }}</div></div>
+                    <div class="info-item"><div class="info-key">目标压力</div><div class="info-val" style="color:var(--cyan)">{{ currentSelected.order.targetPressure }}</div></div>
+                    <div class="info-item"><div class="info-key">保温保压</div><div class="info-val">{{ currentSelected.order.keepCondition }}</div></div>
+                    <div class="info-item"><div class="info-key">仪器</div><div class="info-val">{{ (currentSelected.order.items || []).map(i=>i.sn).join(' / ') }}</div></div>
+                  </div>
+                  <div v-else class="text-muted">未选择排程仪器</div>
+                </div>
               </div>
             </div>
+          </div>
+
+          <div class="test-controls">
+          <button class="test-btn pause" v-if="testRunning" @click="pauseTest">⏸ 测试暂停</button>
+          <button class="test-btn pause" v-else @click="resumeTest">▶ 继续测试</button>
+         <button class="test-btn stop" @click="showModal('stop-test')">⏹ 测试中止</button> 
+
+
+            <!-- <button class="test-btn pause" @click="testRunning ? pauseTest() : resumeTest()">
+              <Icon :icon="testRunning ? 'mdi:pause' : 'mdi:play'" />
+              {{ testRunning ? '测试暂停' : '测试继续' }}
+            </button>
+            <button class="test-btn stop" @click="showModal('stop-test')">⏹ 测试中止</button> -->
+            <button class="test-btn end" @click="showModal('end-test')">✅ 测试结束</button>
           </div>
         </div>
 
@@ -852,18 +962,18 @@ onUnmounted(() => {
       </div>
       
       <div class="modal" v-if="activeModal === 'end-test'">
-        <div class="modal-header">✅ 确定测试已完成？</div>
+        <div class="modal-header">确定测试已完成？</div>
         <div class="modal-body">
           <p>系统将会停止数据记录并生成报告。</p>
         </div>
         <div class="modal-footer">
           <button class="btn btn-outline" @click="closeModal">取消</button>
-          <button class="btn btn-success" @click="endTest">确认 ✓</button>
+          <button class="btn btn-success" style="background:#409eff;border:none" @click="endTest">确认</button>
         </div>
       </div>
       
       <div class="modal" v-if="activeModal === 'stop-test'">
-        <div class="modal-header">⛔ 确定要中止测试吗？</div>
+        <div class="modal-header">确定要中止测试吗？</div>
         <div class="modal-body"><p class="text-danger">此操作不可恢复！所有数据将会丢失。</p></div>
         <div class="modal-footer">
           <button class="btn btn-outline" @click="closeModal">取消</button>
@@ -1827,8 +1937,6 @@ onUnmounted(() => {
   cursor: not-allowed;
   box-shadow: none;
 }
-
-/* Start & Testing */
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .wo-detail-box { background: var(--navy); color: #fff; padding: 20px; border-radius: var(--radius); }
 .ocr-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
@@ -1839,12 +1947,53 @@ onUnmounted(() => {
 .ocr-val { font-family: monospace; font-weight: 700; font-size: 16px; }
 .ocr-val.temp { color: var(--red); }
 .ocr-val.press { color: var(--cyan); }
-.testing-grid { display: grid; grid-template-columns: 1fr 240px; gap: 16px; height: 400px; }
+.testing-grid { display: grid; grid-template-columns: 1fr 260px; gap: 12px; flex: 1; min-height: 0; }
 .chart-fill { display: flex; flex-direction: column; }
-.test-controls { display: flex; flex-direction: column; gap: 12px; }
-.test-btn { padding: 12px; border: none; border-radius: 8px; color: #fff; font-weight: 600; cursor: pointer; }
-.test-btn.stop { background: var(--red); }
-.test-btn.end { background: var(--green); }
+.chart-fill .card-body { flex: 1; padding: 6px; min-height: 0; display: flex; position: relative; }
+.chart-container { width: 100%; flex: 1; min-height: 260px; }
+
+/* Align testing UI styles with Vibration page */
+.card { background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; }
+.card-header { padding: 12px 16px; border-bottom: 1px solid var(--color-border); display: flex; align-items: center; justify-content: space-between; }
+.card-title { font-size: 13px; font-weight: 600; margin: 0; color: var(--color-text-primary); }
+.chart-legend { font-size: 11px; display: flex; gap: 10px; }
+.cyan { color: var(--color-accent-cyan, #06b6d4); }
+.amber { color: var(--color-accent-amber, #f59e0b); }
+.red { color: #ef4444; }
+.chart-body { flex: 1; padding: 6px; min-height: 0; position: relative; }
+.right-col { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+.card-body { padding: 10px 14px; }
+.text-muted { font-size: 12px; color: var(--color-text-secondary); }
+.badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:500; background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
+.badge-green { background: rgba(46,125,50,0.15); color: #34d399; }
+
+/* Status bar styling to match vibration */
+.ocr-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.ocr-mini { background: #1a2d42; border-radius: 6px; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.07); }
+.ocr-mini-title { font-size: 10px; color: rgba(255,255,255,0.4); margin-bottom: 6px; font-weight: 600; }
+.ocr-mini-row { display: flex; justify-content: space-between; align-items: baseline; }
+.ocr-mini-label { font-size: 10px; color: rgba(255,255,255,0.45); }
+.ocr-val { font-family: monospace; font-weight: 700; }
+.ocr-val.temp { color: var(--red); font-size: 16px; }
+.ocr-val.press { color: var(--cyan); font-size: 16px; }.chart-container { width: 100%; height: 100%; min-height: 200px; }
+.test-controls { display: flex; gap: 10px; padding: 10px 0; margin-top: auto; }
+.test-btn {
+  flex: 1;
+  border: none;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: white;
+}
+.test-btn.pause { background: #f59e0b; }
+.test-btn.pause:hover { background: #d97706; }
+.test-btn.stop { background: #ef4444; }
+.test-btn.stop:hover { background: #dc2626; }
+.test-btn.end { background: #10b981; }
+.test-btn.end:hover { background: #059669; }
 
 /* Common Buttons */
 .btn { padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; transition: all 0.2s; }
@@ -1869,4 +2018,14 @@ onUnmounted(() => {
 .info-key { font-size: 11px; color: var(--color-text-secondary); }
 .info-val { font-weight: 500; }
 .text-danger { color: var(--red); }
+/* Vibration-page typography alignment for testing panel */
+.realtime-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.rt-stat { background: var(--color-bg-tertiary); border-radius: 6px; padding: 9px; border: 1px solid var(--color-border); }
+.rt-stat .rt-stat-label { font-size: 10px; color: var(--color-text-secondary); }
+.rt-stat .rt-stat-val { font-size: 16px; font-weight: 700; font-family: monospace; }
+.rt-stat .rt-stat-val.temp { color: var(--red); }
+.rt-stat .rt-stat-val.press { color: var(--cyan); }
+
+.info-key { font-size: 11px; color: var(--color-text-secondary); }
+.info-val { font-weight: 500; }
 </style>

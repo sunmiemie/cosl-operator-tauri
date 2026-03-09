@@ -13,7 +13,7 @@ const workOrders = ref([
     devices: 3,
     status: 'approved',
     createTime: '2026-03-01',
-    planTime: '2026-03-07',
+    planTime: '2026-03-13',
     taskDesc: '15℃×EFDL道氧压陀螺机规代',
     deviceList: [
       { id: 'DST-2024-001', name: 'CBMT61XA井底磁定位测井仪' },
@@ -65,7 +65,7 @@ const workOrders = ref([
     devices: 6,
     status: 'approved',
     createTime: '2026-03-01',
-    planTime: '2026-03-06',
+    planTime: '2026-03-15',
     taskDesc: '油装井中心综合测试',
     deviceList: [
       { id: 'DST-2024-015', name: 'ECCL61XA磁定位测井仪' },
@@ -77,7 +77,7 @@ const workOrders = ref([
     devices: 3,
     status: 'completed',
     createTime: '2023-12-28',
-    planTime: '2026-03-05',
+    planTime: '2026-03-16',
     taskDesc: '科索1井作业',
     deviceList: [
       { id: 'DST-2023-098', name: 'ERMI61XA微电阻率扫描成像测井仪' },
@@ -89,7 +89,7 @@ const workOrders = ref([
     devices: 8,
     status: 'approved',
     createTime: '2024-01-12',
-    planTime: '2026-03-06',
+    planTime: '2026-03-12',
     taskDesc: 'EFDT地层测试仪钻井中途油气层测试',
     deviceList: [
       { id: 'EFDT-001', name: 'EFDT PA电源短节', sn: 'EFDT-PA-001', template: 'EFDT_REPORT' },
@@ -196,6 +196,7 @@ function getCellKey(dateStr: string, timeKey: string) {
 }
 const draggedOrder = ref<any>(null)
 const scheduledOrders = ref<Record<string, string[]>>({})
+const scheduledOrdersTentative = ref<Record<string, string[]>>({})
 const selectedScheduledOrderIds = ref<string[]>([])
 
 const todayDateStr = computed(() => fmtDate(new Date()))
@@ -256,13 +257,14 @@ function loadPresetSchedule() {
     { d: 1, t: '1400', id: 'WO-2024-003' },
   ]
 
+  const globalScheduled = new Set(Object.values(scheduledOrders.value).flat())
+
   presets.forEach(p => {
+    if (globalScheduled.has(p.id)) return
     const d = addDays(base, p.d)
     const cellKey = getCellKey(fmtDate(d), p.t)
     const cur = scheduledOrders.value[cellKey] || []
-    if (!cur.includes(p.id)) {
-      scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, p.id] }
-    }
+    scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, p.id] }
   })
 }
 
@@ -317,18 +319,30 @@ function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: bool
   if (isPast) return
   const order = draggedOrder.value
   if (!order) return
+  const isTentative = !!(e && (e.shiftKey || (e as any).altKey))
   const cellKey = getCellKey(dateStr, timeKey)
   const scheduledIds = new Set(Object.values(scheduledOrders.value).flat())
   if (scheduledIds.has(order.id)) return
-  const cur = scheduledOrders.value[cellKey] || []
-  if (cur.includes(order.id)) return
-  scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, order.id] }
+  if (isTentative) {
+    const curT = scheduledOrdersTentative.value[cellKey] || []
+    if (curT.includes(order.id)) return
+    scheduledOrdersTentative.value = { ...scheduledOrdersTentative.value, [cellKey]: [...curT, order.id] }
+  } else {
+    const cur = scheduledOrders.value[cellKey] || []
+    if (cur.includes(order.id)) return
+    scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, order.id] }
+  }
 }
 
 function handleUnschedule(cellKey: string, oid: string) {
   const cur = (scheduledOrders.value[cellKey] || []).filter(x => x !== oid)
   scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: cur }
   selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(x => x !== oid)
+}
+
+function handleUnscheduleTentative(cellKey: string, oid: string) {
+  const cur = (scheduledOrdersTentative.value[cellKey] || []).filter(x => x !== oid)
+  scheduledOrdersTentative.value = { ...scheduledOrdersTentative.value, [cellKey]: cur }
 }
 
 function handleSelectScheduledOrder(oid: string) {
@@ -453,6 +467,15 @@ function handleSaveDownhole(payload: any) {
                       <button class="remove-btn" @click.stop="handleUnschedule(getCellKey(day.dateStr, slot.key), oid)"><Icon icon="mdi:close" /></button>
                     </div>
                     <div class="scheduled-tag">{{ workOrders.find(o=>o.id===oid)?.customer }} · {{ workOrders.find(o=>o.id===oid)?.deviceList?.[0]?.name }}</div>
+                  </div>
+                </div>
+                <div v-else-if="scheduledOrdersTentative[getCellKey(day.dateStr, slot.key)]?.length" style="display:flex;flex-direction:column;gap:4px;width:100%">
+                  <div v-for="oid in scheduledOrdersTentative[getCellKey(day.dateStr, slot.key)]" :key="oid" class="scheduled-item">
+                    <div class="scheduled-content">
+                      <span class="device-name">{{ oid }}</span>
+                      <button class="remove-btn" @click.stop="handleUnscheduleTentative(getCellKey(day.dateStr, slot.key), oid)"><Icon icon="mdi:close" /></button>
+                    </div>
+                    <div class="scheduled-tag">待排程 · {{ workOrders.find(o=>o.id===oid)?.customer }} · {{ workOrders.find(o=>o.id===oid)?.deviceList?.[0]?.name }}</div>
                   </div>
                 </div>
                 <div v-else class="empty-slot-hint">+</div>
