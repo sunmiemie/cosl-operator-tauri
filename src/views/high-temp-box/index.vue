@@ -1387,8 +1387,8 @@ function stopTest() {
 }
 
 .guide-text { font-size: 18px; line-height: 1.6; }
-.guide-images { margin-top: 16px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-.guide-images img { max-width: 100%; max-height: 300px; border-radius: 8px; object-fit: contain; }
+.guide-images { margin-top: 16px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; max-height: 360px; overflow-y: auto; padding: 8px; }
+.guide-images img { max-width: 100%; height: auto; max-height: 320px; border-radius: 8px; object-fit: contain; }
 .guide-warning { margin-top: 16px; color: var(--color-error); display: flex; align-items: center; justify-content: center; gap: 8px; }
 
 .monitor-grid { display: flex; gap: 24px; }
