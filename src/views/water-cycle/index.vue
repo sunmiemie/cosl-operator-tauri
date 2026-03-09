@@ -2,6 +2,13 @@
 import { computed, onMounted, ref, onUnmounted, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
 import * as echarts from 'echarts'
+import { invoke } from '@tauri-apps/api/core'
+import { useCamera } from '@/composables/useCamera'
+import { useOcr } from '@/composables/useOcr'
+import type { OcrRegion } from '@/types/ocr'
+
+const camera = useCamera()
+const ocr = useOcr()
 
 // ============ 常量定义 ============
 const DATA_CHANNELS = [
@@ -24,6 +31,25 @@ const selectedScheduledOrderIds = ref<string[]>([]) // Changed to array for mult
 const selectedChannels = ref<Record<string, boolean>>(
   DATA_CHANNELS.reduce((acc, channel) => ({ ...acc, [channel.id]: true }), {})
 )
+
+// ROI 配置
+const isOcrConfigMode = ref(false)
+const roiRegions = ref<Record<string, OcrRegion>>({})
+const activeRoiKey = ref<string | null>(null)
+const roiDragStart = ref<{ x: number; y: number } | null>(null)
+const roiDragCurrent = ref<{ x: number; y: number } | null>(null)
+
+// OCR 状态
+const ocrConfidence = ref<Record<string, number>>({})
+let ocrTimer: ReturnType<typeof setInterval> | null = null
+let ocrBusy = false
+
+// 摄像头
+const selectedCameraIndex = ref(0)
+const showCameraSelect = ref(false)
+
+// ROI canvas
+const roiCanvasRef = ref<HTMLCanvasElement | null>(null)
 
 // 工单数据 (Aligned with Vibration example)
 const workOrders = ref([
@@ -202,11 +228,13 @@ const handleStartScheduledTest = () => {
 
 const handleStartupCheckComplete = () => {
   showStartupCheck.value = false
-  currentView.value = 'testing' // 跳转到监控界面
+  currentView.value = 'testing'
+  enterMonitoring()
 }
 
 const returnToDashboard = () => {
   showStartupCheck.value = false
+  stopMonitoring()
   currentView.value = 'dashboard'
 }
 
@@ -277,14 +305,16 @@ function tick() {
   const label = new Date().toLocaleTimeString()
   xLabels.push(label)
   if (xLabels.length > MAX_POINTS) xLabels.shift()
+
+  // 只更新有 OCR 结果的通道（不再随机生成）
   COLLECTION_CHANNELS.forEach(c => {
-    const base = c.id.startsWith('p') ? 5 : c.id.startsWith('f') ? 10 : 30
-    const val = +(base + Math.random() * 5).toFixed(2)
-    realTimeData.value[c.id] = val
     chartBuffers[c.id] = chartBuffers[c.id] || []
-    chartBuffers[c.id].push(val)
-    if (chartBuffers[c.id].length > MAX_POINTS) chartBuffers[c.id].shift()
+    if (realTimeData.value[c.id] !== undefined) {
+      chartBuffers[c.id].push(realTimeData.value[c.id])
+      if (chartBuffers[c.id].length > MAX_POINTS) chartBuffers[c.id].shift()
+    }
   })
+
   if (collectionTime.value % 10 === 0) logs.value.push({ time: new Date().toLocaleTimeString(), msg: '采集心跳' })
   updateChart()
 }
@@ -307,6 +337,7 @@ function stopDataSimulation() {
 
 function pauseDataSimulation() {
   if (dataTimer) { clearInterval(dataTimer); dataTimer = null }
+  stopOcrTimer()
   isPaused.value = true
   logs.value.push({ time: new Date().toLocaleTimeString(), msg: '暂停采集' })
 }
@@ -316,6 +347,7 @@ function resumeDataSimulation() {
   dataTimer = setInterval(tick, 1000)
   isPaused.value = false
   logs.value.push({ time: new Date().toLocaleTimeString(), msg: '继续采集' })
+  startOcrRecognition()
 }
 
 function formatDuration(s: number) {
@@ -324,19 +356,304 @@ function formatDuration(s: number) {
   return `${String(m).padStart(2, '0')}:${String(rs).padStart(2, '0')}`
 }
 
+// ============ 数字提取辅助 ============
+function extractNumber(text: string): number | null {
+  const match = text.replace(/\s/g, '').match(/-?\d+\.?\d*/)
+  return match ? parseFloat(match[0]) : null
+}
+
+// ============ 置信度等级 ============
+function getConfidenceLevel(channelId: string): 'high' | 'medium' | 'low' | 'none' {
+  const conf = ocrConfidence.value[channelId]
+  if (conf === undefined) return 'none'
+  if (conf >= 0.8) return 'high'
+  if (conf >= 0.6) return 'medium'
+  return 'low'
+}
+
+// ============ ROI 拖拽交互 ============
+function selectRoiTarget(key: string) {
+  activeRoiKey.value = activeRoiKey.value === key ? null : key
+}
+
+function onRoiMouseDown(e: MouseEvent) {
+  if (!activeRoiKey.value || !roiCanvasRef.value) return
+  const rect = roiCanvasRef.value.getBoundingClientRect()
+  roiDragStart.value = {
+    x: (e.clientX - rect.left) / rect.width,
+    y: (e.clientY - rect.top) / rect.height
+  }
+  roiDragCurrent.value = { ...roiDragStart.value }
+}
+
+function onRoiMouseMove(e: MouseEvent) {
+  if (!roiDragStart.value || !roiCanvasRef.value) return
+  const rect = roiCanvasRef.value.getBoundingClientRect()
+  roiDragCurrent.value = {
+    x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+    y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
+  }
+  drawRoiOverlay()
+}
+
+function onRoiMouseUp() {
+  if (!roiDragStart.value || !roiDragCurrent.value || !activeRoiKey.value) return
+  const x = Math.min(roiDragStart.value.x, roiDragCurrent.value.x)
+  const y = Math.min(roiDragStart.value.y, roiDragCurrent.value.y)
+  const w = Math.abs(roiDragCurrent.value.x - roiDragStart.value.x)
+  const h = Math.abs(roiDragCurrent.value.y - roiDragStart.value.y)
+
+  if (w > 0.01 && h > 0.01) {
+    const ch = COLLECTION_CHANNELS.find(c => c.id === activeRoiKey.value)
+    roiRegions.value[activeRoiKey.value] = {
+      id: activeRoiKey.value,
+      x: Math.round(x * 10000) / 10000,
+      y: Math.round(y * 10000) / 10000,
+      width: Math.round(w * 10000) / 10000,
+      height: Math.round(h * 10000) / 10000,
+      label: ch?.name || activeRoiKey.value
+    }
+  }
+
+  roiDragStart.value = null
+  roiDragCurrent.value = null
+  drawRoiOverlay()
+}
+
+// ============ ROI Canvas 绘制 ============
+function drawRoiOverlay() {
+  const canvas = roiCanvasRef.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const { width, height } = canvas
+  ctx.clearRect(0, 0, width, height)
+
+  if (isOcrConfigMode.value) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'
+    ctx.fillRect(0, 0, width, height)
+  }
+
+  // 通道颜色映射
+  const colorMap: Record<string, string> = {}
+  COLLECTION_CHANNELS.forEach(c => { colorMap[c.id] = c.color })
+
+  for (const [key, region] of Object.entries(roiRegions.value)) {
+    const color = colorMap[key] || '#888'
+    const rx = region.x * width
+    const ry = region.y * height
+    const rw = region.width * width
+    const rh = region.height * height
+
+    if (isOcrConfigMode.value) {
+      ctx.clearRect(rx, ry, rw, rh)
+    }
+
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.strokeRect(rx, ry, rw, rh)
+
+    ctx.fillStyle = color
+    ctx.font = '12px sans-serif'
+    ctx.fillText(region.label || key, rx + 4, ry - 4 > 12 ? ry - 4 : ry + 14)
+  }
+
+  // 拖拽中的矩形
+  if (roiDragStart.value && roiDragCurrent.value && activeRoiKey.value) {
+    const color = colorMap[activeRoiKey.value] || '#fff'
+    const sx = roiDragStart.value.x * width
+    const sy = roiDragStart.value.y * height
+    const sw = (roiDragCurrent.value.x - roiDragStart.value.x) * width
+    const sh = (roiDragCurrent.value.y - roiDragStart.value.y) * height
+
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 3])
+    ctx.strokeRect(sx, sy, sw, sh)
+    ctx.setLineDash([])
+  }
+}
+
+function resizeRoiCanvas() {
+  const canvas = roiCanvasRef.value
+  if (!canvas) return
+  const parent = canvas.parentElement
+  if (!parent) return
+  canvas.width = parent.clientWidth
+  canvas.height = parent.clientHeight
+  drawRoiOverlay()
+}
+
+// ============ ROI 配置保存/加载 ============
+async function saveRoiConfig() {
+  try {
+    await invoke('write_cache', {
+      cacheType: 'temp',
+      id: 'wc-ocr-roi',
+      content: JSON.stringify(roiRegions.value)
+    })
+    logs.value.push({ time: new Date().toLocaleTimeString(), msg: 'ROI 配置已保存' })
+  } catch (e) {
+    console.error('保存 ROI 配置失败:', e)
+  }
+}
+
+async function loadCachedRoi() {
+  try {
+    const cached = await invoke<string>('read_cache', { cacheType: 'temp', id: 'wc-ocr-roi' })
+    if (cached) {
+      roiRegions.value = JSON.parse(cached)
+    }
+  } catch (e) {
+    console.debug('无缓存 ROI 配置:', e)
+  }
+}
+
+function saveAndExitRoiConfig() {
+  isOcrConfigMode.value = false
+  activeRoiKey.value = null
+  saveRoiConfig()
+  drawRoiOverlay()
+}
+
+function cancelRoiConfig() {
+  isOcrConfigMode.value = false
+  activeRoiKey.value = null
+  roiDragStart.value = null
+  roiDragCurrent.value = null
+  drawRoiOverlay()
+}
+
+function enterRoiConfig() {
+  isOcrConfigMode.value = true
+  activeRoiKey.value = null
+  nextTick(() => {
+    resizeRoiCanvas()
+    drawRoiOverlay()
+  })
+}
+
+// ============ OCR 定时识别 ============
+async function startOcrRecognition() {
+  const regionList = Object.values(roiRegions.value)
+  if (regionList.length === 0) return
+
+  const ok = await ocr.initialize()
+  if (!ok) {
+    console.error('OCR 初始化失败')
+    logs.value.push({ time: new Date().toLocaleTimeString(), msg: 'OCR 初始化失败' })
+    return
+  }
+
+  await ocr.setRegions(regionList)
+  stopOcrTimer()
+
+  ocrTimer = setInterval(async () => {
+    if (ocrBusy || !camera.currentFrame.value) return
+    ocrBusy = true
+
+    try {
+      const result = await ocr.recognizeRegions(camera.currentFrame.value)
+      if (!result) return
+
+      for (const region of result.regions) {
+        ocrConfidence.value[region.id] = region.confidence
+        const num = extractNumber(region.text)
+        if (num !== null) {
+          realTimeData.value[region.id] = num
+        }
+      }
+    } finally {
+      ocrBusy = false
+    }
+  }, 2000)
+
+  logs.value.push({ time: new Date().toLocaleTimeString(), msg: `OCR 识别已启动 (${regionList.length} 个区域)` })
+}
+
+function stopOcrTimer() {
+  if (ocrTimer) {
+    clearInterval(ocrTimer)
+    ocrTimer = null
+  }
+}
+
+// ============ 摄像头生命周期 ============
+async function startMonitorCamera() {
+  const deviceList = await camera.getDeviceList()
+  if (deviceList.length === 0) {
+    console.warn('未找到摄像头设备')
+    return
+  }
+  if (deviceList.length > 1) {
+    showCameraSelect.value = true
+  }
+  await camera.startCamera(selectedCameraIndex.value)
+}
+
+async function handleCameraSwitch(index: number) {
+  selectedCameraIndex.value = index
+  await camera.startCamera(index)
+  showCameraSelect.value = false
+}
+
+async function handleTakePhoto() {
+  const photo = await camera.takePhoto()
+  if (photo) {
+    logs.value.push({ time: new Date().toLocaleTimeString(), msg: '抓拍成功' })
+  }
+}
+
+function handleResize() {
+  resizeRoiCanvas()
+  if (chartInst) chartInst.resize()
+}
+
+// ============ 视图切换生命周期 ============
+async function enterMonitoring() {
+  await nextTick()
+  await startMonitorCamera()
+  await loadCachedRoi()
+
+  await nextTick()
+  resizeRoiCanvas()
+  drawRoiOverlay()
+  window.addEventListener('resize', handleResize)
+}
+
+function stopMonitoring() {
+  stopOcrTimer()
+  stopDataSimulation()
+  camera.stopCamera()
+  ocr.release()
+  window.removeEventListener('resize', handleResize)
+  if (chartInst) { chartInst.dispose(); chartInst = null }
+  realTimeData.value = {}
+  ocrConfidence.value = {}
+}
+
 function handleConfirmSync() {
   currentView.value = 'data_collection'
-  nextTick(() => { initChart(); startDataSimulation() })
+  nextTick(() => {
+    initChart()
+    startDataSimulation()
+    // 有 ROI 配置则自动启动 OCR
+    if (Object.keys(roiRegions.value).length > 0) {
+      startOcrRecognition()
+    } else {
+      logs.value.push({ time: new Date().toLocaleTimeString(), msg: '未配置 ROI，请返回监控页面配置识别区域' })
+    }
+  })
 }
 
 function handleFinishTest() {
-  stopDataSimulation()
+  stopMonitoring()
   currentView.value = 'dashboard'
 }
 
 onUnmounted(() => {
-  stopDataSimulation()
-  if (chartInst) { chartInst.dispose(); chartInst = null }
+  stopMonitoring()
 })
 </script>
 
@@ -512,11 +829,63 @@ onUnmounted(() => {
             <div class="video-card">
               <div class="video-card-header">
                 <Icon icon="mdi:camera-outline" /> <span>主监控画面采集</span>
-                <div class="rec-indicator">● REC</div>
+                <div v-if="camera.isActive.value" class="rec-indicator">● REC</div>
               </div>
-              <div class="video-viewport">
-                <Icon icon="mdi:video-vintage" class="watermark-icon" />
-                <div class="viewport-overlay">Camera_Channel_01 - Live</div>
+              <div class="video-viewport" style="position: relative;">
+                <!-- 真实摄像头画面 -->
+                <img v-if="camera.currentFrame.value" :src="camera.currentFrame.value" class="camera-frame" />
+                <div v-else-if="camera.isLoading.value" class="camera-placeholder">
+                  <Icon icon="mdi:loading" class="spin-icon" />
+                  <span>摄像头加载中...</span>
+                </div>
+                <div v-else-if="camera.error.value" class="camera-placeholder error">
+                  <Icon icon="mdi:alert-circle-outline" />
+                  <span>{{ camera.error.value }}</span>
+                </div>
+                <div v-else class="camera-placeholder">
+                  <Icon icon="mdi:video-off-outline" />
+                  <span>等待摄像头连接...</span>
+                </div>
+
+                <!-- LIVE 状态指示 -->
+                <div v-if="camera.isActive.value" class="camera-status">
+                  <span class="live-dot"></span>
+                  LIVE
+                </div>
+
+                <!-- ROI 叠加层 -->
+                <canvas
+                  ref="roiCanvasRef"
+                  class="roi-overlay"
+                  :class="{ 'config-active': isOcrConfigMode }"
+                  @mousedown="onRoiMouseDown"
+                  @mousemove="onRoiMouseMove"
+                  @mouseup="onRoiMouseUp"
+                  @mouseleave="onRoiMouseUp"
+                />
+
+                <!-- ROI 配置面板 -->
+                <div v-if="isOcrConfigMode" class="roi-config-panel">
+                  <div class="roi-config-title">选择要配置的识别区域，然后在画面上拖拽框选</div>
+                  <div class="roi-buttons-grid">
+                    <button
+                      v-for="c in COLLECTION_CHANNELS"
+                      :key="c.id"
+                      class="roi-btn"
+                      :class="{ active: activeRoiKey === c.id, configured: !!roiRegions[c.id] }"
+                      :style="{ color: c.color, '--roi-color': c.color }"
+                      @click="selectRoiTarget(c.id)"
+                    >
+                      {{ c.name }}
+                    </button>
+                  </div>
+                  <div class="roi-config-actions">
+                    <button class="btn-outline small" @click="cancelRoiConfig">取消</button>
+                    <button class="btn-solid-primary small" @click="saveAndExitRoiConfig">
+                      <Icon icon="mdi:check" /> 保存配置
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="video-footer-info">
                 提示：当前正在进行实时图像采集，请确保测试区域无无关人员走动。
@@ -525,24 +894,31 @@ onUnmounted(() => {
           </div>
 
           <div class="monitor-sidebar">
-            <div class="video-card mini">
-              <div class="video-card-header">辅助预览</div>
-              <div class="video-viewport small">
-                <Icon icon="mdi:camera-iris" />
-              </div>
+            <!-- 摄像头选择 -->
+            <div class="camera-select-panel">
+              <h3 class="panel-sub-title">摄像头选择</h3>
+              <select
+                class="camera-select"
+                :value="selectedCameraIndex"
+                @change="handleCameraSwitch(Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="(dev, i) in camera.devices.value" :key="dev.deviceId" :value="i">
+                  {{ dev.label }}
+                </option>
+              </select>
             </div>
 
             <div class="status-panel">
               <h3 class="panel-sub-title">采集参数</h3>
               <div class="status-row"><span>分辨率</span><span>1920×1080</span></div>
               <div class="status-row"><span>帧率</span><span>30 FPS</span></div>
-              <div class="status-row"><span>存储剩余</span><span>420 GB</span></div>
+              <div class="status-row"><span>ROI 区域</span><span>{{ Object.keys(roiRegions).length }} / {{ COLLECTION_CHANNELS.length }}</span></div>
             </div>
 
             <div class="action-panel">
-              <button class="icon-action-btn"><Icon icon="mdi:camera" /> 抓拍</button>
+              <button class="icon-action-btn" @click="handleTakePhoto"><Icon icon="mdi:camera" /> 抓拍</button>
               <button class="icon-action-btn"><Icon icon="mdi:record-circle-outline" /> 录制</button>
-              <button class="icon-action-btn"><Icon icon="mdi:cog" /> 配置</button>
+              <button class="icon-action-btn" @click="enterRoiConfig"><Icon icon="mdi:cog" /> 配置</button>
             </div>
           </div>
         </div>
@@ -597,9 +973,12 @@ onUnmounted(() => {
 
         <div class="data-grid">
           <div v-for="c in COLLECTION_CHANNELS" :key="c.id" v-show="activeCollectionChannels[c.id]" class="data-card">
-            <div class="d-name">{{ c.name }}</div>
+            <div class="d-name">
+              {{ c.name }}
+              <span class="confidence-dot" :class="getConfidenceLevel(c.id)"></span>
+            </div>
             <div class="d-value" :style="{ color: c.color }">
-              {{ realTimeData[c.id] || '0.00' }} <span class="unit">{{ c.unit }}</span>
+              {{ realTimeData[c.id] !== undefined ? realTimeData[c.id] : '--' }} <span class="unit">{{ c.unit }}</span>
             </div>
           </div>
         </div>
@@ -1542,11 +1921,198 @@ onUnmounted(() => {
 .log-item .msg { color: var(--color-text-primary); }
 .data-grid { display:grid; grid-template-columns: repeat(5, 1fr); gap:12px; }
 .data-card { background: var(--color-bg-secondary); border:1px solid var(--color-border); padding:12px 16px; border-radius:10px; }
-.d-name { font-size:12px; color: var(--color-text-secondary); margin-bottom:4px; }
 .d-value { font-size:18px; font-weight:700; }
 .d-value .unit { font-size:12px; color: var(--color-text-tertiary); margin-left:2px; }
 .collection-footer { display:flex; justify-content:center; gap:20px; margin-top:10px; }
 .btn-pause { background:#f97316; color:white; border:none; padding:12px 60px; border-radius:8px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:8px; }
 .btn-stop { background:#0ea5e9; color:white; border:none; padding:12px 60px; border-radius:8px; font-weight:600; cursor:pointer; }
 .pulse-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; display: inline-block; animation: pulse 1.5s infinite; }
+
+/* ============ 摄像头画面 ============ */
+.camera-frame {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.camera-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+}
+
+.camera-placeholder .spin-icon {
+  font-size: 32px;
+  animation: spin 1s linear infinite;
+}
+
+.camera-placeholder.error {
+  color: #ef4444;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ============ LIVE 状态指示 ============ */
+.camera-status {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ef4444;
+  letter-spacing: 1px;
+  z-index: 5;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: livePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ============ ROI 叠加层 ============ */
+.roi-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.roi-overlay.config-active {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+/* ============ ROI 配置面板 ============ */
+.roi-config-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(8px);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 10;
+}
+
+.roi-config-title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+}
+
+.roi-buttons-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  justify-content: center;
+}
+
+.roi-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.roi-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.roi-btn.active { border-color: var(--roi-color); background: rgba(255, 255, 255, 0.15); }
+.roi-btn.configured { opacity: 1; }
+.roi-btn.configured::after { content: ' \2713'; }
+
+.roi-config-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btn-outline.small,
+.btn-solid-primary.small {
+  padding: 6px 16px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+/* ============ 摄像头选择 ============ */
+.camera-select-panel {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 15px;
+}
+
+.camera-select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.camera-select:focus {
+  border-color: var(--color-accent-blue);
+}
+
+/* ============ 置信度圆点 ============ */
+.confidence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.confidence-dot.high { background: #22c55e; }
+.confidence-dot.medium { background: #f59e0b; }
+.confidence-dot.low { background: #ef4444; }
+.confidence-dot.none { background: var(--color-border); }
+
+/* ============ 数据卡片增强 ============ */
+.d-name {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+}
 </style>
