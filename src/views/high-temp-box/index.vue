@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
+import * as echarts from 'echarts'
+import { useCamera } from '@/composables/useCamera'
+import { useOcr } from '@/composables/useOcr'
+import type { OcrRegion } from '@/types/ocr'
 
 // ============ Type Definitions ============
 interface WorkOrder {
@@ -134,6 +139,51 @@ const preCheckItems = ref([
 const guideStepIndex = ref(0)
 const currentTemp = ref(25)
 const isRunning = ref(true)
+
+// ============ Camera & OCR ============
+const camera = useCamera()
+const ocr = useOcr()
+
+// OCR 读取的实时数值
+const ocrSetTemp = ref<number | null>(null)
+const ocrCurrentTemp = ref<number | null>(null)
+const ocrRunTime = ref<string | null>(null)
+
+// 温度历史数据
+interface TempHistoryPoint {
+  time: string
+  temp: number
+}
+const tempHistory = ref<TempHistoryPoint[]>([])
+
+// ROI 配置
+const isOcrConfigMode = ref(false)
+const roiRegions = ref<Record<string, OcrRegion>>({})
+const activeRoiKey = ref<string | null>(null)
+
+// ROI 拖拽状态
+const roiDragStart = ref<{ x: number; y: number } | null>(null)
+const roiDragCurrent = ref<{ x: number; y: number } | null>(null)
+
+// 置信度
+const ocrConfidence = ref<Record<string, number>>({})
+
+// 定时器
+let ocrTimer: ReturnType<typeof setInterval> | null = null
+let ocrBusy = false
+let runTimer: ReturnType<typeof setInterval> | null = null
+const runSeconds = ref(0)
+
+// ECharts
+const chartRef = ref<HTMLElement | null>(null)
+let chartInstance: echarts.ECharts | null = null
+
+// 摄像头选择
+const selectedCameraIndex = ref<number>(0)
+const showCameraSelect = ref(false)
+
+// ROI canvas
+const roiCanvasRef = ref<HTMLCanvasElement | null>(null)
 
 // ============ Computed ============
 const filteredOrders = computed(() => {
@@ -354,9 +404,469 @@ function prevGuideStep() {
 
 function stopTest() {
   if (confirm('测试将中止并清空数据，确认吗？')) {
+    stopMonitoring()
     backToDashboard()
   }
 }
+
+// ============ Camera & OCR Methods ============
+
+// 格式化运行时间
+function formatRunTime(seconds: number): string {
+  const h = String(Math.floor(seconds / 3600)).padStart(2, '0')
+  const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')
+  const s = String(seconds % 60).padStart(2, '0')
+  return `${h}:${m}:${s}`
+}
+
+// 运行时长计算属性
+const displayRunTime = computed(() => {
+  if (ocrRunTime.value) return ocrRunTime.value
+  return formatRunTime(runSeconds.value)
+})
+
+// 设定温度显示
+const displaySetTemp = computed(() => {
+  if (ocrSetTemp.value !== null) return ocrSetTemp.value
+  return currentWorkOrder.value?.targetTemp ?? '--'
+})
+
+// 当前温度显示
+const displayCurrentTemp = computed(() => {
+  if (ocrCurrentTemp.value !== null) return ocrCurrentTemp.value
+  return '--'
+})
+
+// 置信度等级
+function getConfidenceLevel(regionId: string): 'high' | 'medium' | 'low' | 'none' {
+  const conf = ocrConfidence.value[regionId]
+  if (conf === undefined) return 'none'
+  if (conf >= 0.8) return 'high'
+  if (conf >= 0.6) return 'medium'
+  return 'low'
+}
+
+// 启动摄像头
+async function startMonitorCamera() {
+  const devices = await camera.getDeviceList()
+  if (devices.length === 0) {
+    console.warn('未检测到摄像头/采集卡')
+    return
+  }
+  if (devices.length > 1) {
+    showCameraSelect.value = true
+  } else {
+    await camera.startCamera(0)
+    showCameraSelect.value = false
+  }
+}
+
+// 选择摄像头并启动
+async function selectAndStartCamera(index: number) {
+  selectedCameraIndex.value = index
+  showCameraSelect.value = false
+  await camera.startCamera(index)
+}
+
+// 加载缓存的 ROI 配置
+async function loadCachedRoi() {
+  try {
+    const data = await invoke<string>('read_cache', { cacheType: 'temp', id: 'ht-ocr-roi' })
+    if (data) {
+      const parsed = JSON.parse(data) as Record<string, OcrRegion>
+      roiRegions.value = parsed
+    }
+  } catch {
+    // 没有缓存，正常
+  }
+}
+
+// 保存 ROI 配置到缓存
+async function saveRoiConfig() {
+  try {
+    await invoke('write_cache', {
+      cacheType: 'temp',
+      id: 'ht-ocr-roi',
+      data: JSON.stringify(roiRegions.value)
+    })
+  } catch (err) {
+    console.error('保存 ROI 配置失败:', err)
+  }
+}
+
+// 进入 ROI 配置模式
+function enterRoiConfig() {
+  isOcrConfigMode.value = true
+  activeRoiKey.value = null
+  stopOcrTimer()
+}
+
+// 选择要配置的 ROI 区域
+function selectRoiTarget(key: string) {
+  activeRoiKey.value = key
+}
+
+// ROI 拖拽开始
+function onRoiMouseDown(e: MouseEvent) {
+  if (!activeRoiKey.value || !roiCanvasRef.value) return
+  const rect = roiCanvasRef.value.getBoundingClientRect()
+  roiDragStart.value = {
+    x: (e.clientX - rect.left) / rect.width,
+    y: (e.clientY - rect.top) / rect.height
+  }
+  roiDragCurrent.value = { ...roiDragStart.value }
+}
+
+// ROI 拖拽中
+function onRoiMouseMove(e: MouseEvent) {
+  if (!roiDragStart.value || !roiCanvasRef.value) return
+  const rect = roiCanvasRef.value.getBoundingClientRect()
+  roiDragCurrent.value = {
+    x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+    y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
+  }
+  drawRoiOverlay()
+}
+
+// ROI 拖拽结束
+function onRoiMouseUp() {
+  if (!roiDragStart.value || !roiDragCurrent.value || !activeRoiKey.value) return
+
+  const x = Math.min(roiDragStart.value.x, roiDragCurrent.value.x)
+  const y = Math.min(roiDragStart.value.y, roiDragCurrent.value.y)
+  const w = Math.abs(roiDragCurrent.value.x - roiDragStart.value.x)
+  const h = Math.abs(roiDragCurrent.value.y - roiDragStart.value.y)
+
+  if (w > 0.01 && h > 0.01) {
+    const labels: Record<string, string> = {
+      setTemp: '设定温度',
+      currentTemp: '当前温度',
+      runTime: '运行时间'
+    }
+    roiRegions.value[activeRoiKey.value] = {
+      id: activeRoiKey.value,
+      x: Math.round(x * 10000) / 10000,
+      y: Math.round(y * 10000) / 10000,
+      width: Math.round(w * 10000) / 10000,
+      height: Math.round(h * 10000) / 10000,
+      label: labels[activeRoiKey.value] || activeRoiKey.value
+    }
+  }
+
+  roiDragStart.value = null
+  roiDragCurrent.value = null
+  drawRoiOverlay()
+}
+
+// 绘制 ROI 覆盖层
+function drawRoiOverlay() {
+  const canvas = roiCanvasRef.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const { width, height } = canvas
+  ctx.clearRect(0, 0, width, height)
+
+  // 配置模式下画半透明遮罩
+  if (isOcrConfigMode.value) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'
+    ctx.fillRect(0, 0, width, height)
+  }
+
+  const colors: Record<string, string> = {
+    setTemp: '#f59e0b',
+    currentTemp: '#3b82f6',
+    runTime: '#10b981'
+  }
+
+  // 绘制已配置的区域
+  for (const [key, region] of Object.entries(roiRegions.value)) {
+    const color = colors[key] || '#888'
+    const rx = region.x * width
+    const ry = region.y * height
+    const rw = region.width * width
+    const rh = region.height * height
+
+    // 配置模式下，切掉遮罩显示区域
+    if (isOcrConfigMode.value) {
+      ctx.clearRect(rx, ry, rw, rh)
+    }
+
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.strokeRect(rx, ry, rw, rh)
+
+    // 标签
+    ctx.fillStyle = color
+    ctx.font = '12px sans-serif'
+    ctx.fillText(region.label || key, rx + 4, ry - 4 > 12 ? ry - 4 : ry + 14)
+  }
+
+  // 绘制当前拖拽中的矩形
+  if (roiDragStart.value && roiDragCurrent.value && activeRoiKey.value) {
+    const color = colors[activeRoiKey.value] || '#fff'
+    const sx = roiDragStart.value.x * width
+    const sy = roiDragStart.value.y * height
+    const sw = (roiDragCurrent.value.x - roiDragStart.value.x) * width
+    const sh = (roiDragCurrent.value.y - roiDragStart.value.y) * height
+
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 3])
+    ctx.strokeRect(sx, sy, sw, sh)
+    ctx.setLineDash([])
+  }
+}
+
+// 保存 ROI 并退出配置模式
+async function saveAndExitRoiConfig() {
+  isOcrConfigMode.value = false
+  activeRoiKey.value = null
+  await saveRoiConfig()
+  drawRoiOverlay()
+  // 配置完成后自动启动 OCR
+  await startOcrRecognition()
+}
+
+// 取消 ROI 配置
+function cancelRoiConfig() {
+  isOcrConfigMode.value = false
+  activeRoiKey.value = null
+  roiDragStart.value = null
+  roiDragCurrent.value = null
+  drawRoiOverlay()
+}
+
+// 从文本中提取数字
+function extractNumber(text: string): number | null {
+  const match = text.match(/-?\d+\.?\d*/)
+  return match ? parseFloat(match[0]) : null
+}
+
+// 启动 OCR 定时识别
+async function startOcrRecognition() {
+  const regionList = Object.values(roiRegions.value)
+  if (regionList.length === 0) return
+
+  // 初始化 OCR
+  const ok = await ocr.initialize()
+  if (!ok) {
+    console.error('OCR 初始化失败')
+    return
+  }
+
+  await ocr.setRegions(regionList)
+  stopOcrTimer()
+
+  ocrTimer = setInterval(async () => {
+    if (ocrBusy || !camera.currentFrame.value || !isRunning.value) return
+    ocrBusy = true
+
+    try {
+      const result = await ocr.recognizeRegions(camera.currentFrame.value)
+      if (!result) return
+
+      for (const region of result.regions) {
+        ocrConfidence.value[region.id] = region.confidence
+        const num = extractNumber(region.text)
+
+        if (region.id === 'setTemp' && num !== null) {
+          ocrSetTemp.value = num
+        } else if (region.id === 'currentTemp' && num !== null) {
+          ocrCurrentTemp.value = num
+          currentTemp.value = num
+          // 追加到温度历史
+          const now = new Date()
+          const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
+          tempHistory.value.push({ time: timeStr, temp: num })
+          // 最多保留 300 个点
+          if (tempHistory.value.length > 300) {
+            tempHistory.value.shift()
+          }
+          updateChart()
+        } else if (region.id === 'runTime') {
+          ocrRunTime.value = region.text.trim()
+        }
+      }
+    } finally {
+      ocrBusy = false
+    }
+  }, 2000)
+}
+
+// 停止 OCR 定时器
+function stopOcrTimer() {
+  if (ocrTimer) {
+    clearInterval(ocrTimer)
+    ocrTimer = null
+  }
+}
+
+// 启动运行计时器
+function startRunTimer() {
+  runSeconds.value = 0
+  runTimer = setInterval(() => {
+    if (isRunning.value) {
+      runSeconds.value++
+    }
+  }, 1000)
+}
+
+// 停止运行计时器
+function stopRunTimer() {
+  if (runTimer) {
+    clearInterval(runTimer)
+    runTimer = null
+  }
+}
+
+// ============ ECharts ============
+function initChart() {
+  if (!chartRef.value) return
+  chartInstance = echarts.init(chartRef.value)
+
+  const targetTemp = currentWorkOrder.value?.targetTemp ?? 0
+
+  chartInstance.setOption({
+    grid: { top: 40, right: 20, bottom: 30, left: 50 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(30, 30, 46, 0.9)',
+      borderColor: 'rgba(255,255,255,0.1)',
+      textStyle: { color: '#e2e8f0', fontSize: 12 }
+    },
+    xAxis: {
+      type: 'category',
+      data: [],
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.15)' } },
+      axisLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 11 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '°C',
+      nameTextStyle: { color: 'rgba(255,255,255,0.5)' },
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.15)' } },
+      axisLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 11 },
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }
+    },
+    series: [
+      {
+        name: '当前温度',
+        type: 'line',
+        data: [],
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { color: '#3b82f6', width: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
+            { offset: 1, color: 'rgba(59, 130, 246, 0.02)' }
+          ])
+        },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          data: [
+            {
+              yAxis: targetTemp,
+              lineStyle: { color: '#f59e0b', type: 'dashed', width: 1 },
+              label: { formatter: `设定 ${targetTemp}°C`, color: '#f59e0b', fontSize: 11 }
+            }
+          ]
+        }
+      }
+    ]
+  })
+}
+
+function updateChart() {
+  if (!chartInstance) return
+  const times = tempHistory.value.map(p => p.time)
+  const temps = tempHistory.value.map(p => p.temp)
+
+  chartInstance.setOption({
+    xAxis: { data: times },
+    series: [{ data: temps }]
+  })
+}
+
+// ============ Monitoring Lifecycle ============
+function handleResize() {
+  chartInstance?.resize()
+  resizeRoiCanvas()
+}
+
+async function enterMonitoring() {
+  await nextTick()
+  await startMonitorCamera()
+  await loadCachedRoi()
+  startRunTimer()
+
+  // 初始化图表
+  await nextTick()
+  initChart()
+
+  // 如果有缓存的 ROI 配置，自动启动 OCR
+  if (Object.keys(roiRegions.value).length > 0) {
+    await startOcrRecognition()
+  }
+
+  // 初始化 ROI 绘制
+  await nextTick()
+  resizeRoiCanvas()
+  drawRoiOverlay()
+
+  window.addEventListener('resize', handleResize)
+}
+
+function stopMonitoring() {
+  stopOcrTimer()
+  stopRunTimer()
+  camera.stopCamera()
+  ocr.release()
+  window.removeEventListener('resize', handleResize)
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+  // 重置 OCR 状态
+  ocrSetTemp.value = null
+  ocrCurrentTemp.value = null
+  ocrRunTime.value = null
+  tempHistory.value = []
+  ocrConfidence.value = {}
+  runSeconds.value = 0
+}
+
+function resizeRoiCanvas() {
+  const canvas = roiCanvasRef.value
+  if (!canvas) return
+  const parent = canvas.parentElement
+  if (!parent) return
+  canvas.width = parent.clientWidth
+  canvas.height = parent.clientHeight
+  drawRoiOverlay()
+}
+
+// 暂停/继续
+function togglePause() {
+  isRunning.value = !isRunning.value
+}
+
+// 监听进入监控步骤
+watch(currentStep, (val, oldVal) => {
+  if (val === 'monitoring') {
+    enterMonitoring()
+  } else if (oldVal === 'monitoring') {
+    stopMonitoring()
+  }
+})
+
+// 页面卸载时清理
+onUnmounted(() => {
+  stopMonitoring()
+})
 </script>
 
 <template>
@@ -636,28 +1146,143 @@ function stopTest() {
 
           <!-- 步骤3: 监控 -->
           <div v-else-if="currentStep === 'monitoring'" class="monitor-panel">
-            <div class="monitor-grid">
-              <div class="monitor-card">
-                <div class="monitor-label">设定温度</div>
-                <div class="monitor-value">{{ currentWorkOrder?.targetTemp }}<small>°C</small></div>
+            <!-- 摄像头选择弹窗 -->
+            <div v-if="showCameraSelect" class="camera-select-overlay">
+              <div class="camera-select-modal">
+                <h3>选择视频采集卡</h3>
+                <div class="camera-list">
+                  <button
+                    v-for="dev in camera.devices.value"
+                    :key="dev.deviceId"
+                    class="camera-option"
+                    @click="selectAndStartCamera(dev.index ?? 0)"
+                  >
+                    <Icon icon="mdi:camera" />
+                    <span>{{ dev.label }}</span>
+                  </button>
+                </div>
               </div>
-              <div class="monitor-card active">
-                <div class="monitor-label">当前温度</div>
-                <div class="monitor-value">{{ currentTemp }}<small>°C</small></div>
-              </div>
-              <div class="monitor-card">
-                <div class="monitor-label">运行时长</div>
-                <div class="monitor-value">00:12:45</div>
-              </div>
-            </div>
-            
-            <div class="chart-placeholder">
-              <Icon icon="mdi:chart-line" class="chart-icon" />
-              <p>温度曲线实时采集区域</p>
             </div>
 
+            <!-- 状态卡片 -->
+            <div class="monitor-grid">
+              <div class="monitor-card">
+                <div class="monitor-label">
+                  设定温度
+                  <span class="confidence-dot" :class="getConfidenceLevel('setTemp')"></span>
+                </div>
+                <div class="monitor-value">{{ displaySetTemp }}<small>°C</small></div>
+              </div>
+              <div class="monitor-card active">
+                <div class="monitor-label">
+                  当前温度
+                  <span class="confidence-dot" :class="getConfidenceLevel('currentTemp')"></span>
+                </div>
+                <div class="monitor-value">{{ displayCurrentTemp }}<small v-if="ocrCurrentTemp !== null">°C</small></div>
+              </div>
+              <div class="monitor-card">
+                <div class="monitor-label">
+                  运行时长
+                  <span class="confidence-dot" :class="getConfidenceLevel('runTime')"></span>
+                </div>
+                <div class="monitor-value time-value">{{ displayRunTime }}</div>
+              </div>
+            </div>
+
+            <!-- 主内容区域：视频 + 图表 -->
+            <div class="monitor-main">
+              <!-- 左侧：视频画面 -->
+              <div class="video-container">
+                <img
+                  v-if="camera.currentFrame.value"
+                  :src="camera.currentFrame.value"
+                  class="video-feed"
+                  alt="采集卡画面"
+                />
+                <div v-else class="video-placeholder">
+                  <Icon icon="mdi:video-off-outline" class="placeholder-icon" />
+                  <p v-if="camera.isLoading.value">正在连接采集卡...</p>
+                  <p v-else-if="camera.error.value">{{ camera.error.value }}</p>
+                  <p v-else>等待视频信号</p>
+                </div>
+
+                <!-- ROI 叠加层 -->
+                <canvas
+                  ref="roiCanvasRef"
+                  class="roi-overlay"
+                  :class="{ 'config-active': isOcrConfigMode }"
+                  @mousedown="onRoiMouseDown"
+                  @mousemove="onRoiMouseMove"
+                  @mouseup="onRoiMouseUp"
+                  @mouseleave="onRoiMouseUp"
+                />
+
+                <!-- ROI 配置面板 -->
+                <div v-if="isOcrConfigMode" class="roi-config-panel">
+                  <div class="roi-config-title">选择要配置的识别区域，然后在画面上拖拽框选</div>
+                  <div class="roi-buttons">
+                    <button
+                      class="roi-btn set-temp"
+                      :class="{ active: activeRoiKey === 'setTemp', configured: !!roiRegions.setTemp }"
+                      @click="selectRoiTarget('setTemp')"
+                    >
+                      <Icon icon="mdi:target" />
+                      设定温度
+                    </button>
+                    <button
+                      class="roi-btn current-temp"
+                      :class="{ active: activeRoiKey === 'currentTemp', configured: !!roiRegions.currentTemp }"
+                      @click="selectRoiTarget('currentTemp')"
+                    >
+                      <Icon icon="mdi:thermometer" />
+                      当前温度
+                    </button>
+                    <button
+                      class="roi-btn run-time"
+                      :class="{ active: activeRoiKey === 'runTime', configured: !!roiRegions.runTime }"
+                      @click="selectRoiTarget('runTime')"
+                    >
+                      <Icon icon="mdi:timer-outline" />
+                      运行时间
+                    </button>
+                  </div>
+                  <div class="roi-config-actions">
+                    <button class="secondary-btn" @click="cancelRoiConfig">取消</button>
+                    <button class="primary-btn small" @click="saveAndExitRoiConfig">
+                      <Icon icon="mdi:check" />
+                      保存配置
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 摄像头状态指示 -->
+                <div v-if="camera.isActive.value" class="camera-status">
+                  <span class="live-dot"></span>
+                  LIVE
+                </div>
+              </div>
+
+              <!-- 右侧：温度曲线 -->
+              <div class="chart-container">
+                <div class="chart-header">
+                  <Icon icon="mdi:chart-line" />
+                  <span>温度曲线</span>
+                </div>
+                <div ref="chartRef" class="chart-area"></div>
+                <div v-if="tempHistory.length === 0" class="chart-empty-hint">
+                  <p>配置 OCR 识别区域后将自动采集温度数据</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- 操作栏 -->
             <div class="action-bar">
-              <button class="secondary-btn warning" @click="isRunning = !isRunning">
+              <button v-if="!isOcrConfigMode" class="secondary-btn" @click="enterRoiConfig">
+                <Icon icon="mdi:crop" />
+                配置识别区域
+              </button>
+              <div class="action-spacer"></div>
+              <button class="secondary-btn warning" @click="togglePause">
                 <Icon :icon="isRunning ? 'mdi:pause' : 'mdi:play'" />
                 {{ isRunning ? '暂停测试' : '继续测试' }}
               </button>
@@ -1247,7 +1872,7 @@ function stopTest() {
   color: var(--color-text-primary);
 }
 
-.check-panel, .guide-panel, .monitor-panel {
+.check-panel, .guide-panel {
   width: 100%;
   max-width: 800px;
   display: flex;
@@ -1391,47 +2016,316 @@ function stopTest() {
 .guide-images img { max-width: 100%; max-height: 300px; border-radius: 8px; object-fit: contain; }
 .guide-warning { margin-top: 16px; color: var(--color-error); display: flex; align-items: center; justify-content: center; gap: 8px; }
 
-.monitor-grid { display: flex; gap: 24px; }
+.monitor-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+}
+
+.monitor-grid { display: flex; gap: 16px; }
 .monitor-card {
   flex: 1;
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
-  padding: 20px;
+  padding: 16px 20px;
   border-radius: 12px;
   text-align: center;
 }
 .monitor-card.active { border-color: var(--color-accent-blue); background: rgba(59, 130, 246, 0.05); }
-.monitor-value { font-size: 32px; font-weight: 700; color: var(--color-text-primary); margin-top: 8px; }
+.monitor-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.monitor-value { font-size: 28px; font-weight: 700; color: var(--color-text-primary); margin-top: 4px; }
+.monitor-value.time-value { font-family: monospace; letter-spacing: 1px; }
 
-.chart-placeholder {
+/* 置信度圆点 */
+.confidence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border);
+}
+.confidence-dot.high { background: #22c55e; }
+.confidence-dot.medium { background: #f59e0b; }
+.confidence-dot.low { background: #ef4444; }
+.confidence-dot.none { background: var(--color-border); }
+
+/* 主内容区：视频 + 图表并排 */
+.monitor-main {
+  display: flex;
+  gap: 16px;
   flex: 1;
-  background: var(--color-bg-tertiary);
+  min-height: 0;
+}
+
+/* 视频容器 */
+.video-container {
+  flex: 0 0 55%;
+  position: relative;
+  background: #000;
   border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+}
+
+.video-feed {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.video-placeholder {
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: var(--color-text-tertiary);
+  color: rgba(255, 255, 255, 0.4);
   min-height: 300px;
 }
+
+.video-placeholder .placeholder-icon { font-size: 48px; margin-bottom: 12px; }
+.video-placeholder p { font-size: 14px; }
+
+/* ROI 叠加层 */
+.roi-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.roi-overlay.config-active {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+/* ROI 配置面板 */
+.roi-config-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(8px);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.roi-config-title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+}
+
+.roi-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.roi-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.roi-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.roi-btn.active { border-color: currentColor; background: rgba(255, 255, 255, 0.15); }
+.roi-btn.configured { opacity: 1; }
+.roi-btn.configured::after { content: ' ✓'; }
+
+.roi-btn.set-temp { color: #f59e0b; }
+.roi-btn.set-temp.active { border-color: #f59e0b; background: rgba(245, 158, 11, 0.15); }
+
+.roi-btn.current-temp { color: #3b82f6; }
+.roi-btn.current-temp.active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.15); }
+
+.roi-btn.run-time { color: #10b981; }
+.roi-btn.run-time.active { border-color: #10b981; background: rgba(16, 185, 129, 0.15); }
+
+.roi-config-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* 摄像头状态指示 */
+.camera-status {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ef4444;
+  letter-spacing: 1px;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: livePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* 图表容器 */
+.chart-container {
+  flex: 0 0 45%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.chart-area {
+  flex: 1;
+  min-height: 250px;
+}
+
+.chart-empty-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* 摄像头选择弹窗 */
+.camera-select-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+.camera-select-modal {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 24px;
+  min-width: 300px;
+}
+
+.camera-select-modal h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  text-align: center;
+}
+
+.camera-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.camera-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.camera-option:hover {
+  border-color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+/* 操作栏 */
+.action-bar { display: flex; align-items: center; gap: 16px; }
+.action-spacer { flex: 1; }
+
+.secondary-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.secondary-btn:hover { background: var(--color-bg-hover); }
+.secondary-btn.warning { color: var(--color-warning); border-color: var(--color-warning); }
+.secondary-btn.warning:hover { background: rgba(234, 179, 8, 0.08); }
+.secondary-btn.danger { color: var(--color-error); border-color: var(--color-error); }
+.secondary-btn.danger:hover { background: rgba(239, 68, 68, 0.08); }
+
+.primary-btn.small {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
 .empty-state {
   text-align: center;
   padding: 40px 20px;
   color: var(--color-text-tertiary);
   font-size: 13px;
 }
-.chart-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
-
-.action-bar { display: flex; justify-content: flex-end; gap: 16px; margin-top: auto; }
-.secondary-btn {
-  padding: 12px 24px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  border-radius: 10px;
-  cursor: pointer;
-  color: var(--color-text-secondary);
-  font-weight: 600;
-}
-.secondary-btn.warning { color: var(--color-warning); border-color: var(--color-warning); }
-.secondary-btn.danger { color: var(--color-error); border-color: var(--color-error); }
 </style>
