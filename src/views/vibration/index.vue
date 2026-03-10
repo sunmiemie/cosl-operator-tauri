@@ -1,22 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, nextTick } from 'vue'
 import { Icon } from '@iconify/vue'
-import { writeTextFile, writeBinaryFile, exists, mkdir } from '@tauri-apps/plugin-fs'
-//保存工作订单路径
-// const SAVE_DIR = 'd:\\Users\\Desktop\\清华'
 
 type Stage = 'dashboard' | 'devcheck' | 'start' | 'calibration' | 'testing' | 'report' | 'shutdown'
 
 interface WorkOrder {
   id: string
-  type: string
+  type: '模拟实验' | '正式测试'
   applicant: string
   phone: string
   device: string
   level: string
   duration: number
   purpose: string
-  priority: '普通' | '紧急'
 }
 
 interface DevCheckItem {
@@ -31,12 +27,12 @@ const searchKeyword = ref('')
 const draggedOrder = ref<WorkOrder | null>(null)
 
 const workOrders = ref<WorkOrder[]>([
-  { id: 'TMP-2026-001', type: '模拟实验', applicant: '张三', phone: '138****8888', device: '卫星姿控仪', level: '5G', duration: 30, purpose: '功能验证预实验', priority: '普通' },
-  { id: 'FOR-2026-001', type: '正式测试', applicant: '李四', phone: '139****6666', device: '导航控制器', level: '8G', duration: 60, purpose: '环境适应性振动测试', priority: '紧急' },
-  { id: 'FOR-2026-002', type: '正式测试', applicant: '王五', phone: '137****5555', device: '传感器模块', level: '10G', duration: 45, purpose: '结构完整性振动测试', priority: '普通' },
-  { id: 'TMP-2026-002', type: '模拟实验', applicant: '陈六', phone: '136****4444', device: '惯性测量单元', level: '3G', duration: 20, purpose: '安装工装验证', priority: '普通' },
-  { id: 'FOR-2026-003', type: '正式测试', applicant: '赵七', phone: '135****3333', device: '星敏感器', level: '6G', duration: 90, purpose: '正弦扫频耐久测试', priority: '紧急' },
-  { id: 'FOR-2026-004', type: '模拟试验', applicant: '刘八', phone: '134****2222', device: '天线组件', level: '4G', duration: 120, purpose: '随机振动环境验证', priority: '普通' },
+  { id: 'TMP-2026-001', type: '模拟实验', applicant: '张三', phone: '138****8888', device: '卫星姿控仪', level: '5G', duration: 30, purpose: '功能验证预实验' },
+  { id: 'FOR-2026-001', type: '模拟实验', applicant: '李四', phone: '139****6666', device: '导航控制器', level: '8G', duration: 60, purpose: '环境适应性振动测试' },
+  { id: 'FOR-2026-002', type: '正式测试', applicant: '王五', phone: '137****5555', device: '传感器模块', level: '10G', duration: 45, purpose: '结构完整性振动测试' },
+  { id: 'TMP-2026-002', type: '模拟实验', applicant: '陈六', phone: '136****4444', device: '惯性测量单元', level: '3G', duration: 20, purpose: '安装工装验证' },
+  { id: 'FOR-2026-003', type: '正式测试', applicant: '赵七', phone: '135****3333', device: '星敏感器', level: '6G', duration: 90, purpose: '正弦扫频耐久测试' },
+  { id: 'FOR-2026-004', type: '模拟实验', applicant: '刘八', phone: '134****2222', device: '天线组件', level: '4G', duration: 120, purpose: '随机振动环境验证' },
 ])
 
 const preChecks = [
@@ -58,7 +54,7 @@ const postChecks = [
 ]
 
 const devCheckItems = ref<DevCheckItem[]>(
-  preChecks.map((text, idx) => ({ id: idx + 1, text, answer: null, remark: '' }))
+  preChecks.map((text, idx) => ({ id: idx + 1, text, answer: 'yes', remark: '' }))
 )
 
 const shutdownChecks = ref(
@@ -77,8 +73,9 @@ const currentWorkOrder = computed(() => {
 
 const getOrderById = (id: string) => workOrders.value.find(w => w.id === id)
 
+const forcedMode = ref<"formal" | "pre" | null>(null)
 const testMode = computed<"formal" | "pre">(() =>
-  currentWorkOrder.value?.type === '模拟实验' ? 'pre' : 'formal'
+  forcedMode.value ? forcedMode.value : (currentWorkOrder.value?.type === '模拟实验' ? 'pre' : 'formal')
 )
 
 const calBase = ref(new Date())
@@ -100,7 +97,7 @@ function fmtDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// Initialize calBase to this week's Monday
+
 calBase.value = getMonday(new Date())
 
 const currentWeekDays = computed(() => {
@@ -148,7 +145,6 @@ const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
 
 const scheduledOrders = ref<Record<string, string[]>>({})
 
-// Load preset schedule (matching the HTML demo)
 onMounted(() => {
   const base = getMonday(new Date())
   const presets = [
@@ -181,10 +177,10 @@ function loadPresetSchedule() {
   const base = calBase.value
   const presets = [
     { d: 0, t: '0800', id: 'TMP-2026-001' },
-    { d: 0, t: '1000', id: 'FOR-2026-001' },
-    { d: 1, t: '1400', id: 'FOR-2026-002' },
-    { d: 2, t: '0900', id: 'TMP-2026-002' },
-    { d: 3, t: '1000', id: 'FOR-2026-003' },
+    { d: 1, t: '1000', id: 'FOR-2026-001' },
+    { d: 2, t: '1400', id: 'FOR-2026-002' },
+    { d: 3, t: '0900', id: 'TMP-2026-002' },
+    { d: 4, t: '1000', id: 'FOR-2026-003' },
   ]
   presets.forEach(p => {
     const d = addDays(base, p.d)
@@ -277,13 +273,12 @@ const selectedScheduledOrders = computed(() => {
 })
 
 const stepList = computed(() => [
-  { id: 'dashboard', label: '① 看板' },
-  { id: 'devcheck', label: '② 设备检测' },
-  { id: 'start', label: '③ 启动' },
-  { id: 'calibration', label: '④ 振级校验' },
-  { id: 'testing', label: '⑤ 测试' },
-  { id: 'report', label: '⑥ 报告' },
-  { id: 'shutdown', label: '⑦ 关机' },
+  // { id: 'dashboard', label: '① 看板' },
+  // { id: 'devcheck', label: '② 设备检测' },
+  // { id: 'start', label: '③ 启动' },
+  // { id: 'calibration', label: '④ 振级校验' },
+  // { id: 'testing', label: '⑤ 测试' },
+  // { id: 'shutdown', label: '⑦ 关机' },
 ] as const)
 
 const showStartupCheck = ref(false)
@@ -589,6 +584,14 @@ function endVibTest() {
   }
 }
 
+function convertToFormal() {
+  pauseVibTest()
+  forcedMode.value = 'formal'
+  devCheckItems.value.forEach(i => { i.answer = 'yes'; i.remark = '' })
+  showSafetyWarning.value = false
+  stage.value = 'devcheck'
+}
+
 function confirmAbort() {
   showAbortWarning.value = false
   if (vibTestInterval) {
@@ -803,7 +806,6 @@ onUnmounted(() => {
                   <th>申请人</th>
                   <th>参数</th>
                   <th>类型</th>
-                  <th>优先级</th>
                 </tr>
               </thead>
               <tbody>
@@ -818,9 +820,10 @@ onUnmounted(() => {
                   <td class="cell-device" :title="order.device">{{ order.device }}</td>
                   <td class="cell-applicant">{{ order.applicant }}</td>
                   <td class="cell-param">{{ order.level }} / {{ order.duration }}分</td>
-                  <td class="cell-type">{{ order.type }}</td>
-                  <td>
-                    <span class="priority-tag" :class="order.priority === '紧急' ? 'urgent' : 'normal'">{{ order.priority }}</span>
+                  <td class="cell-type">
+                    <span class="type-tag" :class="order.type === '模拟实验' ? 'sim' : 'formal'">
+                      {{ order.type }}
+                    </span>
                   </td>
                 </tr>
               </tbody>
@@ -875,7 +878,7 @@ onUnmounted(() => {
                     v-for="oid in scheduledOrders[getCellKey(day.dateStr, slot.key)]"
                     :key="oid"
                     class="scheduled-item"
-                    :class="{ 'is-selected': selectedScheduledOrderIds.includes(oid) }"
+                    :class="[{ 'is-selected': selectedScheduledOrderIds.includes(oid) }, (getOrderById(oid)?.type === '模拟实验' ? 'type-sim' : 'type-formal')]"
                     @click="selectScheduledOrder(oid)"
                   >
                     <div class="scheduled-content">
@@ -921,6 +924,26 @@ onUnmounted(() => {
 
     <div v-else class="flow-container">
       <div v-if="stage === 'devcheck'" class="panel-card">
+        <div class="modal-overlay open">
+          <div class="startup-check-modal">
+            <h2 class="modal-title">开机检查</h2>
+            <div class="check-list-container">
+              <div class="check-list">
+                <label v-for="item in devCheckItems" :key="item.id" class="check-item" :class="{ 'is-checked': item.answer === 'yes' }">
+                  <div class="checkbox-wrapper">
+                    <input type="checkbox" :checked="item.answer === 'yes'" @change="setDevCheckAnswer(item.id, ($event.target as HTMLInputElement).checked ? 'yes' : 'no')" />
+                    <div class="custom-checkbox"></div>
+                  </div>
+                  <span class="check-text">{{ item.text }}</span>
+                </label>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="cancel-btn" @click="backToDashboard">取消</button>
+              <button class="next-btn" @click="submitDevCheck">下一步</button>
+            </div>
+          </div>
+        </div>
         <div class="panel-header">
           <span class="panel-title">设备运转前检查（{{ devCheckDoneCount }} / {{ devCheckItems.length }}）</span>
           <span class="badge">{{ devCheckProgressPct }}%</span>
@@ -1045,9 +1068,11 @@ onUnmounted(() => {
                 <strong>重要：</strong>振级设置必须与工单信息完全一致，设置错误可能导致试件损坏或测试结果不准确。
               </div>
             </div>
-            <button class="btn btn-primary btn-lg mt-4 full-width" @click="setCalStep('dur')">
-              下一步：时长校验
-            </button>
+            <div class="btn-row mt-4">
+              <button class="cancel-btn" @click="goPrevStage">上一步</button>
+            <button class="next-btn" style="margin-top:auto; align-self:flex-end" @click="setCalStep('dur')">下一步：时长校验</button>
+            </div>
+           
           </div>
           
           <div class="cal-side">
@@ -1099,10 +1124,8 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="btn-row mt-4">
-              <button class="btn btn-secondary flex-1" @click="setCalStep('amp')">上一步</button>
-              <button class="btn btn-primary flex-2" @click="goNextStage">
-               完成校验，进入振动测试
-              </button>
+              <button class="cancel-btn" @click="setCalStep('amp')">上一步</button>
+              <button class="next-btn" @click="goNextStage">完成校验，进入振动测试</button>
             </div>
           </div>
           <div class="cal-side">
@@ -1145,7 +1168,7 @@ onUnmounted(() => {
           </div>
           <div class="status-box">
             <div class="status-header">⏱ 系统状态</div>
-            <div class="status-row"><span class="label">测试状态</span><span class="badge badge-green">{{ isRunning ? '● 运行中' : '● 已停止' }}</span></div>
+            <div class="status-row"><span class="label">测试状态</span><span class="badge" :class="isRunning ? 'badge-green' : 'badge-gray'">{{ isRunning ? '● 测试中' : '● 已暂停' }}</span></div>
             <div class="file-info">📁 {{ liveFileName }}</div>
           </div>
         </div>
@@ -1195,7 +1218,8 @@ onUnmounted(() => {
           <button class="test-btn pause" v-if="isRunning" @click="pauseVibTest">⏸ 测试暂停</button>
           <button class="test-btn pause" v-else @click="resumeVibTest">▶ 继续测试</button>
           <button class="test-btn stop" @click="showAbortWarning = true">⏹ 测试中止</button>
-          <button class="test-btn end" @click="endVibTest">{{ testMode === 'pre' ? '🔬 预试验结束' : '✅ 测试结束' }}</button>
+          <button class="test-btn end" @click="endVibTest">{{ testMode === 'pre' ? '预试验结束' : '测试结束' }}</button>
+          <button class="test-btn end" v-if="testMode === 'pre'" @click="convertToFormal">转入正式工单</button>
         </div>
       </div>
 
@@ -1372,7 +1396,7 @@ onUnmounted(() => {
   background: #1a2d42;
   border-radius: 6px;
   padding: 10px 14px;
-  border: 1px solid rgba(255,255,255,0.07);
+  border: none;
 }
 
 .status-header {
@@ -1416,7 +1440,7 @@ onUnmounted(() => {
 
 .card {
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
+  border: none;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -1728,9 +1752,9 @@ onUnmounted(() => {
 .cell-device { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell-applicant, .cell-param, .cell-type { color: var(--color-text-secondary); }
 
-.priority-tag { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; }
-.priority-tag.normal { background: rgba(59, 130, 246, 0.12); color: var(--color-accent-blue); }
-.priority-tag.urgent { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.type-tag { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.type-tag.sim { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
+.type-tag.formal { background: rgba(59, 130, 246, 0.12); color: var(--color-accent-blue); }
 
 .order-list {
   flex: 1;
@@ -2079,6 +2103,8 @@ onUnmounted(() => {
   border-left: none;
   font-size: 10px;
 }
+.scheduled-item.type-sim { background: linear-gradient(135deg, #f59e0b, #f97316); }
+.scheduled-item.type-formal { background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4)); }
 
 .scheduled-item:hover {
   transform: scale(1.02);
@@ -2337,9 +2363,11 @@ onUnmounted(() => {
   border-radius: 999px;
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
-  border: 1px solid var(--color-border);
+  /* border: 1px solid var(--color-border); */
   margin-left: auto;
 }
+.badge-green { background: rgba(16,185,129,0.15); color: #10b981; border: none; }
+.badge-gray { background: rgba(100,116,139,0.15); color: #94a3b8; border: none; }
 
 .progress-wrap {
   padding: 12px 16px 6px;

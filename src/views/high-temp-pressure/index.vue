@@ -967,6 +967,7 @@ onUnmounted(() => {
           <p>系统将会停止数据记录并生成报告。</p>
         </div>
         <div class="modal-footer">
+
           <button class="btn btn-outline" @click="closeModal">取消</button>
           <button class="btn btn-success" style="background:#409eff;border:none" @click="endTest">确认</button>
         </div>
