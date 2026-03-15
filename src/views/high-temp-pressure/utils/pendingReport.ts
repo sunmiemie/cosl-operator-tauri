@@ -126,9 +126,14 @@ export function loadPendingHighTempPressureReports(): HighTempPressurePendingRep
     const singleRaw = window.localStorage.getItem(SINGLE_PENDING_REPORT_STORAGE_KEY)
     if (singleRaw) {
       const single = JSON.parse(singleRaw) as unknown
-      window.localStorage.removeItem(SINGLE_PENDING_REPORT_STORAGE_KEY)
       if (isValidPendingReport(single)) {
-        window.localStorage.setItem(PENDING_REPORT_LIST_STORAGE_KEY, JSON.stringify([single]))
+        try {
+          // 新队列写入成功后再删除旧报告；配额不足时仍返回并保留可恢复的原始数据。
+          window.localStorage.setItem(PENDING_REPORT_LIST_STORAGE_KEY, JSON.stringify([single]))
+          window.localStorage.removeItem(SINGLE_PENDING_REPORT_STORAGE_KEY)
+        } catch (error) {
+          console.warn('[high-temp-pressure] migrate pending report failed; original retained:', error)
+        }
         return [single]
       }
     }
