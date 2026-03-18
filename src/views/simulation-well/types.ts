@@ -5,6 +5,7 @@ export interface DeviceItem {
   name: string
   sn?: string
   template?: string
+  code?: string
 }
 
 export interface WorkOrder {
@@ -16,6 +17,7 @@ export interface WorkOrder {
   planTime: string
   taskDesc: string
   deviceList: DeviceItem[]
+  supportingTools?: DeviceItem[]
 }
 
 export interface CalendarDay {

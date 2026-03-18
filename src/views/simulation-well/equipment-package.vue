@@ -12,10 +12,11 @@ const emit = defineEmits(['back', 'save'])
 // --- 核心逻辑：工单多选与产品联动 ---
 const selectedOrderIds = ref<string[]>([]) 
 const selectedDeviceKeys = ref<string[]>([]) 
+const selectedSupportingToolKeys = ref<string[]>([]) 
 
 // 辅助：生成设备唯一标识
 const getDevKey = (orderId: string, device: any, index: number) => {
-  return `${orderId}_${device.sn || 'SN-' + (index + 1)}`
+  return `${orderId}_${device.code || device.sn || 'SN-' + (index + 1)}`
 }
 
 // 切换工单选中状态
@@ -25,6 +26,8 @@ function toggleOrder(order: any) {
     selectedOrderIds.value.splice(idx, 1)
     const deviceKeys = (order.deviceList || []).map((d: any, i: number) => getDevKey(order.id, d, i))
     selectedDeviceKeys.value = selectedDeviceKeys.value.filter(k => !deviceKeys.includes(k))
+    const supportKeys = (order.supportingTools || []).map((d: any, i: number) => getDevKey(order.id, d, i))
+    selectedSupportingToolKeys.value = selectedSupportingToolKeys.value.filter(k => !supportKeys.includes(k))
   } else {
     selectedOrderIds.value.push(order.id)
   }
@@ -63,6 +66,11 @@ function saveDownholeOperation() {
     devices: props.downholeDevices.filter(d => 
       selectedDeviceKeys.value.includes(getDevKey(d.orderId, d, 0))
     ),
+    supportingTools: props.todayScheduledOrders
+      .filter(o => selectedOrderIds.value.includes(o.id))
+      .flatMap(o => (o.supportingTools || []).filter((d: any, i: number) => 
+        selectedSupportingToolKeys.value.includes(getDevKey(o.id, d, i))
+      )),
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
     testObjective: selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value,
@@ -121,7 +129,7 @@ function saveDownholeOperation() {
       </div>
 
       <div class="downhole-card" v-if="selectedOrderIds.length">
-        <div class="downhole-card-title">工单测试产品</div>
+        <div class="downhole-card-title">工单测试产品 <span class="english-sub">Order Test Products</span></div>
         <div v-for="order in activeOrders" :key="'table-' + order.id" class="order-table-group">
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
@@ -142,9 +150,42 @@ function saveDownholeOperation() {
                 <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
                   <td>{{ device.name }}</td>
                   <td>{{ device.sn || 'SN-' + (idx + 1) }}</td>
-                  <td>{{ device.template || 'CBMT61XA_REPORT' }}</td>
+                  <td>{{ device.template || device.code || 'CBMT61XA_REPORT' }}</td>
                   <td style="text-align: center;">
                     <input type="checkbox" v-model="selectedDeviceKeys" :value="getDevKey(order.id, device, idx)" class="row-checkbox" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="downhole-card" v-if="selectedOrderIds.length && activeOrders.some(o => o.supportingTools?.length)">
+        <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
+        <div v-for="order in activeOrders.filter(o => o.supportingTools?.length)" :key="'support-' + order.id" class="order-table-group">
+          <div class="table-group-header">
+            <span class="group-order-id">{{ order.id }}</span>
+            <span class="group-customer">{{ order.customer }}</span>
+            <span class="group-count">{{ order.supportingTools?.length || 0 }} 个配接仪器</span>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>配接仪器</th>
+                  <th>仪器编号</th>
+                  <th>关联模板</th>
+                  <th style="width: 50px; text-align: center;">选择</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(tool, idx) in order.supportingTools" :key="getDevKey(order.id, tool, idx)">
+                  <td>{{ tool.name }}</td>
+                  <td>{{ tool.sn || 'SN-' + (idx + 1) }}</td>
+                  <td>{{ tool.template || tool.code || 'SUPPORT_TOOL_REPORT' }}</td>
+                  <td style="text-align: center;">
+                    <input type="checkbox" v-model="selectedSupportingToolKeys" :value="getDevKey(order.id, tool, idx)" class="row-checkbox" />
                   </td>
                 </tr>
               </tbody>

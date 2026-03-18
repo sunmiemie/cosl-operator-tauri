@@ -74,7 +74,7 @@ export function useSchedule() {
   const weekLabel = computed(() => {
     if (!currentWeekDays.value.length) return ''
     const start = currentWeekDays.value[0]; const end = currentWeekDays.value[6]
-    return `${start.month}月${start.dayNum}日 ～ ${end.month}月${end.dayNum}日`
+    //return `${start.month}月${start.dayNum}日 ～ ${end.month}月${end.dayNum}日`
   })
 
   // 生成日历左侧的时间轴 (8:00 - 18:00，每半小时一格)

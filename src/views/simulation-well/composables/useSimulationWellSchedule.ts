@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import type { CalendarDay, TimeSlot, WorkOrder } from '../types'
+import extractedData from '../extracted_fields.json'
 
 function getMonday(d: Date) {
   const dt = new Date(d)
@@ -30,97 +31,27 @@ export function useSimulationWellSchedule() {
   const scheduledOrdersTentative = ref<Record<string, string[]>>({})
   const selectedScheduledOrderIds = ref<string[]>([])
 
-  const workOrders = ref<WorkOrder[]>([
-    {
-      id: 'WO-2024-001',
-      customer: '中海油渤海分公司',
-      devices: 3,
-      status: 'approved',
-      createTime: '2026-03-01',
-      planTime: '2026-03-13',
-      taskDesc: '15℃×EFDL道氧压陀螺机规代',
-      deviceList: [
-        { id: 'DST-2024-001', name: 'CBMT61XA井底磁定位测井仪' },
-        { id: 'DST-2024-002', name: 'ERTT71XA遥传短节' },
-        { id: 'DST-2024-003', name: 'HCAL61XA井径测井仪' },
-      ],
-    },
-    {
-      id: 'WO-2024-002',
-      customer: '中石化华北石油局',
-      devices: 5,
-      status: 'inprogress',
-      createTime: '2026-03-01',
-      planTime: '2026-03-09',
-      taskDesc: '科能井常规测试',
-      deviceList: [
-        { id: 'DST-2024-004', name: 'EZDT71XA岩性密度测井仪' },
-        { id: 'DST-2024-005', name: 'ECNT73XA补偿中子测井仪' },
-      ],
-    },
-    {
-      id: 'WO-2024-003',
-      customer: '中石油西部钻探',
-      devices: 2,
-      status: 'pending',
-      createTime: '2026-03-01',
-      planTime: '2026-03-09',
-      taskDesc: '燕郊1井测试',
-      deviceList: [
-        { id: 'DST-2024-009', name: 'EDAT72XA方位密度测井仪' },
-        { id: 'DST-2024-010', name: 'EAIL61XA阵列感应测井仪' },
-      ],
-    },
-    {
-      id: 'WO-2024-004',
-      customer: '中海油南海东部公司',
-      devices: 4,
-      status: 'inprogress',
-      createTime: '2026-03-01',
-      planTime: '2026-03-10',
-      taskDesc: '深水测井作业',
-      deviceList: [{ id: 'DST-2024-011', name: 'EMSF71XA多臂井径测井仪' }],
-    },
-    {
-      id: 'WO-2024-005',
-      customer: '中石化胜利油田',
-      devices: 6,
-      status: 'approved',
-      createTime: '2026-03-01',
-      planTime: '2026-03-15',
-      taskDesc: '油装井中心综合测试',
-      deviceList: [{ id: 'DST-2024-015', name: 'ECCL61XA磁定位测井仪' }],
-    },
-    {
-      id: 'WO-2024-006',
-      customer: '中石油大庆油田',
-      devices: 3,
-      status: 'completed',
-      createTime: '2023-12-28',
-      planTime: '2026-03-16',
-      taskDesc: '科索1井作业',
-      deviceList: [{ id: 'DST-2023-098', name: 'ERMI61XA微电阻率扫描成像测井仪' }],
-    },
-    {
-      id: 'WO-2024-007',
-      customer: '中海油深圳分公司',
-      devices: 8,
-      status: 'approved',
-      createTime: '2024-01-12',
-      planTime: '2026-03-12',
-      taskDesc: 'EFDT地层测试仪钻井中途油气层测试',
-      deviceList: [
-        { id: 'EFDT-001', name: 'EFDT PA电源短节', sn: 'EFDT-PA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-002', name: 'EFDT EA电子线路短节', sn: 'EFDT-EA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-003', name: 'EFDT DA液压短节', sn: 'EFDT-DA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-004', name: 'EFDT MA Packer短节', sn: 'EFDT-MA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-005', name: 'EFDT AA流体分析短节', sn: 'EFDT-AA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-006', name: 'EFDT SA泵抽短节', sn: 'EFDT-SA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-007', name: 'EFDT VA PVT短节', sn: 'EFDT-VA-001', template: 'EFDT_REPORT' },
-        { id: 'EFDT-008', name: 'EFDT LA大样桶短节', sn: 'EFDT-LA-001', template: 'EFDT_REPORT' },
-      ],
-    },
-  ])
+  const workOrders = ref<WorkOrder[]>(extractedData.map(item => ({
+    id: item.tableRefNo,
+    customer: item.fileName.split(' ')[0] || "未知客户",
+    devices: item.testProducts.length,
+    status: "approved",
+    createTime: "2026-03-01",
+    planTime: "2026-03-17", // 默认设为今天以便测试显示
+    taskDesc: item.fileName,
+    deviceList: item.testProducts.map(p => ({
+      id: p.code,
+      name: p.zh,
+      code: p.code,
+      template: p.code
+    })),
+    supportingTools: item.supportingTools.map(s => ({
+      id: s.code,
+      name: s.zh,
+      code: s.code,
+      template: s.code
+    }))
+  })))
 
   const calBase = ref(getMonday(new Date()))
   const currentWeekDays = computed<CalendarDay[]>(() => {
@@ -212,10 +143,13 @@ export function useSimulationWellSchedule() {
 
   function loadPresetSchedule() {
     const base = calBase.value
+    const firstThreeIds = workOrders.value.slice(0, 3).map(o => o.id)
+    if (firstThreeIds.length < 3) return
+
     const presets = [
-      { d: 0, t: '0800', id: 'WO-2024-001' },
-      { d: 0, t: '1000', id: 'WO-2024-002' },
-      { d: 1, t: '1400', id: 'WO-2024-003' },
+      { d: 0, t: '0800', id: firstThreeIds[0] },
+      { d: 0, t: '1000', id: firstThreeIds[1] },
+      { d: 1, t: '1400', id: firstThreeIds[2] },
     ]
     const globalScheduled = new Set(Object.values(scheduledOrders.value).flat())
     presets.forEach(p => {
