@@ -60,6 +60,18 @@ test('附件地址只允许当前后端或相对媒体地址', () => {
   assert.equal(resolveBackendAttachmentEndpoint('https://other.example/curve.png', 'http://127.0.0.1:8000'), '')
 })
 
+test('损坏附件条目不影响有效曲线和旧版报告的展示', () => {
+  const report = {
+    attachments: [null, undefined, 12, [], 'invalid', { field: 'testing_curve' },
+      { field: 'testing_curve', file_url: '/media/valid.png' }],
+    report_json: {
+      paper_report: { attachments: { testing_curve: { items: [null, [], { file_url: '/media/legacy.png' }] } } },
+    },
+  }
+  assert.deepEqual(extractHighTempPressureCurveAttachments(report).map(item => item.fileUrl),
+    ['/media/valid.png', '/media/legacy.png'])
+})
+
 test('报告中心在客户端创建横向分页打印页面', () => {
   const source = readFileSync(
     resolve(import.meta.dirname, '../src/views/high-temp-pressure/components/ReportListPanel.vue'),

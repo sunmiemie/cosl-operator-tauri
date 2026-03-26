@@ -1,4 +1,4 @@
-import type { EquipmentReportAttachment, EquipmentReportItem } from '@/services/equipment-report-api'
+import type { EquipmentReportItem } from '@/services/equipment-report-api'
 
 export type HighTempPressureCurveAttachment = {
   fileUrl: string
@@ -25,7 +25,8 @@ function positiveIndex(value: unknown, fallback: number) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function isTestingCurveAttachment(attachment: EquipmentReportAttachment) {
+function isTestingCurveAttachment(value: unknown) {
+  const attachment = asRecord(value)
   const field = text(attachment.field || attachment.type).toLowerCase()
   return field === 'testing_curve' || field.startsWith('testing_curve__')
 }
