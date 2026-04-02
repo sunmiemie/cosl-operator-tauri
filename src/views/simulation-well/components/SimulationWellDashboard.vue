@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { CalendarDay, TimeSlot, WorkOrder } from '../types'
 
-defineProps<{
+const props = defineProps<{
   searchKeyword: string
   unscheduledOrders: WorkOrder[]
   calBase: Date
@@ -11,6 +12,23 @@ defineProps<{
   timeSlots: TimeSlot[]
   scheduledOrders: Record<string, string[]>
   scheduledOrdersTentative: Record<string, string[]>
+  scheduledLayoutItems: {
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    startIdx: number
+    span: number
+    lane: number
+    laneCount: number
+    cellKey: string
+    isTentative: boolean
+  }[]
+  maxLaneCount: number
+  slotHeightPx: number
+  isDragging: boolean
+  resizingOrderId: string | null
+  isResizing: boolean
+  selectedScheduledOrderIds: string[]
   todayScheduledOrderIds: string[]
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
@@ -30,8 +48,100 @@ const emit = defineEmits<{
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
   unschedule: [cellKey: string, oid: string]
   'unschedule-tentative': [cellKey: string, oid: string]
+  'select-scheduled-order': [oid: string]
+  'start-resize': [oid: string, e: MouseEvent]
+  'start-resize-top': [oid: string, e: MouseEvent]
   'start-scheduled-test': []
 }>()
+
+const timeColWidth = 60
+const cellPadding = 3
+const maxLanesBeforeExpand = 2
+const gridScrollRef = ref<HTMLElement | null>(null)
+const gridViewportWidth = ref(0)
+const gridInnerRef = ref<HTMLElement | null>(null)
+let ro: ResizeObserver | null = null
+
+const widthFactor = computed(() => Math.max(1, Math.ceil((props.maxLaneCount || 1) / maxLanesBeforeExpand)))
+const gridInnerWidth = computed(() => {
+  const base = Math.max(0, gridViewportWidth.value - timeColWidth)
+  return timeColWidth + base * widthFactor.value
+})
+
+onMounted(() => {
+  if (!gridScrollRef.value) return
+  ro = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    if (!entry) return
+    gridViewportWidth.value = entry.contentRect.width
+  })
+  ro.observe(gridScrollRef.value)
+})
+
+onBeforeUnmount(() => {
+  ro?.disconnect()
+  ro = null
+})
+
+const layoutWithDayIndex = computed(() => {
+  return props.scheduledLayoutItems
+    .map((x) => ({ ...x, dayIndex: props.currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
+    .filter((x) => x.dayIndex >= 0)
+})
+
+const getScheduledStyle = (item: any) => {
+  const totalWidth = gridInnerWidth.value || 0
+  const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
+  const laneCount = Math.max(1, item.laneCount || 1)
+  const laneW = dayColW > 0 ? dayColW / laneCount : 0
+  const top = item.startIdx * props.slotHeightPx + cellPadding
+  const height = item.span * props.slotHeightPx - cellPadding * 2
+  const left = timeColWidth + item.dayIndex * dayColW + item.lane * laneW + cellPadding
+  const width = laneW - cellPadding * 2
+  return {
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${Math.max(20, width)}px`,
+    height: `${Math.max(props.slotHeightPx - cellPadding * 2, height)}px`,
+    zIndex: props.selectedScheduledOrderIds.includes(item.orderId) ? 12 : 10,
+  }
+}
+
+const getDropTarget = (e: DragEvent) => {
+  if (!gridInnerRef.value) return null
+  const rect = gridInnerRef.value.getBoundingClientRect()
+  const totalW = gridInnerWidth.value || rect.width
+  const dayColW = totalW > timeColWidth ? (totalW - timeColWidth) / 7 : 0
+  if (dayColW <= 0) return null
+
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+  const xInDays = x - timeColWidth
+  if (xInDays < 0) return null
+
+  const dayIndex = Math.min(6, Math.max(0, Math.floor(xInDays / dayColW)))
+  const slotIndex = Math.min(props.timeSlots.length - 1, Math.max(0, Math.floor(y / props.slotHeightPx)))
+  const day = props.currentWeekDays[dayIndex]
+  const slot = props.timeSlots[slotIndex]
+  if (!day || !slot) return null
+  return { dateStr: day.dateStr, timeKey: slot.key, isPast: day.isPast }
+}
+
+const handleGridDragOver = (e: DragEvent) => {
+  const target = getDropTarget(e)
+  if (!target) return
+  if (target.isPast) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+const handleGridDrop = (e: DragEvent) => {
+  const target = getDropTarget(e)
+  if (!target) return
+  e.preventDefault()
+  e.stopPropagation()
+  emit('drop', e, target.dateStr, target.timeKey, target.isPast)
+}
 </script>
 
 <template>
@@ -105,44 +215,80 @@ const emit = defineEmits<{
       </div>
 
       <div class="calendar-grid">
-        <div class="grid-header-row">
-          <div class="time-column-header">时间</div>
-          <div v-for="day in currentWeekDays" :key="day.dateStr" class="day-header" :class="{ 'is-today': day.isToday }">
-            <div class="day-num" :class="{ 'is-weekend': day.isWeekend }">{{ day.month }}/{{ day.dayNum }}</div>
-            <div class="day-name">{{ day.dayName }}</div>
+        <div class="grid-scroll" ref="gridScrollRef">
+          <div class="grid-header-row" :style="{ width: `${gridInnerWidth}px` }">
+            <div class="time-column-header">时间</div>
+            <div v-for="day in currentWeekDays" :key="day.dateStr" class="day-header" :class="{ 'is-today': day.isToday }">
+              <div class="day-num" :class="{ 'is-weekend': day.isWeekend }">{{ day.month }}/{{ day.dayNum }}</div>
+              <div class="day-name">{{ day.dayName }}</div>
+            </div>
           </div>
-        </div>
-        <div class="grid-body">
-          <div v-for="slot in timeSlots" :key="slot.key" class="grid-row" :class="{ 'is-half': slot.isHalf }">
-            <div class="time-label" :class="{ 'is-half': slot.isHalf }">{{ slot.label }}</div>
+
+          <div class="grid-body">
             <div
-              v-for="day in currentWeekDays"
-              :key="getCellKey(day.dateStr, slot.key)"
-              class="grid-cell"
-              :class="{ 'is-weekend': day.isWeekend, 'is-half-cell': slot.isHalf, 'is-past': day.isPast }"
-              @dragover.capture="emit('drag-over', $event, day.isPast)"
-              @dragleave="emit('drag-leave')"
-              @drop.capture="emit('drop', $event, day.dateStr, slot.key, day.isPast)"
+              class="grid-inner"
+              ref="gridInnerRef"
+              :style="{ height: `${timeSlots.length * slotHeightPx}px`, width: `${gridInnerWidth}px` }"
+              @dragover.capture="handleGridDragOver"
+              @drop.capture="handleGridDrop"
             >
-              <div v-if="scheduledOrders[getCellKey(day.dateStr, slot.key)]?.length" style="display:flex;flex-direction:column;gap:4px;width:100%">
-                <div v-for="oid in scheduledOrders[getCellKey(day.dateStr, slot.key)]" :key="oid" class="scheduled-item">
+              <div class="events-overlay">
+                <div
+                  v-for="it in layoutWithDayIndex"
+                  :key="it.orderId"
+                  class="scheduled-item"
+                  :class="{
+                    'is-selected': selectedScheduledOrderIds.includes(it.orderId),
+                    'is-dragging': isDragging,
+                    'is-resizing': isResizing && resizingOrderId === it.orderId,
+                    'is-tentative': it.isTentative
+                  }"
+                  :style="getScheduledStyle(it)"
+                  @click="emit('select-scheduled-order', it.orderId)"
+                  :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getWorkOrderById(it.orderId)?.deviceList?.[0]?.name || ''}`"
+                >
                   <div class="scheduled-content">
-                    <span class="device-name">{{ oid }}</span>
-                    <button class="remove-btn" @click.stop="emit('unschedule', getCellKey(day.dateStr, slot.key), oid)"><Icon icon="mdi:close" /></button>
+                    <span class="device-name">{{ it.orderId }}</span>
+                    <button
+                      v-if="!it.isTentative"
+                      class="remove-btn"
+                      title="删除排程"
+                      @click.stop="emit('unschedule', it.cellKey, it.orderId)"
+                    >
+                      <Icon icon="mdi:close" />
+                    </button>
+                    <button
+                      v-else
+                      class="remove-btn"
+                      title="删除待排程"
+                      @click.stop="emit('unschedule-tentative', it.cellKey, it.orderId)"
+                    >
+                      <Icon icon="mdi:close" />
+                    </button>
                   </div>
-                  <div class="scheduled-tag">{{ getWorkOrderById(oid)?.customer }} · {{ getWorkOrderById(oid)?.deviceList?.[0]?.name }}</div>
+                  <div class="scheduled-tag">
+                    <template v-if="it.isTentative">待排程 · </template>{{ getWorkOrderById(it.orderId)?.customer }} ·
+                    {{ getWorkOrderById(it.orderId)?.deviceList?.[0]?.name }}
+                  </div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="emit('start-resize-top', it.orderId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="emit('start-resize', it.orderId, $event)"></div>
                 </div>
               </div>
-              <div v-else-if="scheduledOrdersTentative[getCellKey(day.dateStr, slot.key)]?.length" style="display:flex;flex-direction:column;gap:4px;width:100%">
-                <div v-for="oid in scheduledOrdersTentative[getCellKey(day.dateStr, slot.key)]" :key="oid" class="scheduled-item">
-                  <div class="scheduled-content">
-                    <span class="device-name">{{ oid }}</span>
-                    <button class="remove-btn" @click.stop="emit('unschedule-tentative', getCellKey(day.dateStr, slot.key), oid)"><Icon icon="mdi:close" /></button>
-                  </div>
-                  <div class="scheduled-tag">待排程 · {{ getWorkOrderById(oid)?.customer }} · {{ getWorkOrderById(oid)?.deviceList?.[0]?.name }}</div>
+
+              <div v-for="slot in timeSlots" :key="slot.key" class="grid-row">
+                <div class="time-label">{{ slot.label }}</div>
+                <div
+                  v-for="day in currentWeekDays"
+                  :key="getCellKey(day.dateStr, slot.key)"
+                  class="grid-cell"
+                  :class="{ 'is-weekend': day.isWeekend, 'is-past': day.isPast }"
+                  @dragover.capture="emit('drag-over', $event, day.isPast)"
+                  @dragleave="emit('drag-leave')"
+                  @drop.capture="emit('drop', $event, day.dateStr, slot.key, day.isPast)"
+                >
+                  <div class="empty-slot-hint">+</div>
                 </div>
               </div>
-              <div v-else class="empty-slot-hint">+</div>
             </div>
           </div>
         </div>

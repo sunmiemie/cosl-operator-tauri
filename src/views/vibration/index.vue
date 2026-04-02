@@ -27,6 +27,10 @@ const {
   weekLabel,
   timeSlots,
   scheduledOrders,
+  scheduledLayoutItems,
+  maxLaneCount,
+  slotHeightPx,
+  isDragging,
   unscheduledOrders,
   getOrderById,
   getCellKey,
@@ -39,6 +43,10 @@ const {
   handleDragEnd,
   handleDragOver,
   handleDrop,
+  startResize,
+  startResizeTop,
+  resizingOrderId,
+  isResizing,
   handleUnschedule,
   selectScheduledOrder,
 } = useVibrationSchedule()
@@ -195,6 +203,14 @@ function toggleShutdownCheck(id: number) {
         :cal-base="calBase"
         :week-label="weekLabel"
         :scheduled-orders="scheduledOrders"
+        :scheduled-layout-items="scheduledLayoutItems"
+        :max-lane-count="maxLaneCount"
+        :slot-height-px="slotHeightPx"
+        :is-dragging="isDragging"
+        :start-resize="startResize"
+        :start-resize-top="startResizeTop"
+        :resizing-order-id="resizingOrderId"
+        :is-resizing="isResizing"
         :selected-scheduled-order-ids="selectedScheduledOrderIds"
         :selected-scheduled-orders="selectedScheduledOrders"
         :fmt-date="fmtDate"

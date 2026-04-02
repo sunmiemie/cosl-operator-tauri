@@ -1,39 +1,94 @@
-/**
- * 水循环 工单 API 服务
- * 与后端 test_management 子系统接口一致，使用统一 http 客户端
- */
-import { http } from './http'
+import { http, type ApiResponse } from './http'
 
-export function configureWaterCycleApi(
-  host: string,
-  port: number,
-  prefix: string = '/test_management',
-  scheme: 'http' | 'https' = 'http'
-) {
-  const base = `${scheme}://${host}:${port}${prefix}`.replace(/\/+$/, '')
-  http.setBaseUrl(base)
+export type WaterCycleOrderDTO = {
+  id: number
+  test_platform: string
+  test_date: string
+  start_time: string
+  end_time: string
+  device_name: string
+  device_number: string
+  task_number: string
+  flow_process: string
+  need_pressure_test: string
+  need_command_transfer: string
+  applicant: string
+  remark: string
+  status: number
+  status_text?: string
+  created_at: string
+  updated_at: string
 }
 
-type ListParams = {
-  currentPage?: number
+export type WaterCycleOrder = {
+  id: string
+  dbId: number
+  taskNumber: string
+  applicant: string
+  deviceName: string
+  deviceNumber: string
+  flowProcess: string
+  testPlatform: string
+  testDate: string
+  startTime: string
+  endTime: string
+  needPressureTest: string
+  needCommandTransfer: string
+  remark: string
+  status: number
+  statusText?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
+  return {
+    id: String(dto.id),
+    dbId: dto.id,
+    taskNumber: dto.task_number,
+    applicant: dto.applicant,
+    deviceName: dto.device_name,
+    deviceNumber: dto.device_number,
+    flowProcess: dto.flow_process,
+    testPlatform: dto.test_platform,
+    testDate: dto.test_date,
+    startTime: dto.start_time,
+    endTime: dto.end_time,
+    needPressureTest: dto.need_pressure_test,
+    needCommandTransfer: dto.need_command_transfer,
+    remark: dto.remark,
+    status: dto.status,
+    statusText: dto.status_text,
+    createdAt: dto.created_at,
+    updatedAt: dto.updated_at,
+  }
+}
+
+export type WaterCycleOrderListResponse = {
+  code: number
+  data: {
+    list: WaterCycleOrderDTO[]
+    total: number
+    page: number
+    pageSize: number
+  }
+  msg?: string
+}
+
+export type ListWaterCycleOrdersParams = {
+  page?: number
   pageSize?: number
   taskNumber?: string
-  status?: string
+  status?: number | string
 }
 
-/**
- * 列表接口，返回后端原始结构（code/TableData/total）
- */
-export async function listWaterCycleOrders(params: ListParams): Promise<{ code: number; TableData: any[]; total: number }> {
+export async function listWaterCycleOrders(
+  params: ListWaterCycleOrdersParams
+): Promise<ApiResponse<WaterCycleOrderListResponse>> {
   const query: Record<string, string> = {}
-  if (params.currentPage !== undefined) query.currentPage = String(params.currentPage)
+  if (params.page !== undefined) query.page = String(params.page)
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.taskNumber) query.taskNumber = params.taskNumber
-  if (params.status) query.status = params.status
-
-  const result = await http.get<any>('/water-cycle/order/list/', {}, query)
-  if (!result.success || !result.data) {
-    return { code: 1, TableData: [], total: 0 }
-  }
-  return result.data as { code: number; TableData: any[]; total: number }
+  if (params.status !== undefined) query.status = String(params.status)
+  return http.get<WaterCycleOrderListResponse>('/test/water-cycle/order/list/', {}, query)
 }

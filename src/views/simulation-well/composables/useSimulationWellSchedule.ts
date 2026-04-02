@@ -27,8 +27,18 @@ function fmtDate(d: Date) {
 export function useSimulationWellSchedule() {
   const searchKeyword = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
-  const scheduledOrders = ref<Record<string, string[]>>({})
-  const scheduledOrdersTentative = ref<Record<string, string[]>>({})
+  const isDragging = ref(false)
+  const slotHeightPx = 44
+
+  type ScheduledEvent = {
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    span: number
+  }
+
+  const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
+  const scheduledEventsTentative = ref<Record<string, ScheduledEvent>>({})
   const selectedScheduledOrderIds = ref<string[]>([])
 
   const workOrders = ref<WorkOrder[]>(extractedData.map(item => ({
@@ -87,11 +97,9 @@ export function useSimulationWellSchedule() {
 
   const timeSlots = computed<TimeSlot[]>(() => {
     const slots: TimeSlot[] = []
-    for (let h = 8; h < 18; h++) {
+    for (let h = 6; h <= 22; h++) {
       slots.push({ key: `${String(h).padStart(2, '0')}00`, label: `${String(h).padStart(2, '0')}:00`, isHalf: false })
-      slots.push({ key: `${String(h).padStart(2, '0')}30`, label: `${String(h).padStart(2, '0')}:30`, isHalf: true })
     }
-    slots.push({ key: '1800', label: '18:00', isHalf: false })
     return slots
   })
 
@@ -99,12 +107,122 @@ export function useSimulationWellSchedule() {
     return `${dateStr}_${timeKey}`
   }
 
+  const timeKeyToIndex = computed(() => {
+    const map: Record<string, number> = {}
+    timeSlots.value.forEach((s, idx) => {
+      map[s.key] = idx
+    })
+    return map
+  })
+
+  const scheduledOrders = computed<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+      if (!map[cellKey]) map[cellKey] = []
+      map[cellKey].push(ev.orderId)
+    })
+    return map
+  })
+
+  const scheduledOrdersTentative = computed<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {}
+    Object.values(scheduledEventsTentative.value).forEach((ev) => {
+      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+      if (!map[cellKey]) map[cellKey] = []
+      map[cellKey].push(ev.orderId)
+    })
+    return map
+  })
+
+  type ScheduledLayoutItem = {
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    startIdx: number
+    span: number
+    lane: number
+    laneCount: number
+    cellKey: string
+    isTentative: boolean
+  }
+
+  const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const dayMap: Record<string, Array<ScheduledEvent & { isTentative: boolean }>> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
+      dayMap[ev.dateStr].push({ ...ev, isTentative: false })
+    })
+    Object.values(scheduledEventsTentative.value).forEach((ev) => {
+      if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
+      dayMap[ev.dateStr].push({ ...ev, isTentative: true })
+    })
+
+    const out: ScheduledLayoutItem[] = []
+
+    Object.entries(dayMap).forEach(([dateStr, evs]) => {
+      const mapped = evs
+        .map((ev) => {
+          const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+          return { ev, startIdx: startIdx ?? -1, span: Math.max(1, ev.span) }
+        })
+        .filter((x) => x.startIdx >= 0)
+        .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
+
+      const counts = new Array(timeSlots.value.length + 1).fill(0)
+      mapped.forEach((x) => {
+        counts[x.startIdx] += 1
+        counts[x.endIdx] -= 1
+      })
+      for (let i = 1; i < counts.length; i++) counts[i] += counts[i - 1]
+
+      const laneEnds: number[] = []
+      const laneByOrderId: Record<string, number> = {}
+      mapped.forEach((x) => {
+        let lane = laneEnds.findIndex((le) => le <= x.startIdx)
+        if (lane === -1) {
+          lane = laneEnds.length
+          laneEnds.push(x.endIdx)
+        } else {
+          laneEnds[lane] = x.endIdx
+        }
+        laneByOrderId[x.ev.orderId] = lane
+      })
+
+      mapped.forEach((x) => {
+        const cellKey = getCellKey(dateStr, x.ev.startTimeKey)
+        let laneCount = 1
+        for (let i = x.startIdx; i < x.endIdx; i++) {
+          laneCount = Math.max(laneCount, counts[i] || 0)
+        }
+        out.push({
+          orderId: x.ev.orderId,
+          dateStr,
+          startTimeKey: x.ev.startTimeKey,
+          startIdx: x.startIdx,
+          span: x.span,
+          lane: laneByOrderId[x.ev.orderId] ?? 0,
+          laneCount: Math.max(1, laneCount),
+          cellKey,
+          isTentative: x.ev.isTentative,
+        })
+      })
+    })
+
+    return out
+  })
+
+  const maxLaneCount = computed(() => {
+    if (!scheduledLayoutItems.value.length) return 1
+    return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
+  })
+
   const todayDateStr = computed(() => fmtDate(new Date()))
   const todayScheduledOrderIds = computed(() => {
     const ids = new Set<string>()
-    Object.entries(scheduledOrders.value).forEach(([cellKey, orderIds]) => {
-      const dateStr = cellKey.split('_')[0]
-      if (dateStr === todayDateStr.value) orderIds.forEach(id => ids.add(id))
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      if (ev.dateStr === todayDateStr.value) ids.add(ev.orderId)
     })
     return Array.from(ids)
   })
@@ -116,7 +234,7 @@ export function useSimulationWellSchedule() {
   })
 
   const unscheduledOrders = computed(() => {
-    const scheduledIds = new Set(Object.values(scheduledOrders.value).flat())
+    const scheduledIds = new Set([...Object.keys(scheduledEvents.value), ...Object.keys(scheduledEventsTentative.value)])
     const kw = searchKeyword.value.trim()
     return workOrders.value.filter(o => {
       if (scheduledIds.has(o.id)) return false
@@ -151,33 +269,29 @@ export function useSimulationWellSchedule() {
       { d: 0, t: '1000', id: firstThreeIds[1] },
       { d: 1, t: '1400', id: firstThreeIds[2] },
     ]
-    const globalScheduled = new Set(Object.values(scheduledOrders.value).flat())
+    const globalScheduled = new Set([...Object.keys(scheduledEvents.value), ...Object.keys(scheduledEventsTentative.value)])
     presets.forEach(p => {
       if (globalScheduled.has(p.id)) return
       const d = addDays(base, p.d)
-      const cellKey = getCellKey(fmtDate(d), p.t)
-      const cur = scheduledOrders.value[cellKey] || []
-      scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, p.id] }
+      scheduleOrder(p.id, fmtDate(d), p.t, false, false)
     })
   }
 
   function initializeScheduleFromPlanTime() {
-    const timeKeys = ['0800', '0900', '1000', '1100', '1300', '1400', '1500', '1600']
+    const timeKeys = timeSlots.value.map(s => s.key).filter(k => k !== timeSlots.value[timeSlots.value.length - 1]?.key)
     let idx = 0
     workOrders.value.forEach(order => {
       if (order.status === 'completed' || !order.planTime) return
       const dateStr = order.planTime.slice(0, 10)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return
-      const alreadyScheduled = Object.values(scheduledOrders.value).some(ids => ids.includes(order.id))
+      const alreadyScheduled = !!scheduledEvents.value[order.id] || !!scheduledEventsTentative.value[order.id]
       if (alreadyScheduled) return
       const preferred = timeKeys[idx % timeKeys.length]
       idx += 1
       const candidateKeys = [preferred, ...timeKeys.filter(t => t !== preferred)]
       const targetTime = candidateKeys.find(t => (scheduledOrders.value[getCellKey(dateStr, t)] || []).length === 0)
       if (!targetTime) return
-      const cellKey = getCellKey(dateStr, targetTime)
-      const cur = scheduledOrders.value[cellKey] || []
-      scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, order.id] }
+      scheduleOrder(order.id, dateStr, targetTime, false, false)
     })
   }
 
@@ -185,11 +299,16 @@ export function useSimulationWellSchedule() {
 
   function handleDragStart(e: DragEvent, order: WorkOrder) {
     draggedOrder.value = order
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+    isDragging.value = true
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', order.id)
+    }
   }
 
   function handleDragEnd() {
     draggedOrder.value = null
+    isDragging.value = false
   }
 
   function handleDragOver(e: DragEvent, isPast: boolean) {
@@ -199,34 +318,49 @@ export function useSimulationWellSchedule() {
 
   function handleDragLeave() {}
 
-  function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
+  function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean, isTentative: boolean) {
     if (isPast) return
-    const order = draggedOrder.value
-    if (!order) return
-    const isTentative = !!(e && (e.shiftKey || (e as DragEvent & { altKey?: boolean }).altKey))
-    const cellKey = getCellKey(dateStr, timeKey)
-    const scheduledIds = new Set(Object.values(scheduledOrders.value).flat())
-    if (scheduledIds.has(order.id)) return
+    const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
+    if (timeKey === lastKey) return
+    if (scheduledEvents.value[orderId] || scheduledEventsTentative.value[orderId]) return
+    const startIdx = timeKeyToIndex.value[timeKey]
+    const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    const nextEvent: ScheduledEvent = { orderId, dateStr, startTimeKey: timeKey, span: Math.min(1, maxSpan) }
+
     if (isTentative) {
-      const curT = scheduledOrdersTentative.value[cellKey] || []
-      if (curT.includes(order.id)) return
-      scheduledOrdersTentative.value = { ...scheduledOrdersTentative.value, [cellKey]: [...curT, order.id] }
+      scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [orderId]: nextEvent }
     } else {
-      const cur = scheduledOrders.value[cellKey] || []
-      if (cur.includes(order.id)) return
-      scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...cur, order.id] }
+      scheduledEvents.value = { ...scheduledEvents.value, [orderId]: nextEvent }
+    }
+
+    if (isDragging.value) {
+      isDragging.value = false
+      draggedOrder.value = null
     }
   }
 
+  function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
+    if (isPast) return
+    e.preventDefault()
+    const orderId = e.dataTransfer?.getData('text/plain') || draggedOrder.value?.id
+    if (!orderId) return
+    const isTentative = !!(e && (e.shiftKey || (e as DragEvent & { altKey?: boolean }).altKey))
+    scheduleOrder(orderId, dateStr, timeKey, isPast, isTentative)
+  }
+
   function handleUnschedule(cellKey: string, oid: string) {
-    const cur = (scheduledOrders.value[cellKey] || []).filter(x => x !== oid)
-    scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: cur }
+    void cellKey
+    const next = { ...scheduledEvents.value }
+    delete next[oid]
+    scheduledEvents.value = next
     selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(x => x !== oid)
   }
 
   function handleUnscheduleTentative(cellKey: string, oid: string) {
-    const cur = (scheduledOrdersTentative.value[cellKey] || []).filter(x => x !== oid)
-    scheduledOrdersTentative.value = { ...scheduledOrdersTentative.value, [cellKey]: cur }
+    void cellKey
+    const next = { ...scheduledEventsTentative.value }
+    delete next[oid]
+    scheduledEventsTentative.value = next
   }
 
   function handleSelectScheduledOrder(oid: string) {
@@ -240,6 +374,103 @@ export function useSimulationWellSchedule() {
     return workOrders.value.find(o => o.id === id)
   }
 
+  const getEvent = (orderId: string) => {
+    const normal = scheduledEvents.value[orderId]
+    if (normal) return { ...normal, isTentative: false }
+    const tentative = scheduledEventsTentative.value[orderId]
+    if (tentative) return { ...tentative, isTentative: true }
+    return null
+  }
+
+  const setEventSpan = (orderId: string, span: number) => {
+    const ev = getEvent(orderId)
+    if (!ev) return
+    const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (startIdx === undefined) return
+    const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    const nextSpan = Math.min(maxSpan, Math.max(1, span))
+    if (nextSpan === ev.span) return
+    const next = { orderId, dateStr: ev.dateStr, startTimeKey: ev.startTimeKey, span: nextSpan }
+    if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [orderId]: next }
+    else scheduledEvents.value = { ...scheduledEvents.value, [orderId]: next }
+  }
+
+  const resizing = ref<{ orderId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
+  const resizingOrderId = computed(() => resizing.value?.orderId || null)
+  const isResizing = computed(() => !!resizing.value)
+
+  const setEventStartAndSpan = (orderId: string, startIdx: number, span: number) => {
+    const ev = getEvent(orderId)
+    if (!ev) return
+    const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
+    const nextStartIdx = Math.max(0, Math.min(maxStartIdx, startIdx))
+    const nextStartKey = timeSlots.value[nextStartIdx]?.key
+    if (!nextStartKey) return
+    const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
+    const nextSpan = Math.min(maxSpan, Math.max(1, span))
+    const next = { orderId, dateStr: ev.dateStr, startTimeKey: nextStartKey, span: nextSpan }
+    if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [orderId]: next }
+    else scheduledEvents.value = { ...scheduledEvents.value, [orderId]: next }
+  }
+
+  const startResize = (orderId: string, e: MouseEvent) => {
+    const ev = getEvent(orderId)
+    if (!ev) return
+    const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (originStartIdx === undefined) return
+    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+
+    const onMove = (me: MouseEvent) => {
+      const ctx = resizing.value
+      if (!ctx) return
+      const delta = me.clientY - ctx.startY
+      const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
+      if (ctx.mode === 'bottom') {
+        setEventSpan(ctx.orderId, ctx.originSpan + deltaSlots)
+        return
+      }
+      const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
+      const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
+      setEventStartAndSpan(ctx.orderId, nextStartIdx, endIdx - nextStartIdx)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      resizing.value = null
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const startResizeTop = (orderId: string, e: MouseEvent) => {
+    const ev = getEvent(orderId)
+    if (!ev) return
+    const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (originStartIdx === undefined) return
+    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+
+    const onMove = (me: MouseEvent) => {
+      const ctx = resizing.value
+      if (!ctx) return
+      const delta = me.clientY - ctx.startY
+      const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
+      const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
+      const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
+      setEventStartAndSpan(ctx.orderId, nextStartIdx, endIdx - nextStartIdx)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      resizing.value = null
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return {
     searchKeyword,
     workOrders,
@@ -249,6 +480,11 @@ export function useSimulationWellSchedule() {
     timeSlots,
     scheduledOrders,
     scheduledOrdersTentative,
+    scheduledLayoutItems,
+    maxLaneCount,
+    slotHeightPx,
+    isDragging,
+    scheduleOrder,
     selectedScheduledOrderIds,
     todayScheduledOrderIds,
     todayScheduledOrders,
@@ -268,5 +504,9 @@ export function useSimulationWellSchedule() {
     handleUnscheduleTentative,
     handleSelectScheduledOrder,
     getWorkOrderById,
+    startResize,
+    startResizeTop,
+    resizingOrderId,
+    isResizing,
   }
 }

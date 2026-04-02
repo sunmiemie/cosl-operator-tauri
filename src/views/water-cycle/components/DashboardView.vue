@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 
 // 跳出一层目录 (../) 找到逻辑层
@@ -11,10 +11,96 @@ import StartupCheckModal from './StartupCheckModal.vue'
 
 // 引入抽象出的排程逻辑
 const {
-  searchKeyword, scheduledOrders, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
+  searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, loadPresetSchedule, getCellKey, getMonday,
-  handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder
+  handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder
 } = useSchedule()
+
+const timeColWidth = 60
+const cellPadding = 3
+const gridScrollRef = ref<HTMLElement | null>(null)
+const gridViewportWidth = ref(0)
+let ro: ResizeObserver | null = null
+const gridInnerRef = ref<HTMLElement | null>(null)
+
+const maxLanesBeforeExpand = 2
+const widthFactor = computed(() => Math.max(1, Math.ceil((maxLaneCount.value || 1) / maxLanesBeforeExpand)))
+const gridInnerWidth = computed(() => {
+  const base = Math.max(0, gridViewportWidth.value - timeColWidth)
+  return timeColWidth + base * widthFactor.value
+})
+
+onMounted(() => {
+  if (!gridScrollRef.value) return
+  ro = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    if (!entry) return
+    gridViewportWidth.value = entry.contentRect.width
+  })
+  ro.observe(gridScrollRef.value)
+})
+
+onBeforeUnmount(() => {
+  ro?.disconnect()
+  ro = null
+})
+
+const getScheduledStyle = (item: any) => {
+  const ev = getEvent(item.orderId)
+  if (!ev) return {}
+  const totalWidth = gridInnerWidth.value || 0
+  const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
+  const laneCount = Math.max(1, item.laneCount || 1)
+  const laneW = dayColW > 0 ? dayColW / laneCount : 0
+  const top = item.startIdx * slotHeightPx + cellPadding
+  const height = item.span * slotHeightPx - cellPadding * 2
+  const left = timeColWidth + item.dayIndex * dayColW + item.lane * laneW + cellPadding
+  const width = laneW - cellPadding * 2
+  return {
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${Math.max(20, width)}px`,
+    height: `${Math.max(slotHeightPx - cellPadding * 2, height)}px`,
+    zIndex: selectedScheduledOrderIds.value.includes(item.orderId) ? 12 : 10
+  }
+}
+
+const getDropTarget = (e: DragEvent) => {
+  if (!gridInnerRef.value) return null
+  const rect = gridInnerRef.value.getBoundingClientRect()
+  const totalW = gridInnerWidth.value || rect.width
+  const dayColW = totalW > timeColWidth ? (totalW - timeColWidth) / 7 : 0
+  if (dayColW <= 0) return null
+
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+  const xInDays = x - timeColWidth
+  if (xInDays < 0) return null
+
+  const dayIndex = Math.min(6, Math.max(0, Math.floor(xInDays / dayColW)))
+  const slotIndex = Math.min(timeSlots.value.length - 1, Math.max(0, Math.floor(y / slotHeightPx)))
+  const day = currentWeekDays.value[dayIndex]
+  const slot = timeSlots.value[slotIndex]
+  if (!day || !slot) return null
+  return { dateStr: day.dateStr, timeKey: slot.key, isPast: day.isPast }
+}
+
+const handleGridDragOver = (e: DragEvent) => {
+  const target = getDropTarget(e)
+  if (!target) return
+  if (target.isPast) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+
+const handleGridDrop = (e: DragEvent) => {
+  const target = getDropTarget(e)
+  if (!target) return
+  e.preventDefault()
+  const orderId = e.dataTransfer?.getData('text/plain')
+  if (!orderId) return
+  scheduleOrder(orderId, target.dateStr, target.timeKey, target.isPast)
+}
 
 // 控制开机自检弹窗的显隐
 const showStartupCheck = ref(false)
@@ -59,15 +145,16 @@ function onStartupComplete() {
         <div v-if="unscheduledOrders.length === 0" class="empty-state"><p>无待排程工单</p></div>
         <div v-else class="table-wrapper">
           <table class="data-table">
-            <thead><tr><th>工单号</th><th>设备</th><th>申请人</th><th>类型</th><th>优先级</th></tr></thead>
+            <thead><tr><th>任务单号</th><th>申请人</th><th>设备名称</th><th>流程长度</th><th>测试台</th></tr></thead>
             <tbody>
               <tr v-for="order in unscheduledOrders" :key="order.id" draggable="true" 
                   @dragstart="handleDragStart($event, order)" 
                   @dragend="handleDragEnd">
                 <td class="cell-id">{{ order.taskNumber }}</td>
+                <td class="cell-applicant">{{ order.applicant }}</td>
                 <td class="cell-device" :title="order.deviceName">{{ order.deviceName }}</td>
-                <td>{{ order.applicant }}</td><td>{{ order.type }}</td>
-                <td><span class="priority-tag" :class="order.priority === '紧急' ? 'urgent' : 'normal'">{{ order.priority }}</span></td>
+                <td class="cell-flow">{{ order.flowProcess }}</td>
+                <td class="cell-bench">{{ order.testPlatform }}</td>
               </tr>
             </tbody>
           </table>
@@ -90,42 +177,71 @@ function onStartupComplete() {
         </div>
       </div>
       
-      <div class="calendar-grid">
-        <div class="grid-header-row">
-          <div class="time-column-header">时间</div>
-          <div v-for="day in currentWeekDays" :key="day.dateStr" class="day-header" :class="{ 'is-today': day.isToday }">
-            <div class="day-num" :class="{ 'is-weekend': day.isWeekend }">{{ day.month }}/{{ day.dayNum }}</div>
-            <div class="day-name">周{{ day.dayName.replace('周', '') }}</div>
+      <div class="calendar-grid" :class="{ 'is-dragging': isDragging }">
+        <div class="grid-scroll" ref="gridScrollRef">
+          <div class="grid-header-row" :style="{ width: `${gridInnerWidth}px` }">
+            <div class="time-column-header">时间</div>
+            <div v-for="day in currentWeekDays" :key="day.dateStr" class="day-header" :class="{ 'is-today': day.isToday }">
+              <div class="day-num" :class="{ 'is-weekend': day.isWeekend }">{{ day.month }}/{{ day.dayNum }}</div>
+              <div class="day-name">周{{ day.dayName.replace('周', '') }}</div>
+            </div>
           </div>
-        </div>
-        
-        <div class="grid-body">
-          <div v-for="slot in timeSlots" :key="slot.key" class="grid-row" :class="{ 'is-half': slot.isHalf }">
-            <div class="time-label" :class="{ 'is-half': slot.isHalf }">{{ slot.label }}</div>
-            
-            <div v-for="day in currentWeekDays" :key="getCellKey(day.dateStr, slot.key)" 
-                 class="grid-cell" 
-                 :class="{ 'is-weekend': day.isWeekend, 'is-half-cell': slot.isHalf, 'is-past': day.isPast }" 
-                 @dragover="handleDragOver($event, day.isPast)" 
-                 @dragenter="handleDragEnter" 
-                 @dragleave="handleDragLeave" 
-                 @drop="handleDrop($event, day.dateStr, slot.key, day.isPast)">
-              
-              <div v-if="scheduledOrders[getCellKey(day.dateStr, slot.key)]?.length" style="display:flex;flex-direction:column;gap:4px;width:100%">
-                <div v-for="oid in scheduledOrders[getCellKey(day.dateStr, slot.key)]" :key="oid" 
-                     class="scheduled-item" 
-                     :class="{ 'is-selected': selectedScheduledOrderIds.includes(oid) }" 
-                     @click="selectScheduledOrder(oid)">
+
+          <div class="grid-body">
+            <div
+              class="grid-inner"
+              ref="gridInnerRef"
+              :style="{
+                height: `${timeSlots.length * slotHeightPx}px`,
+                width: `${gridInnerWidth}px`
+              }"
+              @dragover.capture="handleGridDragOver"
+              @drop.capture="handleGridDrop"
+            >
+              <div class="events-overlay">
+                <div
+                  v-for="it in scheduledLayoutItems
+                    .map((x) => ({ ...x, dayIndex: currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
+                    .filter((x) => x.dayIndex >= 0)"
+                  :key="it.orderId"
+                  class="scheduled-item"
+                  :class="{
+                    'is-selected': selectedScheduledOrderIds.includes(it.orderId),
+                    'is-resizing': isResizing && resizingOrderId === it.orderId
+                  }"
+                  :style="getScheduledStyle(it)"
+                  @click="selectScheduledOrder(it.orderId)"
+                :title="`${getOrderById(it.orderId)?.taskNumber || ''} · ${getOrderById(it.orderId)?.deviceName || ''}`"
+                >
                   <div class="scheduled-content">
-                    <span class="device-name">{{ getOrderById(oid)?.taskNumber }}</span>
-                    <button class="remove-btn" @click.stop="handleUnschedule(getCellKey(day.dateStr, slot.key), oid)"><Icon icon="mdi:close" /></button>
+                    <span class="device-name">{{ getOrderById(it.orderId)?.taskNumber }}</span>
+                    <button class="remove-btn" title="删除排程" @click.stop="handleUnschedule(it.cellKey, it.orderId)">
+                      <Icon icon="mdi:close" />
+                    </button>
                   </div>
-                  <div class="scheduled-tag">{{ getOrderById(oid)?.deviceName }}</div>
+                  <div class="scheduled-tag">{{ getOrderById(it.orderId)?.deviceName }}</div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.orderId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.orderId, $event)"></div>
                 </div>
               </div>
-              <div v-else class="empty-slot-hint"></div>
+
+              <div v-for="slot in timeSlots" :key="slot.key" class="grid-row" :class="{ 'is-half': slot.isHalf }">
+                <div class="time-label" :class="{ 'is-half': slot.isHalf }">{{ slot.label }}</div>
+
+                <div
+                  v-for="day in currentWeekDays"
+                  :key="getCellKey(day.dateStr, slot.key)"
+                  class="grid-cell"
+                  :class="{ 'is-weekend': day.isWeekend, 'is-half-cell': slot.isHalf, 'is-past': day.isPast }"
+                  @dragover="handleDragOver($event, day.isPast)"
+                  @dragenter="handleDragEnter"
+                  @dragleave="handleDragLeave"
+                  @drop="handleDrop($event, day.dateStr, slot.key, day.isPast)"
+                >
+                  <div class="empty-slot-hint"></div>
+                </div>
+              </div>
             </div>
-            
           </div>
         </div>
       </div>
@@ -169,7 +285,7 @@ function onStartupComplete() {
 .data-table th { padding:12px 16px; text-align:left; font-weight:600; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }
 .data-table td { padding:12px 16px; border-bottom:1px solid rgba(255,255,255,.04); vertical-align:middle; }
 .cell-id { font-weight:600; color:var(--color-accent-blue); }
-.cell-device,.cell-applicant,.cell-type { color:var(--color-text-secondary); }
+.cell-device,.cell-applicant,.cell-flow,.cell-bench { color:var(--color-text-secondary); }
 .priority-tag { display:inline-flex; align-items:center; padding:4px 8px; border-radius:6px; font-size:12px; font-weight:500; white-space:nowrap; }
 .priority-tag.normal { background:rgba(59,130,246,.12); color:var(--color-accent-blue); }
 .priority-tag.urgent { background:rgba(239,68,68,.12); color:#ef4444; }
@@ -184,7 +300,8 @@ function onStartupComplete() {
 .dot.pending { background:var(--color-border); }
 .dot.occupied { background:var(--color-accent-blue); }
 .calendar-grid { flex:1; display:flex; flex-direction:column; border-top:1px solid var(--color-border); border-bottom:1px solid var(--color-border); background:var(--color-bg-primary); overflow:hidden; }
-.grid-header-row { display:grid; grid-template-columns:60px repeat(7,1fr); border-bottom:1px solid var(--color-border); background:var(--color-bg-tertiary); }
+.grid-scroll { flex:1; overflow:auto; }
+.grid-header-row { display:grid; grid-template-columns:60px repeat(7,1fr); border-bottom:1px solid var(--color-border); background:var(--color-bg-tertiary); position:sticky; top:0; z-index:20; }
 .time-column-header { padding:12px; text-align:center; border-right:1px solid var(--color-border); font-weight:600; font-size:12px; color:var(--color-text-secondary); }
 .day-header { padding:8px; text-align:center; border-right:1px solid var(--color-border); }
 .day-header:last-child { border-right:none; }
@@ -192,7 +309,9 @@ function onStartupComplete() {
 .day-num { font-size:16px; font-weight:700; color:var(--color-accent-blue); }
 .day-num.is-weekend { color:#ef4444; }
 .day-name { font-size:11px; color:var(--color-text-secondary); margin-top:2px; }
-.grid-body { flex:1; overflow-y:auto; }
+.grid-body { position:relative; }
+.grid-inner { position:relative; }
+.events-overlay { position:absolute; inset:0; pointer-events:none; z-index:5; }
 .grid-row { display:grid; grid-template-columns:60px repeat(7,1fr); border-bottom:1px solid var(--color-border); min-height:44px; }
 .grid-row.is-half { border-bottom:1px dashed var(--color-border); }
 .time-label { display:flex; align-items:center; justify-content:center; border-right:1px solid var(--color-border); font-size:11px; color:var(--color-text-tertiary); background:var(--color-bg-tertiary); font-family:monospace; }
@@ -205,14 +324,22 @@ function onStartupComplete() {
 .grid-cell.drag-over { background:rgba(88,166,255,.1)!important; outline:2px dashed var(--color-accent-blue); outline-offset:-2px; }
 .empty-slot-hint { position:absolute; inset:0; pointer-events:none; opacity:0; color:var(--color-text-tertiary); font-size:20px; display:flex; align-items:center; justify-content:center; }
 .grid-cell:hover .empty-slot-hint { opacity:.5; }
-.scheduled-item { height:100%; padding:4px 6px; background:linear-gradient(135deg,var(--color-accent-blue),var(--color-accent-cyan)); border-radius:4px; color:#fff; display:flex; flex-direction:column; justify-content:center; cursor:pointer; user-select:none; transition:all .2s ease; }
+.scheduled-item { position:absolute; padding:4px 6px; background:linear-gradient(135deg,var(--color-accent-blue),var(--color-accent-cyan)); border-radius:4px; color:#fff; display:flex; flex-direction:column; justify-content:flex-start; cursor:pointer; user-select:none; transition:all .2s ease; overflow:hidden; pointer-events:auto; font-size:10px; }
+.calendar-grid.is-dragging .scheduled-item { pointer-events:none; }
 .scheduled-item:hover { transform:scale(1.02); box-shadow:0 2px 6px rgba(0,0,0,.12); }
-.scheduled-item.is-selected { outline:2px solid rgba(255,255,255,.95); box-shadow:0 0 0 3px rgba(37,99,235,.35); transform:scale(1.04); z-index:2; position:relative; }
-.scheduled-content { display:flex; justify-content:space-between; align-items:flex-start; }
-.device-name { font-size:11px; font-weight:700; color:#fff; line-height:1.2; }
-.scheduled-tag { font-size:9px; color:rgba(255,255,255,.9); font-weight:500; margin-top:2px; }
-.remove-btn { background:none; border:none; color:rgba(255,255,255,.7); cursor:pointer; padding:0; border-radius:4px; opacity:.8; transition:all .2s; display:flex; }
-.remove-btn:hover { color:#fff; opacity:1; }
+.scheduled-item.is-selected { outline:2px solid rgba(255,255,255,.95); box-shadow:0 0 0 3px rgba(37,99,235,.35); transform:scale(1.04); }
+.scheduled-item.is-resizing { transition:none!important; transform:none!important; }
+.scheduled-item.is-resizing:hover { transform:none!important; }
+.scheduled-content { display:flex; align-items:flex-start; justify-content:flex-start; }
+.device-name { font-size:11px; font-weight:600; color:#fff; line-height:1.2; padding-right:20px; overflow:hidden; word-break:break-all; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.scheduled-tag { font-size:9px; color:rgba(255,255,255,.9); font-weight:500; margin-top:2px; overflow:hidden; word-break:break-all; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.remove-btn { position:absolute; top:4px; right:4px; width:18px; height:18px; align-items:center; justify-content:center; background:rgba(0,0,0,.18); border:none; color:rgba(255,255,255,.9); cursor:pointer; padding:0; border-radius:4px; opacity:0; pointer-events:none; transition:opacity .15s, background .15s; display:flex; }
+.scheduled-item:hover .remove-btn { opacity:1; pointer-events:auto; }
+.remove-btn:hover { background:rgba(0,0,0,.28); color:#fff; }
+.resize-handle-top { position:absolute; left:0; right:0; top:0; height:10px; cursor:ns-resize; background:linear-gradient(0deg, rgba(255,255,255,0), rgba(255,255,255,.18)); }
+.resize-handle-top:hover { background:linear-gradient(0deg, rgba(255,255,255,0), rgba(255,255,255,.28)); }
+.resize-handle { position:absolute; left:0; right:0; bottom:0; height:10px; cursor:ns-resize; background:linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.18)); }
+.resize-handle:hover { background:linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.28)); }
 .control-center { padding:16px; background:var(--color-bg-secondary); display:flex; align-items:center; justify-content:space-between; gap:16px; }
 .control-center-left { display:flex; align-items:center; gap:12px; min-width:0; flex:1; font-size:14px; }
 .selected-order { display:flex; align-items:center; gap:8px; color:var(--color-accent-blue); font-weight:600; }

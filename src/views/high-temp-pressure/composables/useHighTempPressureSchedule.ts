@@ -23,8 +23,18 @@ function fmtDate(d: Date) {
 export function useHighTempPressureSchedule() {
   const searchKeyword = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
-  const scheduledOrders = ref<Record<string, string[]>>({})
   const selectedScheduledOrderIds = ref<string[]>([])
+  const isDragging = ref(false)
+  const slotHeightPx = 44
+
+  type ScheduledEvent = {
+    instrumentId: string
+    dateStr: string
+    startTimeKey: string
+    span: number
+  }
+
+  const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
 
   const workOrders = ref<WorkOrder[]>([
     {
@@ -123,18 +133,111 @@ export function useHighTempPressureSchedule() {
 
   const timeSlots = computed<TimeSlotItem[]>(() => {
     const slots: TimeSlotItem[] = []
-    for (let hour = 8; hour < 18; hour++) {
+    for (let hour = 6; hour <= 22; hour++) {
       slots.push({ key: `${String(hour).padStart(2, '0')}00`, label: `${String(hour).padStart(2, '0')}:00`, isHalf: false })
-      slots.push({ key: `${String(hour).padStart(2, '0')}30`, label: `${String(hour).padStart(2, '0')}:30`, isHalf: true })
     }
-    slots.push({ key: '1800', label: '18:00', isHalf: false })
     return slots
   })
 
   const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
 
+  const timeKeyToIndex = computed(() => {
+    const map: Record<string, number> = {}
+    timeSlots.value.forEach((s, idx) => {
+      map[s.key] = idx
+    })
+    return map
+  })
+
+  const scheduledOrders = computed<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+      if (!map[cellKey]) map[cellKey] = []
+      map[cellKey].push(ev.instrumentId)
+    })
+    return map
+  })
+
+  type ScheduledLayoutItem = {
+    instrumentId: string
+    dateStr: string
+    startTimeKey: string
+    startIdx: number
+    span: number
+    lane: number
+    laneCount: number
+    cellKey: string
+  }
+
+  const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const dayMap: Record<string, ScheduledEvent[]> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
+      dayMap[ev.dateStr].push(ev)
+    })
+
+    const out: ScheduledLayoutItem[] = []
+
+    Object.entries(dayMap).forEach(([dateStr, evs]) => {
+      const mapped = evs
+        .map((ev) => {
+          const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+          return { ev, startIdx: startIdx ?? -1, span: Math.max(1, ev.span) }
+        })
+        .filter((x) => x.startIdx >= 0)
+        .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.instrumentId.localeCompare(b.ev.instrumentId))
+
+      const counts = new Array(timeSlots.value.length + 1).fill(0)
+      mapped.forEach((x) => {
+        counts[x.startIdx] += 1
+        counts[x.endIdx] -= 1
+      })
+      for (let i = 1; i < counts.length; i++) counts[i] += counts[i - 1]
+
+      const laneEnds: number[] = []
+      const laneById: Record<string, number> = {}
+      mapped.forEach((x) => {
+        let lane = laneEnds.findIndex((le) => le <= x.startIdx)
+        if (lane === -1) {
+          lane = laneEnds.length
+          laneEnds.push(x.endIdx)
+        } else {
+          laneEnds[lane] = x.endIdx
+        }
+        laneById[x.ev.instrumentId] = lane
+      })
+
+      mapped.forEach((x) => {
+        const cellKey = getCellKey(dateStr, x.ev.startTimeKey)
+        let laneCount = 1
+        for (let i = x.startIdx; i < x.endIdx; i++) {
+          laneCount = Math.max(laneCount, counts[i] || 0)
+        }
+        out.push({
+          instrumentId: x.ev.instrumentId,
+          dateStr,
+          startTimeKey: x.ev.startTimeKey,
+          startIdx: x.startIdx,
+          span: x.span,
+          lane: laneById[x.ev.instrumentId] ?? 0,
+          laneCount: Math.max(1, laneCount),
+          cellKey,
+        })
+      })
+    })
+
+    return out
+  })
+
+  const maxLaneCount = computed(() => {
+    if (!scheduledLayoutItems.value.length) return 1
+    return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
+  })
+
   const unscheduledOrders = computed(() => {
-    const scheduledInstrumentIds = new Set(Object.values(scheduledOrders.value).flat())
+    const scheduledInstrumentIds = new Set(Object.keys(scheduledEvents.value))
     return workOrders.value.filter(order =>
       order.status === '待排程' &&
       order.items.some(item => !scheduledInstrumentIds.has(item.id)) &&
@@ -186,22 +289,24 @@ export function useHighTempPressureSchedule() {
   function loadPresetSchedule() {
     const base = calBase.value
     const presets = [
-      { d: 0, t: '0800', id: 'wo-A' },
-      { d: 0, t: '1000', id: 'wo-B' },
-      { d: 1, t: '1400', id: 'wo-C' },
+      { d: 0, t: '0800', id: 'ins-A1' },
+      { d: 0, t: '1000', id: 'ins-B1' },
+      { d: 1, t: '1400', id: 'ins-C1' },
     ]
+    const scheduled = new Set(Object.keys(scheduledEvents.value))
+
     presets.forEach(p => {
+      if (scheduled.has(p.id)) return
       const d = addDays(base, p.d)
-      const cellKey = getCellKey(fmtDate(d), p.t)
-      const current = scheduledOrders.value[cellKey] || []
-      if (!current.includes(p.id)) {
-        scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...current, p.id] }
-      }
+      const dateStr = fmtDate(d)
+      const timeKey = p.t
+      scheduleInstrument(p.id, dateStr, timeKey, false)
     })
   }
 
   function handleDragStart(e: DragEvent, order: WorkOrder) {
     draggedOrder.value = order
+    isDragging.value = true
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', order.id)
@@ -210,6 +315,7 @@ export function useHighTempPressureSchedule() {
   }
 
   function handleInstrumentDragStart(e: DragEvent, instrument: InstrumentItem) {
+    isDragging.value = true
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', instrument.id)
@@ -220,6 +326,7 @@ export function useHighTempPressureSchedule() {
   function handleDragEnd(e: DragEvent) {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('dragging')
     draggedOrder.value = null
+    isDragging.value = false
   }
 
   function handleDragOver(e: DragEvent, isPast: boolean) {
@@ -233,6 +340,24 @@ export function useHighTempPressureSchedule() {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
   }
 
+  function scheduleInstrument(instrumentId: string, dateStr: string, timeKey: string, isPast: boolean) {
+    if (isPast) return
+    if (!instrumentId) return
+    const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
+    if (timeKey === lastKey) return
+    if (scheduledEvents.value[instrumentId]) return
+    const startIdx = timeKeyToIndex.value[timeKey]
+    const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    scheduledEvents.value = {
+      ...scheduledEvents.value,
+      [instrumentId]: { instrumentId, dateStr, startTimeKey: timeKey, span: Math.min(1, maxSpan) },
+    }
+    if (isDragging.value) {
+      isDragging.value = false
+      draggedOrder.value = null
+    }
+  }
+
   function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     e.preventDefault()
@@ -240,11 +365,7 @@ export function useHighTempPressureSchedule() {
     if (!e.dataTransfer) return
     const instrumentId = e.dataTransfer.getData('text/plain')
     if (!instrumentId) return
-    const cellKey = getCellKey(dateStr, timeKey)
-    const current = scheduledOrders.value[cellKey] || []
-    if (!current.includes(instrumentId)) {
-      scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...current, instrumentId] }
-    }
+    scheduleInstrument(instrumentId, dateStr, timeKey, isPast)
   }
 
   function handleSelectScheduledOrder(orderId: string) {
@@ -257,23 +378,105 @@ export function useHighTempPressureSchedule() {
   }
 
   function handleUnschedule(cellKey: string, orderId: string) {
-    const current = scheduledOrders.value[cellKey] || []
-    const next = current.filter(id => id !== orderId)
-    if (next.length > 0) {
-      scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: next }
-    } else {
-      const newObj = { ...scheduledOrders.value }
-      delete newObj[cellKey]
-      scheduledOrders.value = newObj
-    }
+    void cellKey
+    const next = { ...scheduledEvents.value }
+    delete next[orderId]
+    scheduledEvents.value = next
     if (selectedScheduledOrderIds.value.includes(orderId)) {
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
     }
   }
 
   function resetScheduleState() {
-    scheduledOrders.value = {}
+    scheduledEvents.value = {}
     selectedScheduledOrderIds.value = []
+  }
+
+  const getEvent = (instrumentId: string) => scheduledEvents.value[instrumentId]
+
+  const setEventSpan = (instrumentId: string, span: number) => {
+    const ev = scheduledEvents.value[instrumentId]
+    if (!ev) return
+    const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (startIdx === undefined) return
+    const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    const nextSpan = Math.min(maxSpan, Math.max(1, span))
+    if (nextSpan === ev.span) return
+    scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: { ...ev, span: nextSpan } }
+  }
+
+  const resizing = ref<{ instrumentId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
+  const resizingInstrumentId = computed(() => resizing.value?.instrumentId || null)
+  const isResizing = computed(() => !!resizing.value)
+
+  const setEventStartAndSpan = (instrumentId: string, startIdx: number, span: number) => {
+    const ev = scheduledEvents.value[instrumentId]
+    if (!ev) return
+    const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
+    const nextStartIdx = Math.max(0, Math.min(maxStartIdx, startIdx))
+    const nextStartKey = timeSlots.value[nextStartIdx]?.key
+    if (!nextStartKey) return
+    const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
+    const nextSpan = Math.min(maxSpan, Math.max(1, span))
+    scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: { ...ev, startTimeKey: nextStartKey, span: nextSpan } }
+  }
+
+  const startResize = (instrumentId: string, e: MouseEvent) => {
+    const ev = scheduledEvents.value[instrumentId]
+    if (!ev) return
+    const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (originStartIdx === undefined) return
+    resizing.value = { instrumentId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+
+    const onMove = (me: MouseEvent) => {
+      const ctx = resizing.value
+      if (!ctx) return
+      const delta = me.clientY - ctx.startY
+      const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
+      if (ctx.mode === 'bottom') {
+        setEventSpan(ctx.instrumentId, ctx.originSpan + deltaSlots)
+        return
+      }
+      const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
+      const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
+      setEventStartAndSpan(ctx.instrumentId, nextStartIdx, endIdx - nextStartIdx)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      resizing.value = null
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const startResizeTop = (instrumentId: string, e: MouseEvent) => {
+    const ev = scheduledEvents.value[instrumentId]
+    if (!ev) return
+    const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (originStartIdx === undefined) return
+    resizing.value = { instrumentId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+
+    const onMove = (me: MouseEvent) => {
+      const ctx = resizing.value
+      if (!ctx) return
+      const delta = me.clientY - ctx.startY
+      const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
+      const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
+      const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
+      setEventStartAndSpan(ctx.instrumentId, nextStartIdx, endIdx - nextStartIdx)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      resizing.value = null
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   return {
@@ -282,6 +485,10 @@ export function useHighTempPressureSchedule() {
     workOrders,
     calBase,
     scheduledOrders,
+    scheduledLayoutItems,
+    maxLaneCount,
+    slotHeightPx,
+    isDragging,
     selectedScheduledOrderIds,
     currentWeekDays,
     weekLabel,
@@ -304,8 +511,14 @@ export function useHighTempPressureSchedule() {
     handleDragOver,
     handleDragLeave,
     handleDrop,
+    scheduleInstrument,
     handleSelectScheduledOrder,
     handleUnschedule,
     resetScheduleState,
+    getEvent,
+    startResize,
+    startResizeTop,
+    resizingInstrumentId,
+    isResizing,
   }
 }

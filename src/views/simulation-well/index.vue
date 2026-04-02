@@ -48,6 +48,13 @@ function handleSaveDownhole(payload: unknown) {
       :time-slots="schedule.timeSlots.value"
       :scheduled-orders="schedule.scheduledOrders.value"
       :scheduled-orders-tentative="schedule.scheduledOrdersTentative.value"
+      :scheduled-layout-items="schedule.scheduledLayoutItems.value"
+      :max-lane-count="schedule.maxLaneCount.value"
+      :slot-height-px="schedule.slotHeightPx"
+      :is-dragging="schedule.isDragging.value"
+      :resizing-order-id="schedule.resizingOrderId.value"
+      :is-resizing="schedule.isResizing.value"
+      :selected-scheduled-order-ids="schedule.selectedScheduledOrderIds.value"
       :today-scheduled-order-ids="schedule.todayScheduledOrderIds.value"
       :fmt-date="schedule.fmtDate"
       :get-cell-key="schedule.getCellKey"
@@ -64,6 +71,9 @@ function handleSaveDownhole(payload: unknown) {
       @drop="schedule.handleDrop"
       @unschedule="schedule.handleUnschedule"
       @unschedule-tentative="schedule.handleUnscheduleTentative"
+      @select-scheduled-order="schedule.handleSelectScheduledOrder"
+      @start-resize="schedule.startResize"
+      @start-resize-top="schedule.startResizeTop"
       @start-scheduled-test="handleStartScheduledTest"
     />
 

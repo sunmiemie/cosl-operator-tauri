@@ -19,11 +19,6 @@ export interface WorkOrder {
   priority: 'high' | 'normal' | 'low'
 }
 
-interface ScheduledTask {
-  orderId: string
-  scheduledAt: string
-}
-
 interface TempHistoryPoint {
   time: string
   temp: number
@@ -54,8 +49,17 @@ export function useHighTempBox() {
   const calBase = ref(getMonday(new Date()))
   const selectedScheduledOrder = ref<string | null>(null)
   const draggedOrderId = ref<string | null>(null)
+  const isDragging = ref(false)
+  const slotHeightPx = 44
 
-  const scheduledTasks = ref<Record<string, ScheduledTask>>({})
+  type ScheduledEvent = {
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    span: number
+  }
+
+  const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
   const workOrders = ref<WorkOrder[]>([
     { id: 'HT-2024-001', applicant: '张三', operator: '李四', department: '研发部', deviceName: '电子控制器', deviceId: 'ECU-2024-001', targetTemp: 85, duration: 120, createDate: '2024-01-05', status: 'pending', priority: 'high' },
     { id: 'HT-2024-002', applicant: '王五', operator: '赵六', department: '质量部', deviceName: '传感器模块', deviceId: 'SENSOR-2024-002', targetTemp: 125, duration: 180, createDate: '2024-01-06', status: 'pending', priority: 'normal' },
@@ -109,7 +113,7 @@ export function useHighTempBox() {
 
   const filteredOrders = computed(() => {
     return workOrders.value.filter(order => {
-      const isScheduled = Object.values(scheduledTasks.value).some(t => t.orderId === order.id)
+      const isScheduled = !!scheduledEvents.value[order.id]
       if (isScheduled) return false
 
       if (searchKeyword.value) {
@@ -161,11 +165,9 @@ export function useHighTempBox() {
 
   const timeSlots = computed(() => {
     const slots = []
-    for (let hour = 8; hour < 18; hour++) {
+    for (let hour = 6; hour <= 22; hour++) {
       slots.push({ key: `${String(hour).padStart(2, '0')}00`, label: `${String(hour).padStart(2, '0')}:00`, isHalf: false })
-      slots.push({ key: `${String(hour).padStart(2, '0')}30`, label: `${String(hour).padStart(2, '0')}:30`, isHalf: true })
     }
-    slots.push({ key: '1800', label: '18:00', isHalf: false })
     return slots
   })
 
@@ -198,6 +200,101 @@ export function useHighTempBox() {
   const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
 
+  const timeKeyToIndex = computed(() => {
+    const map: Record<string, number> = {}
+    timeSlots.value.forEach((s, idx) => {
+      map[s.key] = idx
+    })
+    return map
+  })
+
+  const scheduledOrders = computed<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+      if (!map[cellKey]) map[cellKey] = []
+      map[cellKey].push(ev.orderId)
+    })
+    return map
+  })
+
+  type ScheduledLayoutItem = {
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    startIdx: number
+    span: number
+    lane: number
+    laneCount: number
+    cellKey: string
+  }
+
+  const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const dayMap: Record<string, ScheduledEvent[]> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
+      dayMap[ev.dateStr].push(ev)
+    })
+
+    const out: ScheduledLayoutItem[] = []
+
+    Object.entries(dayMap).forEach(([dateStr, evs]) => {
+      const mapped = evs
+        .map((ev) => {
+          const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+          return { ev, startIdx: startIdx ?? -1, span: Math.max(1, ev.span) }
+        })
+        .filter((x) => x.startIdx >= 0)
+        .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
+
+      const counts = new Array(timeSlots.value.length + 1).fill(0)
+      mapped.forEach((x) => {
+        counts[x.startIdx] += 1
+        counts[x.endIdx] -= 1
+      })
+      for (let i = 1; i < counts.length; i++) counts[i] += counts[i - 1]
+
+      const laneEnds: number[] = []
+      const laneByOrderId: Record<string, number> = {}
+      mapped.forEach((x) => {
+        let lane = laneEnds.findIndex((le) => le <= x.startIdx)
+        if (lane === -1) {
+          lane = laneEnds.length
+          laneEnds.push(x.endIdx)
+        } else {
+          laneEnds[lane] = x.endIdx
+        }
+        laneByOrderId[x.ev.orderId] = lane
+      })
+
+      mapped.forEach((x) => {
+        const cellKey = getCellKey(dateStr, x.ev.startTimeKey)
+        let laneCount = 1
+        for (let i = x.startIdx; i < x.endIdx; i++) {
+          laneCount = Math.max(laneCount, counts[i] || 0)
+        }
+        out.push({
+          orderId: x.ev.orderId,
+          dateStr,
+          startTimeKey: x.ev.startTimeKey,
+          startIdx: x.startIdx,
+          span: x.span,
+          lane: laneByOrderId[x.ev.orderId] ?? 0,
+          laneCount: Math.max(1, laneCount),
+          cellKey,
+        })
+      })
+    })
+
+    return out
+  })
+
+  const maxLaneCount = computed(() => {
+    if (!scheduledLayoutItems.value.length) return 1
+    return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
+  })
+
   function prevWeek() { calBase.value = addDays(calBase.value, -7) }
   function nextWeek() { calBase.value = addDays(calBase.value, 7) }
 
@@ -213,21 +310,21 @@ export function useHighTempBox() {
       { d: 0, t: '1000', id: 'HT-2024-002' },
       { d: 1, t: '1400', id: 'HT-2024-003' },
     ]
+    const scheduled = new Set(Object.keys(scheduledEvents.value))
     presets.forEach(p => {
+      if (scheduled.has(p.id)) return
       const d = addDays(base, p.d)
-      const cellKey = getCellKey(fmtDate(d), p.t)
-      if (!scheduledTasks.value[cellKey]) {
-        scheduledTasks.value[cellKey] = { orderId: p.id, scheduledAt: new Date().toISOString() }
-      }
+      const dateStr = fmtDate(d)
+      scheduleOrder(p.id, dateStr, p.t, false)
     })
   }
 
-  function removeSchedule(cellKey: string) {
-    const task = scheduledTasks.value[cellKey]
-    if (task && selectedScheduledOrder.value === task.orderId) {
-      selectedScheduledOrder.value = null
-    }
-    delete scheduledTasks.value[cellKey]
+  function handleUnschedule(cellKey: string, orderId: string) {
+    void cellKey
+    if (selectedScheduledOrder.value === orderId) selectedScheduledOrder.value = null
+    const next = { ...scheduledEvents.value }
+    delete next[orderId]
+    scheduledEvents.value = next
   }
 
   function selectScheduledTask(orderId: string) {
@@ -236,6 +333,7 @@ export function useHighTempBox() {
 
   function handleDragStart(e: DragEvent, order: WorkOrder) {
     draggedOrderId.value = order.id
+    isDragging.value = true
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', order.id)
@@ -250,6 +348,7 @@ export function useHighTempBox() {
     const target = e.target as HTMLElement
     target.style.opacity = '1'
     draggedOrderId.value = null
+    isDragging.value = false
   }
 
   function handleDragOver(e: DragEvent, isPast: boolean) {
@@ -263,20 +362,126 @@ export function useHighTempBox() {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
   }
 
+  function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean) {
+    if (isPast) return
+    if (!orderId) return
+    const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
+    if (timeKey === lastKey) return
+    if (scheduledEvents.value[orderId]) return
+
+    const order = getOrderById(orderId)
+    const span = Math.max(1, Math.ceil(Number(order?.duration || 0) / 60) || 1)
+    const startIdx = timeKeyToIndex.value[timeKey]
+    const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    scheduledEvents.value = {
+      ...scheduledEvents.value,
+      [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
+    }
+    if (isDragging.value) {
+      isDragging.value = false
+      draggedOrderId.value = null
+    }
+  }
+
   function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     e.preventDefault()
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
-    if (!e.dataTransfer) return
-
-    const orderId = e.dataTransfer.getData('text/plain')
+    const orderId = e.dataTransfer?.getData('text/plain')
     if (!orderId) return
+    scheduleOrder(orderId, dateStr, timeKey, isPast)
+  }
 
-    const cellKey = getCellKey(dateStr, timeKey)
-    if (!scheduledTasks.value[cellKey]) {
-      scheduledTasks.value[cellKey] = { orderId, scheduledAt: new Date().toISOString() }
+  const getEvent = (orderId: string) => scheduledEvents.value[orderId]
+
+  const setEventSpan = (orderId: string, span: number) => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return
+    const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (startIdx === undefined) return
+    const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    const nextSpan = Math.min(maxSpan, Math.max(1, span))
+    if (nextSpan === ev.span) return
+    scheduledEvents.value = { ...scheduledEvents.value, [orderId]: { ...ev, span: nextSpan } }
+  }
+
+  const resizing = ref<{ orderId: string; startY: number; originSpan: number; isTop?: boolean; originStartIdx?: number } | null>(null)
+  const resizingOrderId = computed(() => resizing.value?.orderId || null)
+  const isResizing = computed(() => !!resizing.value)
+
+  const startResize = (orderId: string, e: MouseEvent) => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return
+    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, isTop: false }
+
+    const onMove = (me: MouseEvent) => {
+      const ctx = resizing.value
+      if (!ctx || ctx.isTop) return
+      const delta = me.clientY - ctx.startY
+      const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
+      setEventSpan(ctx.orderId, ctx.originSpan + deltaSlots)
     }
-    draggedOrderId.value = null
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      resizing.value = null
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const setEventStartAndSpan = (orderId: string, newStartIdx: number, newSpan: number) => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return
+
+    const safeStartIdx = Math.max(0, Math.min(newStartIdx, timeSlots.value.length - 1))
+    const maxSpan = timeSlots.value.length - safeStartIdx
+    const safeSpan = Math.max(1, Math.min(newSpan, maxSpan))
+
+    const newTimeKey = timeSlots.value[safeStartIdx]?.key
+    if (!newTimeKey) return
+
+    if (newTimeKey === ev.startTimeKey && safeSpan === ev.span) return
+
+    scheduledEvents.value = {
+      ...scheduledEvents.value,
+      [orderId]: { ...ev, startTimeKey: newTimeKey, span: safeSpan }
+    }
+  }
+
+  const startResizeTop = (orderId: string, e: MouseEvent) => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return
+    const startIdx = timeKeyToIndex.value[ev.startTimeKey]
+    if (startIdx === undefined) return
+
+    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, isTop: true, originStartIdx: startIdx }
+
+    const onMove = (me: MouseEvent) => {
+      const ctx = resizing.value
+      if (!ctx || !ctx.isTop || ctx.originStartIdx === undefined) return
+      const delta = me.clientY - ctx.startY
+      
+      const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
+      
+      const newStartIdx = ctx.originStartIdx + deltaSlots
+      const newSpan = ctx.originSpan - deltaSlots
+
+      if (newSpan < 1) return
+      
+      setEventStartAndSpan(ctx.orderId, newStartIdx, newSpan)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      resizing.value = null
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   function startExperiment(orderId?: string) {
@@ -754,7 +959,11 @@ export function useHighTempBox() {
     calBase,
     selectedScheduledOrder,
     draggedOrderId,
-    scheduledTasks,
+    isDragging,
+    slotHeightPx,
+    scheduledOrders,
+    scheduledLayoutItems,
+    maxLaneCount,
     workOrders,
     currentWorkOrder,
     preCheckItems,
@@ -787,13 +996,19 @@ export function useHighTempBox() {
     getCellKey,
     getOrderById,
     loadPresetSchedule,
-    removeSchedule,
+    handleUnschedule,
     selectScheduledTask,
     handleDragStart,
     handleDragEnd,
     handleDragOver,
     handleDragLeave,
     handleDrop,
+    scheduleOrder,
+    getEvent,
+    startResize,
+    startResizeTop,
+    resizingOrderId,
+    isResizing,
     startExperiment,
     backToDashboard,
     togglePreCheck,
