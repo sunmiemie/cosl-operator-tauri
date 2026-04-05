@@ -84,12 +84,15 @@ export function extractHighTempPressureCurveAttachments(
 export function resolveBackendAttachmentEndpoint(fileUrl: string, backendBaseUrl: string) {
   const raw = String(fileUrl || '').trim().replace(/\\/g, '/')
   if (!raw) return ''
-  if (!/^https?:\/\//i.test(raw)) return raw.startsWith('/') ? raw : `/${raw}`
 
   try {
-    const attachmentUrl = new URL(raw)
     const backendUrl = new URL(backendBaseUrl)
-    if (attachmentUrl.origin !== backendUrl.origin) return ''
+    if (!['http:', 'https:'].includes(backendUrl.protocol)) return ''
+    // 协议相对地址也必须经过同源校验，不能将 //其他主机 当成本地路径。
+    const attachmentUrl = new URL(raw, `${backendUrl.origin}/`)
+    if (attachmentUrl.origin !== backendUrl.origin ||
+        !['http:', 'https:'].includes(attachmentUrl.protocol) ||
+        attachmentUrl.username || attachmentUrl.password) return ''
     return `${attachmentUrl.pathname}${attachmentUrl.search}`
   } catch {
     return ''

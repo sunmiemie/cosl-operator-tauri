@@ -72,6 +72,18 @@ test('损坏附件条目不影响有效曲线和旧版报告的展示', () => {
     ['/media/valid.png', '/media/legacy.png'])
 })
 
+test('协议相对地址和反斜杠地址不能绕过后端来源校验', () => {
+  const backend = 'https://api.example/api/'
+  for (const fileUrl of ['//other.example/media/a.png', '\\\\other.example\\media\\a.png',
+    'javascript:alert(1)', 'data:image/png;base64,AA', 'file:///tmp/image.png',
+    'https://user:password@api.example/media/a.png']) {
+    assert.equal(resolveBackendAttachmentEndpoint(fileUrl, backend), '')
+  }
+  assert.equal(resolveBackendAttachmentEndpoint('//api.example/media/a.png?download=1', backend), '/media/a.png?download=1')
+  assert.equal(resolveBackendAttachmentEndpoint('media/a.png', backend), '/media/a.png')
+  assert.equal(resolveBackendAttachmentEndpoint('/media/a.png', 'invalid backend'), '')
+})
+
 test('报告中心在客户端创建横向分页打印页面', () => {
   const source = readFileSync(
     resolve(import.meta.dirname, '../src/views/high-temp-pressure/components/ReportListPanel.vue'),
