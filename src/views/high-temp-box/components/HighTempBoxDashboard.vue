@@ -6,7 +6,9 @@ import type { HighTempBoxContext } from '../composables/useHighTempBox'
 const props = defineProps<{ ctx: HighTempBoxContext }>()
 const {
   searchKeyword,
-  activeFilter,
+  workOrdersLoading,
+  refreshWorkOrders,
+  orderStatusMutating,
   calBase,
   selectedScheduledOrder,
   filteredOrders,
@@ -41,7 +43,7 @@ const {
 } = props.ctx
 
 const selectedInfo = computed(() => selectedScheduledOrderInfo.value)
-const canStartExperiment = computed(() => !!selectedInfo.value)
+const canStartExperiment = computed(() => !!selectedInfo.value && !orderStatusMutating.value)
 
 const timeColWidth = 60
 const cellPadding = 3
@@ -127,17 +129,9 @@ const handleGridDrop = (e: DragEvent) => {
   scheduleOrder(orderId, target.dateStr, target.timeKey, target.isPast)
 }
 
-function onStartExperiment() {
+async function onStartExperiment() {
   if (!selectedInfo.value) return
-  startExperiment(selectedInfo.value.id)
-
-  if (props.ctx.currentView.value !== 'test') {
-    props.ctx.currentView.value = 'test'
-    props.ctx.currentStep.value = 'pre-check'
-    if (!props.ctx.currentWorkOrder.value) {
-      props.ctx.currentWorkOrder.value = selectedInfo.value
-    }
-  }
+  await startExperiment(selectedInfo.value.id)
 }
 </script>
 
@@ -149,7 +143,12 @@ function onStartExperiment() {
           <Icon icon="mdi:format-list-bulleted" class="header-icon" />
           <span>待测试工单</span>
         </div>
-        <span class="count-badge">{{ filteredOrders.length }}</span>
+        <div class="header-actions">
+          <button class="icon-btn" :disabled="workOrdersLoading" title="刷新" @click="refreshWorkOrders">
+            <Icon icon="mdi:refresh" />
+          </button>
+          <span class="count-badge">{{ filteredOrders.length }}</span>
+        </div>
       </div>
 
       <div class="search-box">
@@ -157,18 +156,6 @@ function onStartExperiment() {
         <input v-model="searchKeyword" type="text" placeholder="搜索工单号/申请人" />
         <button v-if="searchKeyword" class="clear-btn" @click="searchKeyword = ''">
           <Icon icon="mdi:close" />
-        </button>
-      </div>
-
-      <div class="filter-bar">
-        <button
-          v-for="f in ['all', 'high', 'pending', 'paused']"
-          :key="f"
-          class="filter-tag"
-          :class="{ active: activeFilter === f }"
-          @click="activeFilter = f as any"
-        >
-          {{ f === 'all' ? '全部' : f === 'high' ? '高优先' : f === 'pending' ? '待测' : '暂停' }}
         </button>
       </div>
 
@@ -180,11 +167,10 @@ function onStartExperiment() {
           <table class="data-table">
             <thead>
               <tr>
-                <th>工单号</th>
-                <th>设备</th>
+                <th>任务单号</th>
                 <th>申请人</th>
-                <th>参数</th>
-                <th>优先级</th>
+                <th>设备名称</th>
+                <th>目标温度(°C)</th>
               </tr>
             </thead>
             <tbody>
@@ -196,14 +182,9 @@ function onStartExperiment() {
                 @dragend="handleDragEnd"
               >
                 <td class="cell-id">{{ order.id }}</td>
-                <td class="cell-device" :title="order.deviceName">{{ order.deviceName }}</td>
                 <td class="cell-applicant">{{ order.applicant }}</td>
-                <td class="cell-param">{{ order.targetTemp }}°C / {{ order.duration }}分</td>
-                <td>
-                  <span class="priority-tag" :class="order.priority">
-                    {{ order.priority === 'high' ? '高' : order.priority === 'normal' ? '中' : '低' }}
-                  </span>
-                </td>
+                <td class="cell-device" :title="order.deviceName">{{ order.deviceName }}</td>
+                <td class="cell-param">{{ order.targetTemp }}</td>
               </tr>
             </tbody>
           </table>
@@ -327,6 +308,10 @@ function onStartExperiment() {
 .panel-header { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 18px; border-bottom:1px solid var(--color-border); font-size:15px; font-weight:600; color:var(--color-text-primary); background:var(--color-bg-secondary); flex-shrink:0; }
 .panel-header .header-icon { font-size:16px; color:var(--color-text-secondary); background:none; width:auto; height:auto; border-radius:0; display:inline-flex; }
 .sidebar .panel-header .header-title { display:flex; align-items:center; gap:8px; font-size:0.875rem; font-weight:500; }
+.header-actions { display:flex; align-items:center; gap:10px; }
+.icon-btn { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); cursor:pointer; }
+.icon-btn:disabled { opacity:.5; cursor:not-allowed; }
+.icon-btn:hover:not(:disabled) { background:var(--color-bg-hover); color:var(--color-text-primary); }
 .search-box { display:flex; align-items:center; gap:8px; padding:12px 18px; border-bottom:1px solid var(--color-border); background:var(--color-bg-secondary); }
 .search-icon { font-size:18px; color:#94a3b8; }
 .search-box input { flex:1; border:none; background:transparent; font-size:14px; color:#94a3b8; outline:none; }
@@ -336,6 +321,7 @@ function onStartExperiment() {
 .count-badge { padding:4px 10px; border-radius:9999px; font-size:12px; font-weight:500; background:rgba(59,130,246,0.15); color:rgb(96,165,250); }
 .table-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); }
 .table-wrapper { flex:1; overflow:auto; }
+.empty-state { text-align:center; padding:40px 20px; color:#94a3b8; font-size:13px; }
 .data-table { width:100%; border-collapse:collapse; font-size:13px; }
 .data-table thead { position:sticky; top:0; z-index:1; }
 .data-table th { padding:12px 16px; text-align:left; font-weight:600; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }
@@ -349,9 +335,6 @@ function onStartExperiment() {
 .priority-tag.high { background:rgba(239,68,68,0.12); color:#ef4444; }
 .priority-tag.normal { background:rgba(59,130,246,0.12); color:#3b82f6; }
 .priority-tag.low { background:rgba(34,197,94,0.12); color:#22c55e; }
-.filter-bar { display:flex; gap:8px; padding:8px 12px; border-bottom:1px solid var(--color-border); background:var(--color-bg-tertiary); }
-.filter-tag { border:none; background:transparent; padding:4px 8px; font-size:12px; border-radius:4px; color:var(--color-text-secondary); cursor:pointer; }
-.filter-tag.active { background:var(--color-accent-blue); color:white; }
 .main-content { flex:1; display:flex; flex-direction:column; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; overflow:hidden; }
 .week-cal-toolbar { display:flex; align-items:center; gap:8px; flex:1; }
 .week-cal-label { font-size:13px; font-weight:600; flex:1; text-align:center; white-space:nowrap; }

@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { currentView, selectedOrder, roiRegions, COLLECTION_CHANNELS } from '../composables/useTestStore'
 
 // 从父组件接收底层硬件/模型实例
-const { camera, ocr } = defineProps<{ camera: any; ocr: any }>()
+const { camera, ocr, statusMutating = false } = defineProps<{ camera: any; ocr: any; statusMutating?: boolean }>()
 const emit = defineEmits(['confirm-sync', 'back'])
 
 // 摄像头与画布引用
@@ -193,8 +193,8 @@ onUnmounted(() => window.removeEventListener('resize', resizeRoiCanvas))
     </div>
     
     <div class="monitor-footer">
-      <button class="btn-outline" @click="emit('back')">返回排程</button>
-      <button class="btn-solid-primary" @click="emit('confirm-sync')"><Icon icon="mdi:database-export" /> 确认并同步</button>
+      <button class="btn-outline" :disabled="statusMutating" @click="emit('back')">返回排程</button>
+      <button class="btn-solid-primary" :disabled="statusMutating" @click="emit('confirm-sync')"><Icon icon="mdi:database-export" /> 确认并同步</button>
     </div>
   </div>
 </template>

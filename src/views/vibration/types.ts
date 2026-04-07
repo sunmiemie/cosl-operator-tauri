@@ -2,7 +2,8 @@ export type Stage = 'dashboard' | 'devcheck' | 'start' | 'calibration' | 'testin
 
 export interface WorkOrder {
   id: string
-  type: '模拟实验' | '正式测试'
+  dbId?: number
+  type: string
   applicant: string
   phone: string
   device: string

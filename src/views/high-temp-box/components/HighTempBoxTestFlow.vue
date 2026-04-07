@@ -39,6 +39,8 @@ const {
   isRunning,
   togglePause,
   stopTest,
+  cancelExperiment,
+  orderStatusMutating,
 } = props.ctx
 </script>
 
@@ -49,7 +51,7 @@ const {
         <h2>{{ currentStep === 'pre-check' ? '开机前安全检查' : currentStep === 'startup-guide' ? '高温箱启动指南' : '测试监控中' }}</h2>
         <div class="order-tag">工单: {{ currentWorkOrder?.id }}</div>
       </div>
-      <button class="back-btn" @click="backToDashboard">
+      <button class="back-btn" :disabled="orderStatusMutating" @click="cancelExperiment">
         <Icon icon="mdi:arrow-left" /> 返回主页
       </button>
     </div>
@@ -79,7 +81,7 @@ const {
           </div>
 
           <div class="modal-actions">
-            <button class="cancel-btn" @click="backToDashboard">取消</button>
+            <button class="cancel-btn" :disabled="orderStatusMutating" @click="cancelExperiment">取消</button>
             <button class="next-btn" :disabled="!isPreCheckComplete" @click="completePreCheck">下一步</button>
           </div>
         </div>
@@ -87,7 +89,7 @@ const {
 
       <div v-else-if="currentStep === 'startup-guide'" class="modal-overlay">
         <div class="startup-check-modal">
-          <button class="back-btn top-right" @click="backToDashboard">
+          <button class="back-btn top-right" :disabled="orderStatusMutating" @click="cancelExperiment">
             <Icon icon="mdi:arrow-left" /> 返回主页
           </button>
           <h2 class="modal-title">高温箱启动指南</h2>

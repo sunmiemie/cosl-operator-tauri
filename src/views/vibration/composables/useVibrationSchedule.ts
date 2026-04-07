@@ -1,5 +1,6 @@
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import type { TimeSlot, WeekDay, WorkOrder } from '../types'
+import { listVibrationTableOrders, type VibrationTableOrderDTO } from '@/services/vibration-table-order-api'
 
 function getMonday(d: Date) {
   const dt = new Date(d)
@@ -25,14 +26,56 @@ export function useVibrationSchedule() {
   const isDragging = ref(false)
   const slotHeightPx = 44
 
-  const workOrders = ref<WorkOrder[]>([
-    { id: 'TMP-2026-001', type: '模拟实验', applicant: '张三', phone: '138****8888', device: '卫星姿控仪', level: '5G', duration: 30, purpose: '功能验证预实验' },
-    { id: 'FOR-2026-001', type: '模拟实验', applicant: '李四', phone: '139****6666', device: '导航控制器', level: '8G', duration: 60, purpose: '环境适应性振动测试' },
-    { id: 'FOR-2026-002', type: '正式测试', applicant: '王五', phone: '137****5555', device: '传感器模块', level: '10G', duration: 45, purpose: '结构完整性振动测试' },
-    { id: 'TMP-2026-002', type: '模拟实验', applicant: '陈六', phone: '136****4444', device: '惯性测量单元', level: '3G', duration: 20, purpose: '安装工装验证' },
-    { id: 'FOR-2026-003', type: '正式测试', applicant: '赵七', phone: '135****3333', device: '星敏感器', level: '6G', duration: 90, purpose: '正弦扫频耐久测试' },
-    { id: 'FOR-2026-004', type: '模拟实验', applicant: '刘八', phone: '134****2222', device: '天线组件', level: '4G', duration: 120, purpose: '随机振动环境验证' },
-  ])
+  const workOrders = ref<WorkOrder[]>([])
+  const workOrdersLoading = ref(false)
+  const orderStatusMutating = ref(false)
+
+  const visibleOrderStatus = 1
+
+  function mapVibrationTableOrder(dto: VibrationTableOrderDTO): WorkOrder {
+    return {
+      id: dto.order_no,
+      dbId: dto.id,
+      type: dto.order_type || '正式测试',
+      applicant: dto.applicant,
+      phone: '', // 后端无此字段，用空字符串或占位
+      device: dto.device_name,
+      level: dto.level,
+      duration: dto.duration,
+      purpose: dto.remark || '无'
+    }
+  }
+
+  async function refreshWorkOrders() {
+    workOrdersLoading.value = true
+    try {
+      const all: WorkOrder[] = []
+      const pageSize = 100
+      let page = 1
+      let total = Infinity
+
+      while (all.length < total) {
+        const resp = await listVibrationTableOrders({ page, pageSize, status: visibleOrderStatus })
+        if (!resp.success || !resp.data || resp.data.code !== 0) break
+
+        const chunk = resp.data.data.list
+          .filter(o => o.status === visibleOrderStatus)
+          .map(mapVibrationTableOrder)
+        
+        all.push(...chunk)
+        total = resp.data.data.total
+
+        if (chunk.length === 0) break
+        page += 1
+        if (page > 50) break
+      }
+      workOrders.value = all
+    } catch (e) {
+      console.error('refreshWorkOrders error:', e)
+    } finally {
+      workOrdersLoading.value = false
+    }
+  }
 
   const calBase = ref(getMonday(new Date()))
 
@@ -184,24 +227,26 @@ export function useVibrationSchedule() {
     return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
   })
 
+  const handleWindowFocus = () => {
+    if (workOrdersLoading.value) return
+    refreshWorkOrders()
+  }
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState !== 'visible') return
+    if (workOrdersLoading.value) return
+    refreshWorkOrders()
+  }
+
   onMounted(() => {
-    const base = getMonday(new Date())
-    const presets = [
-      { d: 0, t: '800', id: 'TMP-2026-001' },
-      { d: 0, t: '1000', id: 'FOR-2026-001' },
-      { d: 1, t: '1400', id: 'FOR-2026-002' },
-      { d: 2, t: '900', id: 'TMP-2026-002' },
-      { d: 3, t: '1000', id: 'FOR-2026-003' },
-    ]
-    presets.forEach(p => {
-      const d = addDays(base, p.d)
-      const timeKey = p.t.padStart(4, '0')
-      const dateStr = fmtDate(d)
-      scheduledEvents.value = {
-        ...scheduledEvents.value,
-        [p.id]: { orderId: p.id, dateStr, startTimeKey: timeKey, span: 1 },
-      }
-    })
+    refreshWorkOrders()
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  })
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('focus', handleWindowFocus)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
   })
 
   const getOrderById = (id: string) => workOrders.value.find(w => w.id === id)
@@ -225,25 +270,6 @@ export function useVibrationSchedule() {
   function gotoDate(e: Event) {
     const val = (e.target as HTMLInputElement).value
     if (val) calBase.value = getMonday(new Date(val))
-  }
-
-  function loadPresetSchedule() {
-    const base = calBase.value
-    const presets = [
-      { d: 0, t: '0800', id: 'TMP-2026-001' },
-      { d: 1, t: '1000', id: 'FOR-2026-001' },
-      { d: 2, t: '1400', id: 'FOR-2026-002' },
-      { d: 3, t: '0900', id: 'TMP-2026-002' },
-      { d: 4, t: '1000', id: 'FOR-2026-003' },
-    ]
-    presets.forEach(p => {
-      const d = addDays(base, p.d)
-      const cellKey = getCellKey(fmtDate(d), p.t)
-      const arr = scheduledOrders.value[cellKey] || []
-      if (!arr.includes(p.id)) {
-        scheduledOrders.value = { ...scheduledOrders.value, [cellKey]: [...arr, p.id] }
-      }
-    })
   }
 
   function handleDragStart(e: DragEvent, order: WorkOrder) {
@@ -298,7 +324,7 @@ export function useVibrationSchedule() {
     scheduleOrder(orderId, dateStr, timeKey, isPast)
   }
 
-  function handleUnschedule(cellKey: string, orderId: string) {
+  function handleUnschedule(_cellKey: string, orderId: string) {
     const next = { ...scheduledEvents.value }
     delete next[orderId]
     scheduledEvents.value = next
@@ -402,6 +428,9 @@ export function useVibrationSchedule() {
   return {
     workOrders,
     searchKeyword,
+    workOrdersLoading,
+    orderStatusMutating,
+    refreshWorkOrders,
     selectedScheduledOrderIds,
     selectedScheduledOrders,
     calBase,
@@ -422,7 +451,6 @@ export function useVibrationSchedule() {
     prevWeek,
     nextWeek,
     gotoDate,
-    loadPresetSchedule,
     handleDragStart,
     handleDragEnd,
     handleDragOver,

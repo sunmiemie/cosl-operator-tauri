@@ -92,3 +92,35 @@ export async function listWaterCycleOrders(
   if (params.status !== undefined) query.status = String(params.status)
   return http.get<WaterCycleOrderListResponse>('/test/water-cycle/order/list/', {}, query)
 }
+
+export type WaterCycleOrderWriteResponse = {
+  code: number
+  msg?: string
+  data?: WaterCycleOrderDTO
+}
+
+export type UpdateWaterCycleOrderBody = Partial<
+  Pick<
+    WaterCycleOrderDTO,
+    | 'test_platform'
+    | 'test_date'
+    | 'start_time'
+    | 'end_time'
+    | 'device_name'
+    | 'device_number'
+    | 'task_number'
+    | 'flow_process'
+    | 'need_pressure_test'
+    | 'need_command_transfer'
+    | 'applicant'
+    | 'remark'
+    | 'status'
+  >
+>
+
+export async function updateWaterCycleOrder(
+  orderId: number,
+  data: UpdateWaterCycleOrderBody
+): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
+  return http.put<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/detail/${orderId}/`, data)
+}

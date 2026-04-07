@@ -4,19 +4,22 @@ import * as echarts from 'echarts'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
 import type { OcrRegion } from '@/types/ocr'
+import { listHighTempBoxOrders, mapHighTempBoxOrder, updateHighTempBoxOrder, type HighTempBoxOrder } from '@/services/high-temp-box-order-api'
 
 export interface WorkOrder {
   id: string
+  dbId: number
+  taskNumber: string
   applicant: string
-  operator: string
-  department: string
   deviceName: string
-  deviceId: string
+  deviceNumber: string
   targetTemp: number
   duration: number
-  createDate: string
-  status: 'pending' | 'paused' | 'completed' | 'testing'
-  priority: 'high' | 'normal' | 'low'
+  testPlatform: string
+  testDate: string
+  remark: string
+  status: number
+  statusText?: string
 }
 
 interface TempHistoryPoint {
@@ -44,7 +47,6 @@ export function useHighTempBox() {
   const currentStep = ref<'pre-check' | 'startup-guide' | 'monitoring' | 'shutdown'>('pre-check')
 
   const searchKeyword = ref('')
-  const activeFilter = ref<'all' | 'high' | 'pending' | 'paused'>('all')
 
   const calBase = ref(getMonday(new Date()))
   const selectedScheduledOrder = ref<string | null>(null)
@@ -60,13 +62,49 @@ export function useHighTempBox() {
   }
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
-  const workOrders = ref<WorkOrder[]>([
-    { id: 'HT-2024-001', applicant: '张三', operator: '李四', department: '研发部', deviceName: '电子控制器', deviceId: 'ECU-2024-001', targetTemp: 85, duration: 120, createDate: '2024-01-05', status: 'pending', priority: 'high' },
-    { id: 'HT-2024-002', applicant: '王五', operator: '赵六', department: '质量部', deviceName: '传感器模块', deviceId: 'SENSOR-2024-002', targetTemp: 125, duration: 180, createDate: '2024-01-06', status: 'pending', priority: 'normal' },
-    { id: 'HT-2024-003', applicant: '陈七', operator: '李四', department: '研发部', deviceName: '电机驱动板', deviceId: 'MOTOR-2024-003', targetTemp: 105, duration: 90, createDate: '2024-01-07', status: 'pending', priority: 'normal' },
-    { id: 'HT-2024-004', applicant: '刘八', operator: '赵六', department: '生产部', deviceName: '功率模块', deviceId: 'PWR-2024-004', targetTemp: 150, duration: 240, createDate: '2024-01-07', status: 'paused', priority: 'high' },
-    { id: 'HT-2024-005', applicant: '周九', operator: '李四', department: '质量部', deviceName: '通信板卡', deviceId: 'COM-2024-005', targetTemp: 70, duration: 60, createDate: '2024-01-08', status: 'pending', priority: 'low' }
-  ])
+  const workOrders = ref<WorkOrder[]>([])
+  const workOrdersLoading = ref(false)
+  const workOrdersError = ref<string | null>(null)
+  const visibleOrderStatus = 1
+  const orderStatusMutating = ref(false)
+
+  async function refreshWorkOrders() {
+    workOrdersLoading.value = true
+    workOrdersError.value = null
+
+    try {
+      const all: HighTempBoxOrder[] = []
+      const pageSize = 100
+      let page = 1
+      let total = Infinity
+
+      while (all.length < total) {
+        const resp = await listHighTempBoxOrders({ page, pageSize, status: visibleOrderStatus })
+        if (!resp.success || !resp.data) {
+          workOrdersError.value = resp.error || '获取高温箱工单失败'
+          break
+        }
+        if (resp.data.code !== 0) {
+          workOrdersError.value = resp.data.msg || '获取高温箱工单失败'
+          break
+        }
+
+        const chunk = resp.data.data.list.map(mapHighTempBoxOrder).filter((o) => o.status === visibleOrderStatus)
+        all.push(...chunk)
+        total = resp.data.data.total
+
+        if (chunk.length === 0) break
+        page += 1
+        if (page > 50) break
+      }
+
+      workOrders.value = all
+    } catch (e) {
+      workOrdersError.value = e instanceof Error ? e.message : '获取高温箱工单失败'
+    } finally {
+      workOrdersLoading.value = false
+    }
+  }
 
   const currentWorkOrder = ref<WorkOrder | null>(null)
   const preCheckItems = ref([
@@ -123,10 +161,6 @@ export function useHighTempBox() {
         const matchDevice = order.deviceName.toLowerCase().includes(keyword)
         if (!matchId && !matchApplicant && !matchDevice) return false
       }
-
-      if (activeFilter.value === 'high') return order.priority === 'high'
-      if (activeFilter.value === 'pending') return order.status === 'pending'
-      if (activeFilter.value === 'paused') return order.status === 'paused'
 
       return true
     })
@@ -484,17 +518,51 @@ export function useHighTempBox() {
     window.addEventListener('mouseup', onUp)
   }
 
-  function startExperiment(orderId?: string) {
+  async function startExperiment(orderId?: string) {
     if (orderId) {
       selectedScheduledOrder.value = orderId
     }
 
     const selected = selectedScheduledOrderInfo.value || (selectedScheduledOrder.value ? getOrderById(selectedScheduledOrder.value) : null)
     if (!selected) return
+
+    orderStatusMutating.value = true
+    try {
+      const resp = await updateHighTempBoxOrder(selected.dbId, { status: 2 })
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
+        if (!ok) return
+      } else {
+        void refreshWorkOrders()
+      }
+    } finally {
+      orderStatusMutating.value = false
+    }
+
     currentWorkOrder.value = selected
     preCheckItems.value.forEach(i => (i.checked = false))
     currentView.value = 'test'
     currentStep.value = 'pre-check'
+  }
+
+  async function cancelExperiment() {
+    const order = currentWorkOrder.value
+    const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
+    if (orderId !== undefined) {
+      orderStatusMutating.value = true
+      try {
+        const resp = await updateHighTempBoxOrder(orderId, { status: 1 })
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          const ok = confirm('工单状态更新失败，是否仍取消返回？')
+          if (!ok) return
+        } else {
+          void refreshWorkOrders()
+        }
+      } finally {
+        orderStatusMutating.value = false
+      }
+    }
+    backToDashboard()
   }
 
   function backToDashboard() {
@@ -950,12 +1018,13 @@ export function useHighTempBox() {
     stopMonitoring()
   })
 
+  void refreshWorkOrders()
+
   return {
     STARTUP_GUIDE_STEPS,
     currentView,
     currentStep,
     searchKeyword,
-    activeFilter,
     calBase,
     selectedScheduledOrder,
     draggedOrderId,
@@ -965,6 +1034,10 @@ export function useHighTempBox() {
     scheduledLayoutItems,
     maxLaneCount,
     workOrders,
+    workOrdersLoading,
+    workOrdersError,
+    refreshWorkOrders,
+    orderStatusMutating,
     currentWorkOrder,
     preCheckItems,
     guideStepIndex,
@@ -1010,6 +1083,7 @@ export function useHighTempBox() {
     resizingOrderId,
     isResizing,
     startExperiment,
+    cancelExperiment,
     backToDashboard,
     togglePreCheck,
     completePreCheck,

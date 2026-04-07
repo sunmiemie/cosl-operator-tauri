@@ -28,6 +28,7 @@ export function useSchedule() {
   const workOrders = ref<WaterCycleOrder[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
+  const visibleOrderStatus = 1
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
@@ -40,7 +41,7 @@ export function useSchedule() {
       let total = Infinity
 
       while (all.length < total) {
-        const resp = await listWaterCycleOrders({ page, pageSize })
+        const resp = await listWaterCycleOrders({ page, pageSize, status: visibleOrderStatus })
         if (!resp.success || !resp.data) {
           workOrdersError.value = resp.error || '获取水循环工单失败'
           break
@@ -50,7 +51,7 @@ export function useSchedule() {
           break
         }
 
-        const chunk = resp.data.data.list.map(mapWaterCycleOrder)
+        const chunk = resp.data.data.list.map(mapWaterCycleOrder).filter((o) => o.status === visibleOrderStatus)
         all.push(...chunk)
         total = resp.data.data.total
 

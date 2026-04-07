@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
+import { ref } from 'vue'
 
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
+import { updateWaterCycleOrder } from '@/services/water-cycle-api'
 
 import { currentView, resetTestState } from './composables/useTestStore'
+import { selectedOrder } from './composables/useTestStore'
 
 import DashboardView from './components/DashboardView.vue'
 import TestingView from './components/TestingView.vue'
@@ -12,12 +15,30 @@ import DataCollectionView from './components/DataCollectionView.vue'
 
 const camera = useCamera()
 const ocr = useOcr()
+const orderStatusMutating = ref(false)
 
 async function handleBack() {
+  if (orderStatusMutating.value) return
   try {
     await camera.stopCamera()
   } catch {}
 
+  const order = selectedOrder.value
+  const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
+  if (orderId !== undefined) {
+    orderStatusMutating.value = true
+    try {
+      const resp = await updateWaterCycleOrder(orderId, { status: 1 })
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        const ok = confirm('工单状态更新失败，是否仍取消返回？')
+        if (!ok) return
+      }
+    } finally {
+      orderStatusMutating.value = false
+    }
+  }
+
+  resetTestState()
   currentView.value = 'dashboard'
 }
 
@@ -29,6 +50,16 @@ async function handleFinish() {
   try {
     await camera.stopCamera()
   } catch {}
+
+  const order = selectedOrder.value
+  const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
+  if (orderId !== undefined) {
+    const resp = await updateWaterCycleOrder(orderId, { status: 5 })
+    if (!resp.success || !resp.data || resp.data.code !== 0) {
+      const ok = confirm('工单状态更新失败，是否仍结束测试？')
+      if (!ok) return
+    }
+  }
 
   resetTestState()
   currentView.value = 'dashboard'
@@ -50,6 +81,7 @@ async function handleFinish() {
       v-else-if="currentView === 'testing'" 
       :camera="camera" 
       :ocr="ocr" 
+      :status-mutating="orderStatusMutating"
       @confirm-sync="handleConfirmSync" 
       @back="handleBack" 
     />

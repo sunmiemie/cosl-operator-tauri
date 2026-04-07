@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { Icon } from '@iconify/vue'
+import { updateWaterCycleOrder } from '@/services/water-cycle-api'
 
 // 跳出一层目录 (../) 找到逻辑层
 import { useSchedule } from '../composables/useSchedule'
@@ -13,7 +14,8 @@ import StartupCheckModal from './StartupCheckModal.vue'
 const {
   searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, loadPresetSchedule, getCellKey, getMonday,
-  handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder
+  handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
+  workOrdersLoading, refreshWorkOrders
 } = useSchedule()
 
 const timeColWidth = 60
@@ -22,6 +24,15 @@ const gridScrollRef = ref<HTMLElement | null>(null)
 const gridViewportWidth = ref(0)
 let ro: ResizeObserver | null = null
 const gridInnerRef = ref<HTMLElement | null>(null)
+const handleWindowFocus = () => {
+  if (workOrdersLoading.value) return
+  refreshWorkOrders()
+}
+const handleVisibilityChange = () => {
+  if (document.visibilityState !== 'visible') return
+  if (workOrdersLoading.value) return
+  refreshWorkOrders()
+}
 
 const maxLanesBeforeExpand = 2
 const widthFactor = computed(() => Math.max(1, Math.ceil((maxLaneCount.value || 1) / maxLanesBeforeExpand)))
@@ -38,11 +49,16 @@ onMounted(() => {
     gridViewportWidth.value = entry.contentRect.width
   })
   ro.observe(gridScrollRef.value)
+  refreshWorkOrders()
+  window.addEventListener('focus', handleWindowFocus)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   ro?.disconnect()
   ro = null
+  window.removeEventListener('focus', handleWindowFocus)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 const getScheduledStyle = (item: any) => {
@@ -121,7 +137,18 @@ function handleStartTest() {
 }
 
 // 开机检查完毕，切换视图
-function onStartupComplete() {
+async function onStartupComplete() {
+  const order = selectedOrder.value
+  const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
+  if (orderId !== undefined) {
+    const resp = await updateWaterCycleOrder(orderId, { status: 2 })
+    if (!resp.success || !resp.data || resp.data.code !== 0) {
+      const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
+      if (!ok) return
+    } else {
+      void refreshWorkOrders()
+    }
+  }
   showStartupCheck.value = false
   currentView.value = 'testing'
 }
@@ -132,7 +159,12 @@ function onStartupComplete() {
     <div class="sidebar">
       <div class="panel-header">
         <div class="header-title"><Icon icon="mdi:format-list-bulleted" class="header-icon" /><span>待测试工单</span></div>
-        <span class="count-badge">{{ unscheduledOrders.length }}</span>
+        <div class="header-actions">
+          <button class="icon-btn" :disabled="workOrdersLoading" title="刷新" @click="refreshWorkOrders">
+            <Icon icon="mdi:refresh" />
+          </button>
+          <span class="count-badge">{{ unscheduledOrders.length }}</span>
+        </div>
       </div>
       
       <div class="search-box">
@@ -272,6 +304,10 @@ function onStartupComplete() {
 .main-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; }
 .panel-header { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 18px; border-bottom:1px solid var(--color-border); font-size:15px; font-weight:600; color:var(--color-text-primary); background:var(--color-bg-secondary); flex-shrink:0; }
 .sidebar .panel-header .header-title { display:flex; align-items:center; gap:8px; font-size:.875rem; font-weight:500; }
+.header-actions { display:flex; align-items:center; gap:10px; }
+.icon-btn { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); cursor:pointer; }
+.icon-btn:disabled { opacity:.5; cursor:not-allowed; }
+.icon-btn:hover:not(:disabled) { background:var(--color-bg-hover); color:var(--color-text-primary); }
 .count-badge { padding:4px 10px; border-radius:9999px; font-size:12px; font-weight:500; background:rgba(59,130,246,.15); color:rgb(96,165,250); }
 .search-box { display:flex; align-items:center; gap:8px; padding:12px 18px; border-bottom:1px solid var(--color-border); background:var(--color-bg-secondary); }
 .search-icon { font-size:18px; color:var(--color-text-tertiary); }
@@ -280,6 +316,7 @@ function onStartupComplete() {
 .clear-btn:hover { background:var(--color-error); color:#fff; }
 .table-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); }
 .table-wrapper { flex:1; overflow:auto; }
+.empty-state { text-align:center; padding:40px 20px; color:#94a3b8; font-size:13px; }
 .data-table { width:100%; border-collapse:collapse; font-size:13px; }
 .data-table thead { position:sticky; top:0; z-index:1; }
 .data-table th { padding:12px 16px; text-align:left; font-weight:600; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }

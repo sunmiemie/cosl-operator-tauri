@@ -36,6 +36,8 @@ const props = defineProps<{
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
   getOrderById: (id: string) => WorkOrder | undefined
+  workOrdersLoading: boolean
+  refreshWorkOrders: () => void
 }>()
 
 const emit = defineEmits<{
@@ -48,7 +50,6 @@ const emit = defineEmits<{
   'prev-week': []
   'next-week': []
   'goto-date': [event: Event]
-  'load-preset-schedule': []
   'drag-over': [event: DragEvent, isPast: boolean]
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
   'select-scheduled-order': [orderId: string]
@@ -142,7 +143,12 @@ const getScheduledStyle = (item: any) => {
           <Icon icon="mdi:format-list-bulleted" class="header-icon" />
           <span>待测试工单</span>
         </div>
-        <span class="count-badge">{{ unscheduledOrders.length }}</span>
+        <div class="header-actions">
+          <button class="icon-btn" :disabled="workOrdersLoading" title="刷新" @click="refreshWorkOrders">
+            <Icon icon="mdi:refresh" />
+          </button>
+          <span class="count-badge">{{ unscheduledOrders.length }}</span>
+        </div>
       </div>
 
       <div class="search-box">
@@ -160,7 +166,7 @@ const getScheduledStyle = (item: any) => {
 
       <div class="table-content">
         <div v-if="unscheduledOrders.length === 0" class="empty-state">
-          <p>无待排程工单</p>
+          无待排程工单
         </div>
         <div v-else class="table-wrapper">
           <table class="data-table">
@@ -204,7 +210,6 @@ const getScheduledStyle = (item: any) => {
           <input type="date" class="week-cal-date-input" :value="fmtDate(calBase)" @change="emit('goto-date', $event)" title="跳转到指定日期所在周">
           <span class="week-cal-label">{{ weekLabel }}</span>
           <button class="week-cal-nav" @click="emit('next-week')">下一周 ›</button>
-          <button class="week-cal-nav" @click="emit('load-preset-schedule')">读取本周排程</button>
         </div>
         <div class="legend">
           <div class="legend-item"><span class="dot pending"></span>空闲</div>
@@ -328,4 +333,9 @@ const getScheduledStyle = (item: any) => {
 .resize-handle-top:hover { background: linear-gradient(0deg, rgba(255,255,255,0), rgba(255,255,255,.28)); }
 .resize-handle { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; cursor: ns-resize; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.18)); }
 .resize-handle:hover { background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.28)); }
+.empty-state { text-align:center; padding:40px 20px; color:#94a3b8; font-size:13px; }
+.header-actions { display:flex; align-items:center; gap:10px; }
+.icon-btn { width:28px; height:28px; display:flex; align-items:center; justify-content:center; padding:0; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); cursor:pointer; }
+.icon-btn:disabled { opacity:.5; cursor:not-allowed; }
+.icon-btn:hover:not(:disabled) { background:var(--color-bg-hover); color:var(--color-text-primary); }
 </style>

@@ -8,10 +8,12 @@ import { useVibrationSchedule } from './composables/useVibrationSchedule'
 import { useVibrationChecks } from './composables/useVibrationChecks'
 import { useVibrationTesting } from './composables/useVibrationTesting'
 import { useVibrationReport } from './composables/useVibrationReport'
-import type { Stage } from './types'
+import { updateVibrationTableOrder } from '@/services/vibration-table-order-api'
+import type { Stage, WorkOrder } from './types'
 
 const stage = ref<Stage>('dashboard')
 const currentWorkOrderId = ref<string | null>(null)
+const currentWorkOrderSnapshot = ref<WorkOrder | null>(null)
 const forcedMode = ref<'formal' | 'pre' | null>(null)
 const showConfirmStartModal = ref(false)
 const calStep = ref<'amp' | 'dur'>('amp')
@@ -20,6 +22,9 @@ const stepList = computed(() => [] as const)
 
 const {
   searchKeyword,
+  workOrdersLoading,
+  orderStatusMutating,
+  refreshWorkOrders,
   selectedScheduledOrderIds,
   selectedScheduledOrders,
   calBase,
@@ -38,7 +43,6 @@ const {
   prevWeek,
   nextWeek,
   gotoDate,
-  loadPresetSchedule,
   handleDragStart,
   handleDragEnd,
   handleDragOver,
@@ -70,10 +74,7 @@ const {
   passDevCheck,
 } = useVibrationChecks()
 
-const currentWorkOrder = computed(() => {
-  if (!currentWorkOrderId.value) return null
-  return getOrderById(currentWorkOrderId.value) || null
-})
+const currentWorkOrder = computed(() => currentWorkOrderSnapshot.value)
 
 const testMode = computed<'formal' | 'pre'>(() =>
   forcedMode.value ? forcedMode.value : (currentWorkOrder.value?.type === '模拟实验' ? 'pre' : 'formal')
@@ -88,7 +89,7 @@ const testing = useVibrationTesting({
     report.startFileGen()
   },
   onFinishToDashboard: () => {
-    backToDashboard()
+    backToDashboard(5)
   },
 })
 
@@ -97,9 +98,28 @@ const report = useVibrationReport({
   getOscCanvas: () => testing.getOscCanvas(),
 })
 
-function startExperiment() {
+async function startExperiment() {
   if (!selectedScheduledOrders.value.length) return
-  currentWorkOrderId.value = selectedScheduledOrders.value[0].id
+  if (orderStatusMutating.value) return
+
+  const selected = selectedScheduledOrders.value[0]
+  if (!selected) return
+
+  orderStatusMutating.value = true
+  try {
+    const resp = await updateVibrationTableOrder(selected.dbId!, { status: 2 })
+    if (!resp.success || !resp.data || resp.data.code !== 0) {
+      const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
+      if (!ok) return
+    } else {
+      void refreshWorkOrders()
+    }
+  } finally {
+    orderStatusMutating.value = false
+  }
+
+  currentWorkOrderId.value = selected.id
+  currentWorkOrderSnapshot.value = selected
   resetStartupChecks()
   showStartupCheck.value = true
 }
@@ -123,13 +143,37 @@ function continueAfterSafetyWarning() {
   stage.value = 'start'
 }
 
-function backToDashboard() {
+async function backToDashboard(finalStatus: number = 1) {
+  if (orderStatusMutating.value) return
+
+  const order = currentWorkOrderSnapshot.value
+  if (order && order.dbId !== undefined) {
+    orderStatusMutating.value = true
+    try {
+      const resp = await updateVibrationTableOrder(order.dbId, { status: finalStatus })
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        const ok = confirm(`工单状态更新失败，是否仍返回主页？`)
+        if (!ok) return
+      } else {
+        void refreshWorkOrders()
+      }
+    } finally {
+      orderStatusMutating.value = false
+    }
+  }
+
   stage.value = 'dashboard'
   currentWorkOrderId.value = null
+  currentWorkOrderSnapshot.value = null
+  showStartupCheck.value = false
+}
+
+function handleCancelStartupCheck() {
+  backToDashboard(1)
 }
 
 function goPrevStage() {
-  if (stage.value === 'start') backToDashboard()
+  if (stage.value === 'start') backToDashboard(1)
   else if (stage.value === 'calibration') stage.value = 'start'
   else if (stage.value === 'testing') stage.value = 'calibration'
   else if (stage.value === 'report') stage.value = 'testing'
@@ -166,7 +210,7 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  backToDashboard()
+  backToDashboard(5) // 完成整个测试，状态置为正常(5)
 }
 
 function toggleShutdownCheck(id: number) {
@@ -216,7 +260,9 @@ function toggleShutdownCheck(id: number) {
         :fmt-date="fmtDate"
         :get-cell-key="getCellKey"
         :get-order-by-id="getOrderById"
-        @update:show-startup-check="showStartupCheck = $event"
+        :work-orders-loading="workOrdersLoading"
+        :refresh-work-orders="refreshWorkOrders"
+        @update:show-startup-check="val => val ? (showStartupCheck.value = true) : handleCancelStartupCheck()"
         @update:search-keyword="searchKeyword = $event"
         @toggle-check="toggleCheck"
         @startup-check-complete="handleStartupCheckComplete"
@@ -225,7 +271,6 @@ function toggleShutdownCheck(id: number) {
         @prev-week="prevWeek"
         @next-week="nextWeek"
         @goto-date="gotoDate"
-        @load-preset-schedule="loadPresetSchedule"
         @drag-over="handleDragOver"
         @drop="handleDrop"
         @select-scheduled-order="selectScheduledOrder"
@@ -259,7 +304,7 @@ function toggleShutdownCheck(id: number) {
         :file-gen-running="report.fileGenRunning.value"
         :all-files-done="report.allFilesDone.value"
         :shutdown-checks="shutdownChecks"
-        @back-to-dashboard="backToDashboard"
+        @back-to-dashboard="() => backToDashboard(1)"
         @set-dev-check-answer="setDevCheckAnswer"
         @submit-dev-check="submitDevCheck"
         @reset-dev-check="resetDevCheck"
