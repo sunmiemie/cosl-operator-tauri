@@ -1,4 +1,9 @@
 import { computed, ref } from 'vue'
+import { useAuth } from '@/composables/useAuth'
+import {
+  listHighTempPressureOrders,
+  type HighTempPressureOrderDTO,
+} from '@/services/high-temp-pressure-api'
 import type { InstrumentItem, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
 function getMonday(d: Date) {
@@ -20,7 +25,66 @@ function fmtDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+const SCHEDULABLE_STATUS = new Set([1, 2, 4, 7, 8])
+
+function getStatusText(status?: number, fallback?: string) {
+  if (fallback?.trim()) return fallback
+
+  const statusMap: Record<number, string> = {
+    0: '已创建',
+    1: '待领取',
+    2: '测试中',
+    3: '待审核',
+    4: '待重做',
+    5: '正常',
+    6: '异常',
+    7: '暂存',
+    8: '疑问',
+  }
+
+  return status === undefined ? '未知状态' : (statusMap[status] ?? `状态${status}`)
+}
+
+function formatDisplayValue(value: number | string | undefined | null, unit: string) {
+  if (value === undefined || value === null || value === '') return '-'
+  return `${value} ${unit}`
+}
+
+function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
+  const instrumentId = `ins-${dto.id}`
+  const taskNumber = dto.task_number?.trim() || `HTP-${dto.id}`
+  const deviceName = dto.device_name?.trim() || dto.test_platform?.trim() || '设备'
+  const deviceNumber = dto.device_number?.trim() || taskNumber
+
+  return {
+    id: `wo-${dto.id}`,
+    dbId: dto.id,
+    no: taskNumber,
+    entrustNo: taskNumber,
+    applicant: dto.applicant?.trim() || '-',
+    applicantUnit: dto.test_platform?.trim() || '-',
+    applyDate: dto.test_date || '-',
+    receivingNo: deviceNumber,
+    vesselType: deviceName,
+    type: deviceName,
+    targetTemp: formatDisplayValue(dto.target_temp, 'C'),
+    targetPressure: formatDisplayValue(dto.target_pressure, 'MPa'),
+    keepCondition: dto.remark?.trim() || '-',
+    status: getStatusText(dto.status, dto.status_text),
+    statusCode: dto.status,
+    expanded: false,
+    items: [
+      {
+        id: instrumentId,
+        label: deviceName,
+        sn: deviceNumber,
+      },
+    ],
+  }
+}
+
 export function useHighTempPressureSchedule() {
+  const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
   const selectedScheduledOrderIds = ref<string[]>([])
@@ -35,67 +99,54 @@ export function useHighTempPressureSchedule() {
   }
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
+  const workOrders = ref<WorkOrder[]>([])
+  const workOrdersLoading = ref(false)
+  const workOrdersError = ref<string | null>(null)
 
-  const workOrders = ref<WorkOrder[]>([
-    {
-      id: 'wo-A',
-      no: 'WO-123',
-      entrustNo: 'ENT-2026-001',
-      applicant: '申请人A',
-      applicantUnit: '单位甲',
-      applyDate: '2026-03-01',
-      receivingNo: 'RCV-0001',
-      vesselType: '250L',
-      type: '250L',
-      targetTemp: '180 °C',
-      targetPressure: '15 MPa',
-      keepCondition: '30min 保温保压',
-      status: '待排程',
-      expanded: false,
-      items: [
-        { id: 'ins-A1', label: '仪器名: SN', sn: 'SN号: A001' },
-        { id: 'ins-A2', label: '仪器A', sn: 'SN号: 015' },
-        { id: 'ins-A3', label: '仪器A', sn: 'SN号: 016' },
-      ],
-    },
-    {
-      id: 'wo-B',
-      no: 'WO-789',
-      entrustNo: 'ENT-2026-002',
-      applicant: '申请人B',
-      applicantUnit: '单位乙',
-      applyDate: '2026-03-02',
-      receivingNo: 'RCV-0002',
-      vesselType: '480L',
-      type: '480L',
-      targetTemp: '150 °C',
-      targetPressure: '12 MPa',
-      keepCondition: '20min 保温保压',
-      status: '待排程',
-      expanded: false,
-      items: [
-        { id: 'ins-B1', label: '仪器B', sn: 'SN号: 011' },
-        { id: 'ins-B2', label: '仪器B', sn: 'SN号: 012' },
-      ],
-    },
-    {
-      id: 'wo-C',
-      no: 'WO-456',
-      entrustNo: 'ENT-2026-003',
-      applicant: '申请人C',
-      applicantUnit: '单位丙',
-      applyDate: '2026-03-03',
-      receivingNo: 'RCV-0003',
-      vesselType: '250L',
-      type: '250L',
-      targetTemp: '120 °C',
-      targetPressure: '10 MPa',
-      keepCondition: '15min 保温保压',
-      status: '待排程',
-      expanded: false,
-      items: [{ id: 'ins-C1', label: '仪器C', sn: 'SN号: 030' }],
-    },
-  ])
+  async function refreshWorkOrders() {
+    workOrdersLoading.value = true
+    workOrdersError.value = null
+
+    try {
+      await initAuth()
+
+      const all: WorkOrder[] = []
+      const pageSize = 100
+      let page = 1
+      let total = Infinity
+
+      while (all.length < total) {
+        const response = await listHighTempPressureOrders(
+          { page, pageSize },
+          getAuthHeaders()
+        )
+
+        if (!response.success || !response.data) {
+          workOrdersError.value = response.error || '加载高温高压井工单失败'
+          break
+        }
+
+        if (response.data.code !== 0) {
+          workOrdersError.value = response.data.msg || '加载高温高压井工单失败'
+          break
+        }
+
+        const chunk = response.data.data.list.map(mapHighTempPressureOrder)
+        all.push(...chunk)
+        total = response.data.data.total
+
+        if (chunk.length === 0) break
+        page += 1
+        if (page > 50) break
+      }
+
+      workOrders.value = all
+    } catch (error) {
+      workOrdersError.value = error instanceof Error ? error.message : '加载高温高压井工单失败'
+    } finally {
+      workOrdersLoading.value = false
+    }
+  }
 
   const calBase = ref(getMonday(new Date()))
 
@@ -120,21 +171,25 @@ export function useHighTempPressureSchedule() {
         isPast: dObj < today,
       })
     }
+
     return days
   })
 
   const weekLabel = computed(() => {
     const start = currentWeekDays.value[0]
     const end = currentWeekDays.value[6]
-    void start
-    void end
-    return ''
+    if (!start || !end) return ''
+    return `${start.month}/${start.dayNum} - ${end.month}/${end.dayNum}`
   })
 
   const timeSlots = computed<TimeSlotItem[]>(() => {
     const slots: TimeSlotItem[] = []
     for (let hour = 6; hour <= 22; hour++) {
-      slots.push({ key: `${String(hour).padStart(2, '0')}00`, label: `${String(hour).padStart(2, '0')}:00`, isHalf: false })
+      slots.push({
+        key: `${String(hour).padStart(2, '0')}00`,
+        label: `${String(hour).padStart(2, '0')}:00`,
+        isHalf: false,
+      })
     }
     return slots
   })
@@ -238,35 +293,44 @@ export function useHighTempPressureSchedule() {
 
   const unscheduledOrders = computed(() => {
     const scheduledInstrumentIds = new Set(Object.keys(scheduledEvents.value))
-    return workOrders.value.filter(order =>
-      order.status === '待排程' &&
-      order.items.some(item => !scheduledInstrumentIds.has(item.id)) &&
-      (searchKeyword.value === '' || order.no.includes(searchKeyword.value) || order.type.includes(searchKeyword.value) || order.applicant.includes(searchKeyword.value))
+    const keyword = searchKeyword.value.trim().toLowerCase()
+
+    return workOrders.value.filter((order) =>
+      (order.statusCode === undefined || SCHEDULABLE_STATUS.has(order.statusCode)) &&
+      order.items.some((item) => !scheduledInstrumentIds.has(item.id)) &&
+      (
+        keyword === '' ||
+        order.no.toLowerCase().includes(keyword) ||
+        order.type.toLowerCase().includes(keyword) ||
+        order.applicant.toLowerCase().includes(keyword) ||
+        order.receivingNo.toLowerCase().includes(keyword)
+      )
     )
   })
 
-  const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
+  const getOrderById = (id: string) => workOrders.value.find((o) => o.id === id)
 
   const getInstrumentById = (id: string): InstrumentItem | null => {
-    for (const o of workOrders.value) {
-      const found = o.items.find(i => i.id === id)
+    for (const order of workOrders.value) {
+      const found = order.items.find((item) => item.id === id)
       if (found) return found
     }
     return null
   }
 
-  const getOrderByInstrumentId = (id: string) => workOrders.value.find(o => o.items.some(i => i.id === id))
+  const getOrderByInstrumentId = (id: string) => workOrders.value.find((o) => o.items.some((item) => item.id === id))
 
   const selectedScheduledOrders = computed<ScheduledSelection[]>(() => {
     return selectedScheduledOrderIds.value
-      .map(id => ({ instrument: getInstrumentById(id), order: getOrderByInstrumentId(id) }))
-      .filter(obj => obj.instrument && obj.order)
-      .map(obj => ({ instrument: obj.instrument as InstrumentItem, order: obj.order as WorkOrder }))
+      .map((id) => ({ instrument: getInstrumentById(id), order: getOrderByInstrumentId(id) }))
+      .filter((obj) => obj.instrument && obj.order)
+      .map((obj) => ({ instrument: obj.instrument as InstrumentItem, order: obj.order as WorkOrder }))
   })
 
   const currentSelected = computed<ScheduledSelection | null>(() => {
     const id = selectedScheduledOrderIds.value[0]
     if (!id) return null
+
     const order = getOrderByInstrumentId(id)
     const instrument = getInstrumentById(id)
     return order && instrument ? { order, instrument } : null
@@ -288,19 +352,22 @@ export function useHighTempPressureSchedule() {
 
   function loadPresetSchedule() {
     const base = calBase.value
-    const presets = [
-      { d: 0, t: '0800', id: 'ins-A1' },
-      { d: 0, t: '1000', id: 'ins-B1' },
-      { d: 1, t: '1400', id: 'ins-C1' },
-    ]
+    const presets = workOrders.value
+      .flatMap((order) => order.items)
+      .slice(0, 3)
+      .map((item, index) => ({
+        d: index,
+        t: ['0800', '1000', '1400'][index] || '0800',
+        id: item.id,
+      }))
+
     const scheduled = new Set(Object.keys(scheduledEvents.value))
 
-    presets.forEach(p => {
+    presets.forEach((p) => {
       if (scheduled.has(p.id)) return
       const d = addDays(base, p.d)
       const dateStr = fmtDate(d)
-      const timeKey = p.t
-      scheduleInstrument(p.id, dateStr, timeKey, false)
+      scheduleInstrument(p.id, dateStr, p.t, false)
     })
   }
 
@@ -341,17 +408,24 @@ export function useHighTempPressureSchedule() {
   }
 
   function scheduleInstrument(instrumentId: string, dateStr: string, timeKey: string, isPast: boolean) {
-    if (isPast) return
-    if (!instrumentId) return
+    if (isPast || !instrumentId) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
     if (scheduledEvents.value[instrumentId]) return
+
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
+
     scheduledEvents.value = {
       ...scheduledEvents.value,
-      [instrumentId]: { instrumentId, dateStr, startTimeKey: timeKey, span: Math.min(1, maxSpan) },
+      [instrumentId]: {
+        instrumentId,
+        dateStr,
+        startTimeKey: timeKey,
+        span: Math.min(1, maxSpan),
+      },
     }
+
     if (isDragging.value) {
       isDragging.value = false
       draggedOrder.value = null
@@ -363,6 +437,7 @@ export function useHighTempPressureSchedule() {
     e.preventDefault()
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
     if (!e.dataTransfer) return
+
     const instrumentId = e.dataTransfer.getData('text/plain')
     if (!instrumentId) return
     scheduleInstrument(instrumentId, dateStr, timeKey, isPast)
@@ -371,7 +446,7 @@ export function useHighTempPressureSchedule() {
   function handleSelectScheduledOrder(orderId: string) {
     const current = selectedScheduledOrderIds.value
     if (current.includes(orderId)) {
-      selectedScheduledOrderIds.value = current.filter(id => id !== orderId)
+      selectedScheduledOrderIds.value = current.filter((id) => id !== orderId)
     } else {
       selectedScheduledOrderIds.value = [...current, orderId]
     }
@@ -383,7 +458,7 @@ export function useHighTempPressureSchedule() {
     delete next[orderId]
     scheduledEvents.value = next
     if (selectedScheduledOrderIds.value.includes(orderId)) {
-      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
+      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => id !== orderId)
     }
   }
 
@@ -397,35 +472,51 @@ export function useHighTempPressureSchedule() {
   const setEventSpan = (instrumentId: string, span: number) => {
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
+
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
+
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
+
     scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: { ...ev, span: nextSpan } }
   }
 
-  const resizing = ref<{ instrumentId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
+  const resizing = ref<{
+    instrumentId: string
+    startY: number
+    originSpan: number
+    originStartIdx: number
+    mode: 'bottom' | 'top'
+  } | null>(null)
   const resizingInstrumentId = computed(() => resizing.value?.instrumentId || null)
   const isResizing = computed(() => !!resizing.value)
 
   const setEventStartAndSpan = (instrumentId: string, startIdx: number, span: number) => {
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
+
     const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
     const nextStartIdx = Math.max(0, Math.min(maxStartIdx, startIdx))
     const nextStartKey = timeSlots.value[nextStartIdx]?.key
     if (!nextStartKey) return
+
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
-    scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: { ...ev, startTimeKey: nextStartKey, span: nextSpan } }
+    scheduledEvents.value = {
+      ...scheduledEvents.value,
+      [instrumentId]: { ...ev, startTimeKey: nextStartKey, span: nextSpan },
+    }
   }
 
   const startResize = (instrumentId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
+
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
+
     resizing.value = { instrumentId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
 
     const onMove = (me: MouseEvent) => {
@@ -455,8 +546,10 @@ export function useHighTempPressureSchedule() {
   const startResizeTop = (instrumentId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
+
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
+
     resizing.value = { instrumentId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
 
     const onMove = (me: MouseEvent) => {
@@ -483,6 +576,9 @@ export function useHighTempPressureSchedule() {
     searchKeyword,
     draggedOrder,
     workOrders,
+    workOrdersLoading,
+    workOrdersError,
+    refreshWorkOrders,
     calBase,
     scheduledOrders,
     scheduledLayoutItems,

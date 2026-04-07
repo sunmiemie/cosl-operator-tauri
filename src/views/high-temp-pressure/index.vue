@@ -30,8 +30,9 @@ function handleStartScheduledTest() {
   startupCheck.openStartupCheck()
 }
 
-onMounted(() => {
+onMounted(async () => {
   schedule.resetScheduleState()
+  await schedule.refreshWorkOrders()
 })
 </script>
 

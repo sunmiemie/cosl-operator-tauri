@@ -10,6 +10,7 @@ export interface InstrumentItem {
 
 export interface WorkOrder {
   id: string
+  dbId?: number
   no: string
   entrustNo: string
   applicant: string
@@ -22,6 +23,7 @@ export interface WorkOrder {
   targetPressure: string
   keepCondition: string
   status: string
+  statusCode?: number
   expanded: boolean
   items: InstrumentItem[]
 }
