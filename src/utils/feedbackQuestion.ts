@@ -391,26 +391,27 @@ export function parseTempTargetIds(
   }
   
   const result: number[] = []
+  const seen = new Set<number>()
   
   for (const item of jsonArray) {
-    // 处理直接的数字
+    let idValue: unknown
     if (typeof item === 'number') {
-      result.push(item)
+      idValue = item
+    } else if (typeof item === 'object' && item !== null && 'id' in item) {
+      idValue = (item as { id: unknown }).id
+    } else {
       continue
     }
-    
-    // 处理 {id: number} 对象
-    if (typeof item === 'object' && item !== null && 'id' in item) {
-      const idValue = (item as RawTempTargetItem).id
-      if (typeof idValue === 'number') {
-        result.push(idValue)
-      } else if (typeof idValue === 'string') {
-        // 兼容字符串形式的 id
-        const parsed = parseInt(idValue, 10)
-        if (!isNaN(parsed)) {
-          result.push(parsed)
-        }
-      }
+
+    // 字符串必须完整表示步骤编号，避免把 12abc 或 1.5 错当作另一个步骤。
+    if (typeof idValue === 'string') {
+      const normalized = idValue.trim()
+      if (!/^\d+$/.test(normalized)) continue
+      idValue = Number(normalized)
+    }
+    if (typeof idValue === 'number' && Number.isSafeInteger(idValue) && idValue >= 0 && !seen.has(idValue)) {
+      seen.add(idValue)
+      result.push(idValue)
     }
   }
   
