@@ -67,6 +67,7 @@ export function useSimulationWellSchedule() {
         deviceList: devices.map((d) => ({
           id: `${orderId}::${d.device_number}`,
           name: normalizeText(d.device_name) || '—',
+          sn: normalizeText(d.device_number) || '',
           code: normalizeText(d.device_number) || '',
           template: normalizeText(d.device_number) || ''
         })),
@@ -283,7 +284,7 @@ export function useSimulationWellSchedule() {
   })
 
   const selectedStartDeviceIds = computed(() => {
-    return selectedScheduledDeviceIds.value.filter((id) => !!scheduledEvents.value[id])
+    return selectedScheduledDeviceIds.value.filter((id) => !!scheduledEvents.value[id] || !!scheduledEventsTentative.value[id])
   })
 
   const selectedStartDevices = computed<DownholeDevice[]>(() => {

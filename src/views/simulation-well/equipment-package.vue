@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 
 const props = defineProps<{
@@ -13,6 +13,43 @@ const emit = defineEmits(['back', 'save'])
 const getDevKey = (orderId: string, device: any, index: number) => {
   return `${orderId}_${device.code || device.sn || 'SN-' + (index + 1)}`
 }
+
+const orderMetaMap = computed(() => {
+  const map = new Map<string, any>()
+  props.todayScheduledOrders.forEach((order: any) => {
+    if (order?.id) map.set(order.id, order)
+  })
+  return map
+})
+
+const startedOrderDevices = computed(() => {
+  const grouped = new Map<string, any>()
+  props.downholeDevices.forEach((device: any, index: number) => {
+    const orderId = device?.orderId
+    if (!orderId) return
+    const orderMeta = orderMetaMap.value.get(orderId)
+    if (!grouped.has(orderId)) {
+      grouped.set(orderId, {
+        id: orderId,
+        customer: device?.customer || orderMeta?.customer || '-',
+        deviceList: []
+      })
+    }
+    grouped.get(orderId).deviceList.push({
+      id: device?.id || `${orderId}_${device?.sn || index + 1}`,
+      name: device?.deviceName || device?.name || '-',
+      sn: device?.sn || device?.code || '',
+      code: device?.code || device?.sn || '',
+      template: device?.template || 'CBMT61XA_REPORT'
+    })
+  })
+  return Array.from(grouped.values())
+})
+
+const startedOrderIds = computed(() => startedOrderDevices.value.map((order: any) => order.id))
+const selectedSupportingOrders = computed(() =>
+  props.todayScheduledOrders.filter((order: any) => startedOrderIds.value.includes(order.id) && order.supportingTools?.length)
+)
 
 // --- 表单状态 ---
 const selectedWellName = ref('')
@@ -39,9 +76,9 @@ const repeatIntervalTo = ref('')
 
 function saveDownholeOperation() {
   const payload = {
-    orderIds: props.todayScheduledOrders.map(o => o.id),
+    orderIds: startedOrderIds.value,
     devices: props.downholeDevices,
-    supportingTools: props.todayScheduledOrders.flatMap(o => (o.supportingTools || [])),
+    supportingTools: selectedSupportingOrders.value.flatMap((o: any) => (o.supportingTools || [])),
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
     testObjective: selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value,
@@ -73,8 +110,8 @@ function saveDownholeOperation() {
     <div class="downhole-content">
       <div class="downhole-card">
         <div class="downhole-card-title">工单测试产品 <span class="english-sub">Order Test Products</span></div>
-        <div v-if="!todayScheduledOrders.length" class="empty-state"><p>今日暂无排程工单</p></div>
-        <div v-for="order in todayScheduledOrders" :key="'table-' + order.id" class="order-table-group">
+        <div v-if="!startedOrderDevices.length" class="empty-state"><p>未选择开始实验的测试产品</p></div>
+        <div v-for="order in startedOrderDevices" :key="'table-' + order.id" class="order-table-group">
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
             <span class="group-customer">{{ order.customer }}</span>
@@ -92,7 +129,7 @@ function saveDownholeOperation() {
               <tbody>
                 <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
                   <td>{{ device.name }}</td>
-                  <td>{{ device.sn || 'SN-' + (idx + 1) }}</td>
+                  <td>{{ device.sn || device.code || 'SN-' + (idx + 1) }}</td>
                   <td>{{ device.template || device.code || 'CBMT61XA_REPORT' }}</td>
                 </tr>
               </tbody>
@@ -101,9 +138,9 @@ function saveDownholeOperation() {
         </div>
       </div>
 
-      <div class="downhole-card" v-if="todayScheduledOrders.some(o => o.supportingTools?.length)">
+      <div class="downhole-card" v-if="selectedSupportingOrders.length">
         <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
-        <div v-for="order in todayScheduledOrders.filter(o => o.supportingTools?.length)" :key="'support-' + order.id" class="order-table-group">
+        <div v-for="order in selectedSupportingOrders" :key="'support-' + order.id" class="order-table-group">
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
             <span class="group-customer">{{ order.customer }}</span>

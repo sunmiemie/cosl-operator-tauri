@@ -27,6 +27,8 @@ const keyword = ref('')
 const createMode = ref(false)
 
 const formatTestEnv = (env: Record<string, any>) => {
+  const text = env?.text ?? env?.env_text
+  if (text !== undefined && text !== null && `${text}`.trim() !== '') return String(text).trim()
   const depth = env?.wellDepth ?? env?.depth
   const temp = env?.wellTemperature ?? env?.temperature
   const pressure = env?.wellPressure ?? env?.pressure
@@ -38,6 +40,8 @@ const formatTestEnv = (env: Record<string, any>) => {
 }
 
 const formatInterval = (interval: Record<string, any>) => {
+  const text = interval?.text ?? interval?.interval_text
+  if (text !== undefined && text !== null && `${text}`.trim() !== '') return String(text).trim()
   const mainFrom = interval?.mainFrom
   const mainTo = interval?.mainTo
   const repeatFrom = interval?.repeatFrom
@@ -92,7 +96,7 @@ const handleSave = async (payload: any) => {
       order_ids: payload?.orderIds || [],
       devices: payload?.devices || [],
       status: 0,
-      extra: payload
+      report_count: Number(payload?.reportCount ?? payload?.report_count ?? 0) || 0
     }
     const res = await createSimulatedWellDownholeWork(body, getAuthHeaders())
     if (!res.success) {
@@ -182,7 +186,6 @@ onMounted(() => {
       </div>
       <div class="header-right">
         <button class="week-cal-nav" @click="emit('back')">返回</button>
-        <button class="primary-btn" :disabled="!canCreate" @click="openCreate">新增下井作业</button>
       </div>
     </div>
 
