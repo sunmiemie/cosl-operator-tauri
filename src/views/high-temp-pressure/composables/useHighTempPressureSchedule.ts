@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
+import { http } from '@/services/http'
 import {
   listHighTempPressureOrders,
   type HighTempPressureOrderDTO,
@@ -25,7 +26,7 @@ function fmtDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-const SCHEDULABLE_STATUS = new Set([1, 2, 4, 7, 8])
+const SCHEDULABLE_STATUS = new Set([1])
 
 function getStatusText(status?: number, fallback?: string) {
   if (fallback?.trim()) return fallback
@@ -50,11 +51,31 @@ function formatDisplayValue(value: number | string | undefined | null, unit: str
   return `${value} ${unit}`
 }
 
+function normalizeInstrumentItems(dto: HighTempPressureOrderDTO, useDevice: string, taskNumber: string) {
+  const list = Array.isArray(dto.instruments) ? dto.instruments : []
+  if (list.length) return list
+  const fallbackName = useDevice || dto.device_name?.trim() || dto.test_platform?.trim() || '仪器'
+  const fallbackSn = dto.device_number?.trim() || taskNumber
+  return [{ instrument_name: fallbackName, instrument_sn: fallbackSn, test_type: '', quantity: 1, max_diameter: null }]
+}
+
 function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
-  const instrumentId = `ins-${dto.id}`
   const taskNumber = dto.task_number?.trim() || `HTP-${dto.id}`
-  const deviceName = dto.device_name?.trim() || dto.test_platform?.trim() || '设备'
-  const deviceNumber = dto.device_number?.trim() || taskNumber
+  const useDevice = dto.use_device?.trim() || dto.device_name?.trim() || dto.test_platform?.trim() || '-'
+  const itemsDto = normalizeInstrumentItems(dto, useDevice, taskNumber)
+  const items: InstrumentItem[] = itemsDto.map((it, idx) => {
+    const name = (it.instrument_name || '').trim() || useDevice || '仪器'
+    const sn = (it.instrument_sn || '').trim() || `${taskNumber}-${idx + 1}`
+    return { id: `ins-${dto.id}-${sn || idx}`, label: name, sn }
+  })
+  const rawSig = dto.admin_signature_url?.trim()
+  const sigUrl = rawSig ? (rawSig.startsWith('/') ? `${http.getBaseUrl()}${rawSig}` : rawSig) : undefined
+  const confirmDate = dto.sanxin_confirm_date?.trim() || undefined
+  const item1 = (dto.sanxin_tester_item_1 || '').trim().toLowerCase()
+  const item2 = (dto.sanxin_tester_item_2 || '').trim().toLowerCase()
+  const isSanxinRaw = dto.sanxin_is_sanxin
+  const isSanxin =
+    isSanxinRaw === true || isSanxinRaw === 1 || String(isSanxinRaw || '').toLowerCase() === 'true'
 
   return {
     id: `wo-${dto.id}`,
@@ -64,22 +85,21 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     applicant: dto.applicant?.trim() || '-',
     applicantUnit: dto.test_platform?.trim() || '-',
     applyDate: dto.test_date || '-',
-    receivingNo: deviceNumber,
-    vesselType: deviceName,
-    type: deviceName,
+    receivingNo: items[0]?.sn || taskNumber,
+    vesselType: useDevice,
+    type: useDevice,
     targetTemp: formatDisplayValue(dto.target_temp, 'C'),
     targetPressure: formatDisplayValue(dto.target_pressure, 'MPa'),
     keepCondition: dto.remark?.trim() || '-',
     status: getStatusText(dto.status, dto.status_text),
     statusCode: dto.status,
     expanded: false,
-    items: [
-      {
-        id: instrumentId,
-        label: deviceName,
-        sn: deviceNumber,
-      },
-    ],
+    items,
+    adminSignatureUrl: sigUrl,
+    sanxinConfirmDate: confirmDate,
+    sanxinTesterItem1: item1 === 'yes' || item1 === 'no' ? (item1 as 'yes' | 'no') : null,
+    sanxinTesterItem2: item2 === 'yes' || item2 === 'no' ? (item2 as 'yes' | 'no') : null,
+    sanxinIsSanxin: isSanxin,
   }
 }
 
@@ -296,14 +316,17 @@ export function useHighTempPressureSchedule() {
     const keyword = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) =>
-      (order.statusCode === undefined || SCHEDULABLE_STATUS.has(order.statusCode)) &&
+      (order.statusCode !== undefined && SCHEDULABLE_STATUS.has(order.statusCode)) &&
       order.items.some((item) => !scheduledInstrumentIds.has(item.id)) &&
       (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
         order.type.toLowerCase().includes(keyword) ||
         order.applicant.toLowerCase().includes(keyword) ||
-        order.receivingNo.toLowerCase().includes(keyword)
+        order.receivingNo.toLowerCase().includes(keyword) ||
+        order.items.some(
+          (it) => it.label.toLowerCase().includes(keyword) || it.sn.toLowerCase().includes(keyword)
+        )
       )
     )
   })
@@ -572,6 +595,11 @@ export function useHighTempPressureSchedule() {
     window.addEventListener('mouseup', onUp)
   }
 
+  const isOrderFullyScheduled = (order: WorkOrder) => {
+    if (!order?.items?.length) return false
+    return order.items.every((it) => !!scheduledEvents.value[it.id])
+  }
+
   return {
     searchKeyword,
     draggedOrder,
@@ -614,6 +642,7 @@ export function useHighTempPressureSchedule() {
     getEvent,
     startResize,
     startResizeTop,
+    isOrderFullyScheduled,
     resizingInstrumentId,
     isResizing,
   }

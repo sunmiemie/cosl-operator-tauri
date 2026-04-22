@@ -25,8 +25,9 @@ interface MenuItem {
   icon: string
   activeIcon: string
   label: string
-  path: string
+  to: any
   exact?: boolean
+  children?: MenuItem[]
 }
 
 // 菜单组接口
@@ -39,7 +40,7 @@ interface MenuGroup {
 
 // 顶级菜单项（一级目录，无子菜单）
 const topLevelItems: MenuItem[] = [
-  { icon: 'mdi:view-dashboard-outline', activeIcon: 'mdi:view-dashboard', label: '仪表盘', path: '/', exact: true },
+  { icon: 'mdi:view-dashboard-outline', activeIcon: 'mdi:view-dashboard', label: '仪表盘', to: '/', exact: true },
 ]
 
 // 菜单组配置（带子菜单的一级目录）
@@ -49,12 +50,21 @@ const menuGroups: MenuGroup[] = [
     icon: 'mdi:test-tube',
     label: '测试台检测',
     children: [
-      { icon: 'mdi:play-box-outline', activeIcon: 'mdi:play-box', label: 'HALT-HASS测试', path: '/halt-hass-test' },
-      { icon: 'mdi:gas-burner', activeIcon: 'mdi:gas-burner', label: '高温高压井', path: '/high-temp-pressure' },
-      { icon: 'mdi:vibrate', activeIcon: 'mdi:vibrate', label: '振动台', path: '/vibration' },
-      { icon: 'mdi:water-sync', activeIcon: 'mdi:water-sync', label: '水循环', path: '/water-cycle' },
-      { icon: 'mdi:thermometer-high', activeIcon: 'mdi:thermometer-high', label: '高温箱', path: '/high-temp-box' },
-      { icon: 'mdi:pipe', activeIcon: 'mdi:pipe', label: '模拟井', path: '/simulation-well' },
+      { icon: 'mdi:play-box-outline', activeIcon: 'mdi:play-box', label: 'HALT-HASS测试', to: '/halt-hass-test' },
+      { icon: 'mdi:gas-burner', activeIcon: 'mdi:gas-burner', label: '高温高压井', to: '/high-temp-pressure' },
+      { icon: 'mdi:vibrate', activeIcon: 'mdi:vibrate', label: '振动台', to: '/vibration' },
+      { icon: 'mdi:water-sync', activeIcon: 'mdi:water-sync', label: '水循环', to: '/water-cycle' },
+      { icon: 'mdi:thermometer-high', activeIcon: 'mdi:thermometer-high', label: '高温箱', to: '/high-temp-box' },
+      {
+        icon: 'mdi:pipe',
+        activeIcon: 'mdi:pipe',
+        label: '模拟井',
+        to: '/simulation-well',
+        children: [
+          { icon: 'mdi:oil', activeIcon: 'mdi:oil', label: '下井作业', to: '/simulation-well?view=downhole-work' },
+          { icon: 'mdi:file-document-outline', activeIcon: 'mdi:file-document-outline', label: '测试报告', to: '/simulation-well?view=test-report' }
+        ]
+      },
     ]
   },
   {
@@ -62,8 +72,8 @@ const menuGroups: MenuGroup[] = [
     icon: 'mdi:eye-outline',
     label: '视觉检测',
     children: [
-      { icon: 'mdi:radioactive', activeIcon: 'mdi:radioactive', label: 'X-Ray测试', path: '/xray-test' },
-      { icon: 'mdi:eye-check-outline', activeIcon: 'mdi:eye-check', label: '目检测试', path: '/visual-inspection' },
+      { icon: 'mdi:radioactive', activeIcon: 'mdi:radioactive', label: 'X-Ray测试', to: '/xray-test' },
+      { icon: 'mdi:eye-check-outline', activeIcon: 'mdi:eye-check', label: '目检测试', to: '/visual-inspection' },
     ]
   },
   {
@@ -71,9 +81,9 @@ const menuGroups: MenuGroup[] = [
     icon: 'mdi:cog-transfer-outline',
     label: '工艺编辑',
     children: [
-      { icon: 'mdi:eye-check-outline', activeIcon: 'mdi:eye-check', label: '目检工艺', path: '/process/eyes' },
-      { icon: 'mdi:radioactive', activeIcon: 'mdi:radioactive', label: 'X-Ray工艺', path: '/process/xray' },
-      { icon: 'mdi:chart-timeline-variant', activeIcon: 'mdi:chart-timeline-variant', label: 'HALT HASS工艺', path: '/process/halt-hass' },
+      { icon: 'mdi:eye-check-outline', activeIcon: 'mdi:eye-check', label: '目检工艺', to: '/process/eyes' },
+      { icon: 'mdi:radioactive', activeIcon: 'mdi:radioactive', label: 'X-Ray工艺', to: '/process/xray' },
+      { icon: 'mdi:chart-timeline-variant', activeIcon: 'mdi:chart-timeline-variant', label: 'HALT HASS工艺', to: '/process/halt-hass' },
     ]
   },
 ]
@@ -94,10 +104,19 @@ const filteredMenuGroups = computed(() => {
 
 // 判断菜单项是否激活
 function isItemActive(item: MenuItem) {
-  if (item.exact) {
-    return route.path === item.path
+  const to = item.to
+  if (typeof to === 'string') {
+    if (to.includes('?')) return route.fullPath === to
+    if (item.exact) return route.path === to
+    return route.path.startsWith(to)
   }
-  return route.path.startsWith(item.path)
+  if (to && typeof to === 'object') {
+    const pathOk = route.path === (to.path || '')
+    if (!pathOk) return false
+    const q = to.query || {}
+    return Object.keys(q).every((k) => String(route.query[k] || '') === String(q[k]))
+  }
+  return false
 }
 
 // 判断菜单组是否有激活项
@@ -125,6 +144,17 @@ function getIcon(item: MenuItem) {
   return isItemActive(item) ? item.activeIcon : item.icon
 }
 
+const expandedItems = ref<string[]>([])
+function isItemExpanded(key: string) {
+  return expandedItems.value.includes(key)
+}
+function toggleItem(key: string) {
+  const idx = expandedItems.value.indexOf(key)
+  if (idx > -1) expandedItems.value.splice(idx, 1)
+  else expandedItems.value.push(key)
+}
+
+
 function toggleSidebar() {
   isCollapsed.value = !isCollapsed.value
 }
@@ -142,8 +172,8 @@ async function handleOpenSettings() {
       <!-- 顶级菜单项（仪表盘等） -->
       <router-link 
         v-for="item in topLevelItems" 
-        :key="item.path" 
-        :to="item.path" 
+        :key="String(item.to)" 
+        :to="item.to" 
         class="top-menu-item"
         :class="{ active: isItemActive(item) }"
         :title="isCollapsed ? item.label : ''"
@@ -181,18 +211,46 @@ async function handleOpenSettings() {
         <!-- 子菜单项 -->
         <Transition name="submenu">
           <div v-show="isGroupExpanded(group.id) && !isCollapsed" class="submenu">
-            <router-link 
-              v-for="item in group.children" 
-              :key="item.path" 
-              :to="item.path" 
-              class="menu-item"
-              :class="{ active: isItemActive(item) }"
-            >
-              <div class="menu-icon-wrapper">
-                <Icon :icon="getIcon(item)" class="menu-icon" />
+            <div v-for="item in group.children" :key="item.label">
+              <div v-if="item.children?.length" class="menu-item nested-item" :class="{ active: isItemActive(item) }">
+                <router-link :to="item.to" class="nested-link">
+                  <div class="menu-icon-wrapper">
+                    <Icon :icon="getIcon(item)" class="menu-icon" />
+                  </div>
+                  <span class="menu-label">{{ item.label }}</span>
+                </router-link>
+                <button class="nested-toggle" @click="toggleItem(item.label)">
+                  <Icon icon="mdi:chevron-down" class="group-arrow" :class="{ rotated: isItemExpanded(item.label) }" />
+                </button>
               </div>
-              <span class="menu-label">{{ item.label }}</span>
-            </router-link>
+              <router-link
+                v-else
+                :to="item.to"
+                class="menu-item"
+                :class="{ active: isItemActive(item) }"
+              >
+                <div class="menu-icon-wrapper">
+                  <Icon :icon="getIcon(item)" class="menu-icon" />
+                </div>
+                <span class="menu-label">{{ item.label }}</span>
+              </router-link>
+              <Transition name="submenu">
+                <div v-if="item.children?.length" v-show="isItemExpanded(item.label)" class="submenu nested-submenu">
+                  <router-link
+                    v-for="sub in item.children"
+                    :key="sub.label"
+                    :to="sub.to"
+                    class="menu-item"
+                    :class="{ active: isItemActive(sub) }"
+                  >
+                    <div class="menu-icon-wrapper">
+                      <Icon :icon="getIcon(sub)" class="menu-icon" />
+                    </div>
+                    <span class="menu-label">{{ sub.label }}</span>
+                  </router-link>
+                </div>
+              </Transition>
+            </div>
           </div>
         </Transition>
 
@@ -396,6 +454,39 @@ async function handleOpenSettings() {
 .submenu-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+.nested-item {
+  padding-right: 8px;
+}
+
+.nested-link {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.nested-toggle {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.nested-toggle:hover {
+  background: var(--color-bg-hover);
+}
+
+.nested-submenu {
+  padding-left: 18px;
 }
 
 /* 菜单项样式 */

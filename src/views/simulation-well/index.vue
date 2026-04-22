@@ -1,23 +1,82 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import EquipmentPackage from './equipment-package.vue'
+import { ElMessage } from 'element-plus'
+import DownholeWork from './downhole-work.vue'
 import SimulationWellDashboard from './components/SimulationWellDashboard.vue'
-import { useSimulationWellSchedule } from './composables/useSimulationWellSchedule'
-import { useSimulationWellDownhole } from './composables/useSimulationWellDownhole'
+import TestReport from './test-report.vue'
+import { useSimulationWellSchedule } from './composables/useSimulationWellScheduleV2'
+import { useRoute, useRouter } from 'vue-router'
 import type { SimulationWellView } from './types'
+import SanxinOrderDetailModal from './components/SanxinOrderDetailModal.vue'
+import type { SimulatedWellOrderDTO } from '@/services/simulated-well-api'
 
 const currentView = ref<SimulationWellView>('dashboard')
 const schedule = useSimulationWellSchedule()
-const { downholeDevices } = useSimulationWellDownhole(schedule.todayScheduledOrders)
+const route = useRoute()
+const router = useRouter()
+
+const sanxinDetailVisible = ref(false)
+const sanxinDetailLoading = ref(false)
+const sanxinDetailOrder = ref<SimulatedWellOrderDTO | null>(null)
+
+const normalizeView = (v: unknown): SimulationWellView => {
+  if (v === 'downhole-work' || v === 'test-report') return v
+  return 'dashboard'
+}
+
+const syncViewFromRoute = () => {
+  const next = normalizeView(route.query.view)
+  if (next === 'dashboard') {
+    currentView.value = 'dashboard'
+    return
+  }
+  currentView.value = next
+}
+
+watch(
+  () => route.query.view,
+  () => syncViewFromRoute(),
+  { immediate: true }
+)
+
+watch(
+  () => schedule.selectedStartDeviceIds.value.length,
+  () => syncViewFromRoute()
+)
 
 function handleStartScheduledTest() {
-  if (schedule.todayScheduledOrderIds.value.length === 0) return
-  currentView.value = 'downhole-operation'
+  if (schedule.selectedStartDeviceIds.value.length === 0) {
+    ElMessage.warning('请先在日历中点击选择要开始试验的测试产品')
+    return
+  }
+  router.replace({ path: '/simulation-well', query: { view: 'downhole-work' } })
 }
 
 function backToDashboard() {
-  currentView.value = 'dashboard'
+  router.replace({ path: '/simulation-well' })
+}
+
+async function handleViewOrderDetail(orderId: string) {
+  const order = schedule.getWorkOrderById(orderId)
+  const dbId = order?.dbId
+  if (!dbId) {
+    ElMessage.error('未找到工单ID')
+    return
+  }
+  sanxinDetailVisible.value = true
+  sanxinDetailLoading.value = true
+  sanxinDetailOrder.value = null
+  try {
+    const dto = await schedule.fetchOrderDetail(dbId)
+    if (!dto) {
+      ElMessage.error('获取详情失败')
+      return
+    }
+    sanxinDetailOrder.value = dto
+  } finally {
+    sanxinDetailLoading.value = false
+  }
 }
 
 function handleSaveDownhole(payload: unknown) {
@@ -52,15 +111,16 @@ function handleSaveDownhole(payload: unknown) {
       :max-lane-count="schedule.maxLaneCount.value"
       :slot-height-px="schedule.slotHeightPx"
       :is-dragging="schedule.isDragging.value"
-      :resizing-order-id="schedule.resizingOrderId.value"
+      :resizing-device-id="schedule.resizingDeviceId.value"
       :is-resizing="schedule.isResizing.value"
-      :selected-scheduled-order-ids="schedule.selectedScheduledOrderIds.value"
+      :selected-scheduled-device-ids="schedule.selectedScheduledDeviceIds.value"
       :today-scheduled-order-ids="schedule.todayScheduledOrderIds.value"
       :fmt-date="schedule.fmtDate"
       :get-cell-key="schedule.getCellKey"
       :get-work-order-by-id="schedule.getWorkOrderById"
+      :get-device-row="schedule.getDeviceRow"
       @update:search-keyword="schedule.searchKeyword.value = $event"
-      @drag-start="schedule.handleDragStart"
+      @device-drag-start="schedule.handleDeviceDragStart"
       @drag-end="schedule.handleDragEnd"
       @prev-week="schedule.prevWeek"
       @next-week="schedule.nextWeek"
@@ -71,18 +131,34 @@ function handleSaveDownhole(payload: unknown) {
       @drop="schedule.handleDrop"
       @unschedule="schedule.handleUnschedule"
       @unschedule-tentative="schedule.handleUnscheduleTentative"
-      @select-scheduled-order="schedule.handleSelectScheduledOrder"
+      @select-scheduled-device="schedule.handleSelectScheduledDevice"
       @start-resize="schedule.startResize"
       @start-resize-top="schedule.startResizeTop"
       @start-scheduled-test="handleStartScheduledTest"
+      @view-order-detail="handleViewOrderDetail"
     />
 
-    <EquipmentPackage
-      v-else-if="currentView === 'downhole-operation'"
-      :today-scheduled-orders="schedule.todayScheduledOrders.value"
-      :downhole-devices="downholeDevices"
+    <SanxinOrderDetailModal
+      v-if="currentView === 'dashboard'"
+      :visible="sanxinDetailVisible"
+      :loading="sanxinDetailLoading"
+      :order="sanxinDetailOrder"
+      @close="sanxinDetailVisible = false"
+    />
+
+    <DownholeWork
+      v-else-if="currentView === 'downhole-work'"
+      :today-scheduled-orders="schedule.selectedStartOrders.value"
+      :downhole-devices="schedule.selectedStartDevices.value"
       @back="backToDashboard"
       @save="handleSaveDownhole"
+    />
+
+    <TestReport
+      v-else-if="currentView === 'test-report'"
+      :selected-orders="schedule.selectedStartOrders.value"
+      :selected-devices="schedule.selectedStartDevices.value"
+      @back="backToDashboard"
     />
   </div>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { Icon } from '@iconify/vue'
 
 const props = defineProps<{
@@ -9,33 +9,10 @@ const props = defineProps<{
 
 const emit = defineEmits(['back', 'save'])
 
-// --- 核心逻辑：工单多选与产品联动 ---
-const selectedOrderIds = ref<string[]>([]) 
-const selectedDeviceKeys = ref<string[]>([]) 
-const selectedSupportingToolKeys = ref<string[]>([]) 
-
 // 辅助：生成设备唯一标识
 const getDevKey = (orderId: string, device: any, index: number) => {
   return `${orderId}_${device.code || device.sn || 'SN-' + (index + 1)}`
 }
-
-// 切换工单选中状态
-function toggleOrder(order: any) {
-  const idx = selectedOrderIds.value.indexOf(order.id)
-  if (idx > -1) {
-    selectedOrderIds.value.splice(idx, 1)
-    const deviceKeys = (order.deviceList || []).map((d: any, i: number) => getDevKey(order.id, d, i))
-    selectedDeviceKeys.value = selectedDeviceKeys.value.filter(k => !deviceKeys.includes(k))
-    const supportKeys = (order.supportingTools || []).map((d: any, i: number) => getDevKey(order.id, d, i))
-    selectedSupportingToolKeys.value = selectedSupportingToolKeys.value.filter(k => !supportKeys.includes(k))
-  } else {
-    selectedOrderIds.value.push(order.id)
-  }
-}
-
-const activeOrders = computed(() => {
-  return props.todayScheduledOrders.filter(o => selectedOrderIds.value.includes(o.id))
-})
 
 // --- 表单状态 ---
 const selectedWellName = ref('')
@@ -62,15 +39,9 @@ const repeatIntervalTo = ref('')
 
 function saveDownholeOperation() {
   const payload = {
-    orderIds: selectedOrderIds.value,
-    devices: props.downholeDevices.filter(d => 
-      selectedDeviceKeys.value.includes(getDevKey(d.orderId, d, 0))
-    ),
-    supportingTools: props.todayScheduledOrders
-      .filter(o => selectedOrderIds.value.includes(o.id))
-      .flatMap(o => (o.supportingTools || []).filter((d: any, i: number) => 
-        selectedSupportingToolKeys.value.includes(getDevKey(o.id, d, i))
-      )),
+    orderIds: props.todayScheduledOrders.map(o => o.id),
+    devices: props.downholeDevices,
+    supportingTools: props.todayScheduledOrders.flatMap(o => (o.supportingTools || [])),
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
     testObjective: selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value,
@@ -91,7 +62,7 @@ function saveDownholeOperation() {
         <div class="header-icon"><Icon icon="mdi:oil" /></div>
         <div>
           <h1 class="header-title">下井作业设备组合</h1>
-          <p class="header-subtitle">仅载入当日排程工单</p>
+          <p class="header-subtitle">仅展示已排程并已选择开始试验的测试产品</p>
         </div>
       </div>
       <div class="header-right">
@@ -101,36 +72,9 @@ function saveDownholeOperation() {
 
     <div class="downhole-content">
       <div class="downhole-card">
-        <div class="section-header-row">
-          <div class="downhole-card-title">当日排程工单 <span class="english-sub">Today's Scheduled Orders</span></div>
-          <div class="selection-badge" v-if="selectedOrderIds.length">已选择 {{ selectedOrderIds.length }} 个工单</div>
-        </div>
-        
-        <div v-if="todayScheduledOrders.length" class="order-card-grid">
-          <div 
-            v-for="order in todayScheduledOrders" 
-            :key="order.id" 
-            class="order-status-card"
-            :class="{ 'is-active': selectedOrderIds.includes(order.id) }"
-            @click="toggleOrder(order)"
-          >
-            <div class="check-icon-wrapper" v-if="selectedOrderIds.includes(order.id)">
-              <Icon icon="mdi:check-circle" />
-            </div>
-            <div class="click-hint" v-else>点击选择</div>
-            <div class="card-time"><Icon icon="mdi:clock-outline" /> undefined:00</div>
-            <div class="card-order-id">{{ order.id }}</div>
-            <div class="card-customer">{{ order.customer }}</div>
-            <div class="card-task">{{ order.taskDesc }}</div>
-            <div class="card-footer">{{ order.deviceList?.length || 0 }} 个测试产品</div>
-          </div>
-        </div>
-        <div v-else class="empty-state"><p>今日暂无排程工单</p></div>
-      </div>
-
-      <div class="downhole-card" v-if="selectedOrderIds.length">
         <div class="downhole-card-title">工单测试产品 <span class="english-sub">Order Test Products</span></div>
-        <div v-for="order in activeOrders" :key="'table-' + order.id" class="order-table-group">
+        <div v-if="!todayScheduledOrders.length" class="empty-state"><p>今日暂无排程工单</p></div>
+        <div v-for="order in todayScheduledOrders" :key="'table-' + order.id" class="order-table-group">
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
             <span class="group-customer">{{ order.customer }}</span>
@@ -143,7 +87,6 @@ function saveDownholeOperation() {
                   <th>测试产品</th>
                   <th>仪器编号</th>
                   <th>关联模板</th>
-                  <th style="width: 50px; text-align: center;">选择</th>
                 </tr>
               </thead>
               <tbody>
@@ -151,9 +94,6 @@ function saveDownholeOperation() {
                   <td>{{ device.name }}</td>
                   <td>{{ device.sn || 'SN-' + (idx + 1) }}</td>
                   <td>{{ device.template || device.code || 'CBMT61XA_REPORT' }}</td>
-                  <td style="text-align: center;">
-                    <input type="checkbox" v-model="selectedDeviceKeys" :value="getDevKey(order.id, device, idx)" class="row-checkbox" />
-                  </td>
                 </tr>
               </tbody>
             </table>
@@ -161,9 +101,9 @@ function saveDownholeOperation() {
         </div>
       </div>
 
-      <div class="downhole-card" v-if="selectedOrderIds.length && activeOrders.some(o => o.supportingTools?.length)">
+      <div class="downhole-card" v-if="todayScheduledOrders.some(o => o.supportingTools?.length)">
         <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
-        <div v-for="order in activeOrders.filter(o => o.supportingTools?.length)" :key="'support-' + order.id" class="order-table-group">
+        <div v-for="order in todayScheduledOrders.filter(o => o.supportingTools?.length)" :key="'support-' + order.id" class="order-table-group">
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
             <span class="group-customer">{{ order.customer }}</span>
@@ -176,7 +116,6 @@ function saveDownholeOperation() {
                   <th>配接仪器</th>
                   <th>仪器编号</th>
                   <th>关联模板</th>
-                  <th style="width: 50px; text-align: center;">选择</th>
                 </tr>
               </thead>
               <tbody>
@@ -184,9 +123,6 @@ function saveDownholeOperation() {
                   <td>{{ tool.name }}</td>
                   <td>{{ tool.sn || 'SN-' + (idx + 1) }}</td>
                   <td>{{ tool.template || tool.code || 'SUPPORT_TOOL_REPORT' }}</td>
-                  <td style="text-align: center;">
-                    <input type="checkbox" v-model="selectedSupportingToolKeys" :value="getDevKey(order.id, tool, idx)" class="row-checkbox" />
-                  </td>
                 </tr>
               </tbody>
             </table>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
+import WorkOrderDetailModal from './WorkOrderDetailModal.vue'
 import type { ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
 const props = defineProps<{
@@ -52,6 +53,19 @@ const emit = defineEmits<{
   'start-scheduled-test': []
 }>()
 
+const detailVisible = ref(false)
+const detailOrder = ref<WorkOrder | null>(null)
+
+const openDetail = (order: WorkOrder) => {
+  detailOrder.value = order
+  detailVisible.value = true
+}
+
+const closeDetail = () => {
+  detailVisible.value = false
+  detailOrder.value = null
+}
+
 const timeColWidth = 60
 const cellPadding = 3
 const maxLanesBeforeExpand = 2
@@ -80,6 +94,14 @@ const widthFactor = computed(() => Math.max(1, Math.ceil((props.maxLaneCount || 
 const gridInnerWidth = computed(() => {
   const base = Math.max(0, gridViewportWidth.value - timeColWidth)
   return timeColWidth + base * widthFactor.value
+})
+
+const scheduledInstrumentIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(props.scheduledOrders || {}).forEach((ids) => {
+    ids.forEach((id) => set.add(id))
+  })
+  return set
 })
 
 const getScheduledStyle = (item: any) => {
@@ -151,7 +173,7 @@ const handleGridDrop = (e: DragEvent) => {
           <input
             :value="searchKeyword"
             type="text"
-            placeholder="搜索工单号/设备/申请人"
+            placeholder="搜索任务编号/使用设备/申请人/仪器SN"
             @input="emit('update:searchKeyword', ($event.target as HTMLInputElement).value)"
           />
           <button v-if="searchKeyword" class="clear-btn" @click="emit('update:searchKeyword', '')">
@@ -167,29 +189,32 @@ const handleGridDrop = (e: DragEvent) => {
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>工单号</th>
-                  <th>器皿类型</th>
                   <th>申请人</th>
+                  <th>任务编号</th>
+                  <th>使用设备</th>
+                  <th>详情</th>
                   <th>状态</th>
-                  <th>展开</th>
                 </tr>
               </thead>
               <tbody>
                 <template v-for="order in unscheduledOrders" :key="order.id">
                   <tr @click="order.expanded = !order.expanded">
-                    <td class="cell-id">{{ order.no }}</td>
-                    <td class="cell-type" :title="order.type">{{ order.type }}</td>
                     <td class="cell-applicant">{{ order.applicant }}</td>
-                    <td><span class="status-tag status-pending">待排程</span></td>
-                    <td class="cell-expand">
-                      <Icon :icon="order.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+                    <td class="cell-id">{{ order.no }}</td>
+                    <td class="cell-device" :title="order.type">{{ order.type }}</td>
+                    <td class="cell-detail">
+                      <span class="detail-link" @click.stop="openDetail(order)">详情</span>
+                      <span class="expand-icon" @click.stop="order.expanded = !order.expanded">
+                        <Icon :icon="order.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+                      </span>
                     </td>
+                    <td><span class="status-tag status-pending">{{ order.status || '待排程' }}</span></td>
                   </tr>
                   <tr v-if="order.expanded" :key="order.id + '-expanded'">
                     <td class="expanded-cell" colspan="5">
                       <div class="instrument-list">
                         <div
-                          v-for="item in order.items"
+                          v-for="item in order.items.filter((x) => !scheduledInstrumentIdSet.has(x.id))"
                           :key="item.id"
                           class="instrument-item"
                           draggable="true"
@@ -323,6 +348,7 @@ const handleGridDrop = (e: DragEvent) => {
         </div>
       </div>
     </div>
+    <WorkOrderDetailModal :visible="detailVisible" :order="detailOrder" @close="closeDetail" />
   </div>
 </template>
 

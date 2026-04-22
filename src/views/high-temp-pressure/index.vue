@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessage } from 'element-plus'
 import DashboardPanel from './components/DashboardPanel.vue'
 import StartupCheckModal from './components/StartupCheckModal.vue'
 import StartPanel from './components/StartPanel.vue'
@@ -10,10 +11,13 @@ import ActionModals from './components/ActionModals.vue'
 import { useHighTempPressureSchedule } from './composables/useHighTempPressureSchedule'
 import { useHighTempPressureStartupCheck } from './composables/useHighTempPressureStartupCheck'
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
+import { useAuth } from '@/composables/useAuth'
+import { startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
 
 const schedule = useHighTempPressureSchedule()
 const startupCheck = useHighTempPressureStartupCheck()
 const testing = useHighTempPressureTesting()
+const { initAuth, getAuthHeaders } = useAuth()
 
 function handleStartupCheckComplete() {
   startupCheck.showStartupCheck.value = false
@@ -26,8 +30,38 @@ function backToStartupCheck() {
 }
 
 function handleStartScheduledTest() {
-  if (schedule.selectedScheduledOrders.value.length === 0) return
+  if (schedule.selectedScheduledOrders.value.length === 0) {
+    ElMessage.warning('请先在日历中选择已排程的仪器')
+    return
+  }
+  const current = schedule.currentSelected.value
+  if (!current) {
+    ElMessage.warning('未找到已选中的仪器')
+    return
+  }
   startupCheck.openStartupCheck()
+}
+
+async function handleConfirmStart() {
+  const current = schedule.currentSelected.value
+  const dbId = current?.order?.dbId
+  if (!dbId) {
+    ElMessage.error('未找到工单ID')
+    return
+  }
+
+  try {
+    await initAuth()
+    const res = await startHighTempPressureOrder(dbId, getAuthHeaders())
+    if (res.success && res.data?.code === 0) {
+      schedule.refreshWorkOrders()
+      testing.confirmStart()
+      return
+    }
+    ElMessage.error(res.data?.msg || res.error || '开始测试失败')
+  } catch (e) {
+    ElMessage.error('开始测试失败')
+  }
 }
 
 onMounted(async () => {
@@ -127,7 +161,7 @@ onMounted(async () => {
       :active-modal="testing.activeModal.value"
       :current-selected="schedule.currentSelected.value"
       @close="testing.closeModal"
-      @confirm-start="testing.confirmStart"
+      @confirm-start="handleConfirmStart"
       @confirm-end="testing.endTest"
       @confirm-stop="testing.stopTest"
     />

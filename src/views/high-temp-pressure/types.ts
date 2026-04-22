@@ -26,6 +26,11 @@ export interface WorkOrder {
   statusCode?: number
   expanded: boolean
   items: InstrumentItem[]
+  adminSignatureUrl?: string
+  sanxinConfirmDate?: string
+  sanxinTesterItem1?: 'yes' | 'no' | null
+  sanxinTesterItem2?: 'yes' | 'no' | null
+  sanxinIsSanxin?: boolean
 }
 
 export interface WeekDayItem {

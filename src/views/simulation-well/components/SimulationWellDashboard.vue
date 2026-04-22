@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import type { CalendarDay, TimeSlot, WorkOrder } from '../types'
+import type { CalendarDay, ScheduledItem, TimeSlot, WorkOrder } from '../types'
 
 const props = defineProps<{
   searchKeyword: string
@@ -12,32 +12,23 @@ const props = defineProps<{
   timeSlots: TimeSlot[]
   scheduledOrders: Record<string, string[]>
   scheduledOrdersTentative: Record<string, string[]>
-  scheduledLayoutItems: {
-    orderId: string
-    dateStr: string
-    startTimeKey: string
-    startIdx: number
-    span: number
-    lane: number
-    laneCount: number
-    cellKey: string
-    isTentative: boolean
-  }[]
+  scheduledLayoutItems: ScheduledItem[]
   maxLaneCount: number
   slotHeightPx: number
   isDragging: boolean
-  resizingOrderId: string | null
+  resizingDeviceId: string | null
   isResizing: boolean
-  selectedScheduledOrderIds: string[]
+  selectedScheduledDeviceIds: string[]
   todayScheduledOrderIds: string[]
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
   getWorkOrderById: (id: string) => WorkOrder | undefined
+  getDeviceRow: (deviceId: string) => { order: WorkOrder; deviceName: string; deviceNumber: string } | null
 }>()
 
 const emit = defineEmits<{
   'update:searchKeyword': [value: string]
-  'drag-start': [event: DragEvent, order: WorkOrder]
+  'device-drag-start': [event: DragEvent, device: { id: string; label: string; sn: string }]
   'drag-end': []
   'prev-week': []
   'next-week': []
@@ -46,12 +37,13 @@ const emit = defineEmits<{
   'drag-over': [event: DragEvent, isPast: boolean]
   'drag-leave': []
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
-  unschedule: [cellKey: string, oid: string]
-  'unschedule-tentative': [cellKey: string, oid: string]
-  'select-scheduled-order': [oid: string]
-  'start-resize': [oid: string, e: MouseEvent]
-  'start-resize-top': [oid: string, e: MouseEvent]
+  unschedule: [cellKey: string, deviceId: string]
+  'unschedule-tentative': [cellKey: string, deviceId: string]
+  'select-scheduled-device': [deviceId: string]
+  'start-resize': [deviceId: string, e: MouseEvent]
+  'start-resize-top': [deviceId: string, e: MouseEvent]
   'start-scheduled-test': []
+  'view-order-detail': [orderId: string]
 }>()
 
 const timeColWidth = 60
@@ -89,6 +81,28 @@ const layoutWithDayIndex = computed(() => {
     .filter((x) => x.dayIndex >= 0)
 })
 
+const selectedDeviceRows = computed(() => {
+  return props.selectedScheduledDeviceIds
+    .map((id) => props.getDeviceRow(id))
+    .filter(Boolean) as Array<{ order: WorkOrder; deviceName: string; deviceNumber: string }>
+})
+
+const scheduledDeviceIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(props.scheduledOrders || {}).forEach((ids) => ids.forEach((id) => set.add(id)))
+  Object.values(props.scheduledOrdersTentative || {}).forEach((ids) => ids.forEach((id) => set.add(id)))
+  return set
+})
+
+const expandedOrderIds = ref<string[]>([])
+const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
+const toggleExpanded = (orderId: string) => {
+  const set = new Set(expandedOrderIds.value)
+  if (set.has(orderId)) set.delete(orderId)
+  else set.add(orderId)
+  expandedOrderIds.value = Array.from(set)
+}
+
 const getScheduledStyle = (item: any) => {
   const totalWidth = gridInnerWidth.value || 0
   const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
@@ -103,7 +117,7 @@ const getScheduledStyle = (item: any) => {
     left: `${left}px`,
     width: `${Math.max(20, width)}px`,
     height: `${Math.max(props.slotHeightPx - cellPadding * 2, height)}px`,
-    zIndex: props.selectedScheduledOrderIds.includes(item.orderId) ? 12 : 10,
+    zIndex: props.selectedScheduledDeviceIds.includes(item.deviceId) ? 12 : 10,
   }
 }
 
@@ -174,25 +188,47 @@ const handleGridDrop = (e: DragEvent) => {
               <tr>
                 <th>工单号</th>
                 <th>客户</th>
-                <th>设备数</th>
+                <th>设备</th>
                 <th>计划时间</th>
                 <th>描述</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="order in unscheduledOrders"
-                :key="order.id"
-                draggable="true"
-                @dragstart="emit('drag-start', $event, order)"
-                @dragend="emit('drag-end')"
-              >
-                <td class="cell-id">{{ order.id }}</td>
-                <td class="cell-customer">{{ order.customer }}</td>
-                <td class="cell-devices">{{ order.devices }}</td>
-                <td class="cell-plan">{{ order.planTime }}</td>
-                <td class="cell-desc">{{ order.taskDesc }}</td>
-              </tr>
+              <template v-for="order in unscheduledOrders" :key="order.id">
+                <tr @click="toggleExpanded(order.id)">
+                  <td class="cell-id">{{ order.id }}</td>
+                  <td class="cell-customer">{{ order.customer }}</td>
+                  <td class="cell-device cell-detail">
+                    <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
+                      <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+                    </span>
+                    {{ (order.deviceList || []).length }}台
+                  </td>
+                  <td class="cell-plan">{{ order.planTime || '-' }}</td>
+                  <td class="cell-desc">{{ order.taskDesc || '-' }}</td>
+                  <td style="text-align: center">
+                    <button class="op-btn view" @click.stop="emit('view-order-detail', order.id)">详情</button>
+                  </td>
+                </tr>
+                <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
+                  <td class="expanded-cell" colspan="6">
+                    <div class="instrument-list">
+                      <div
+                        v-for="d in (order.deviceList || []).filter((x) => !scheduledDeviceIdSet.has(x.id))"
+                        :key="d.id"
+                        class="instrument-item"
+                        draggable="true"
+                        @dragstart="emit('device-drag-start', $event, { id: d.id, label: d.name, sn: d.code || d.sn || '' })"
+                        @dragend="emit('drag-end')"
+                      >
+                        <span>{{ d.name }}</span>
+                        <span class="instrument-sn">{{ d.code || d.sn }}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -235,25 +271,25 @@ const handleGridDrop = (e: DragEvent) => {
               <div class="events-overlay">
                 <div
                   v-for="it in layoutWithDayIndex"
-                  :key="it.orderId"
+                  :key="it.deviceId"
                   class="scheduled-item"
                   :class="{
-                    'is-selected': selectedScheduledOrderIds.includes(it.orderId),
+                    'is-selected': selectedScheduledDeviceIds.includes(it.deviceId),
                     'is-dragging': isDragging,
-                    'is-resizing': isResizing && resizingOrderId === it.orderId,
+                    'is-resizing': isResizing && resizingDeviceId === it.deviceId,
                     'is-tentative': it.isTentative
                   }"
                   :style="getScheduledStyle(it)"
-                  @click="emit('select-scheduled-order', it.orderId)"
-                  :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getWorkOrderById(it.orderId)?.deviceList?.[0]?.name || ''}`"
+                  @click="emit('select-scheduled-device', it.deviceId)"
+                  :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getDeviceRow(it.deviceId)?.deviceName || ''} · ${getDeviceRow(it.deviceId)?.deviceNumber || ''}`"
                 >
                   <div class="scheduled-content">
-                    <span class="device-name">{{ it.orderId }}</span>
+                    <span class="device-name">{{ getDeviceRow(it.deviceId)?.deviceName || it.orderId }}</span>
                     <button
                       v-if="!it.isTentative"
                       class="remove-btn"
                       title="删除排程"
-                      @click.stop="emit('unschedule', it.cellKey, it.orderId)"
+                      @click.stop="emit('unschedule', it.cellKey, it.deviceId)"
                     >
                       <Icon icon="mdi:close" />
                     </button>
@@ -261,17 +297,17 @@ const handleGridDrop = (e: DragEvent) => {
                       v-else
                       class="remove-btn"
                       title="删除待排程"
-                      @click.stop="emit('unschedule-tentative', it.cellKey, it.orderId)"
+                      @click.stop="emit('unschedule-tentative', it.cellKey, it.deviceId)"
                     >
                       <Icon icon="mdi:close" />
                     </button>
                   </div>
                   <div class="scheduled-tag">
                     <template v-if="it.isTentative">待排程 · </template>{{ getWorkOrderById(it.orderId)?.customer }} ·
-                    {{ getWorkOrderById(it.orderId)?.deviceList?.[0]?.name }}
+                    {{ getDeviceRow(it.deviceId)?.deviceNumber || '' }}
                   </div>
-                  <div class="resize-handle-top" @mousedown.stop.prevent="emit('start-resize-top', it.orderId, $event)"></div>
-                  <div class="resize-handle" @mousedown.stop.prevent="emit('start-resize', it.orderId, $event)"></div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="emit('start-resize-top', it.deviceId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="emit('start-resize', it.deviceId, $event)"></div>
                 </div>
               </div>
 
@@ -296,19 +332,19 @@ const handleGridDrop = (e: DragEvent) => {
 
       <div class="control-center">
         <div class="control-center-left">
-          <template v-if="todayScheduledOrderIds.length">
+          <template v-if="selectedDeviceRows.length">
             <div class="selected-order">
               <Icon icon="mdi:check" class="selected-icon" />
-              <span class="selected-label">今日排程工单: {{ todayScheduledOrderIds.length }} 个</span>
+              <span class="selected-label">已选择测试产品: {{ selectedDeviceRows.length }} 个</span>
             </div>
             <span class="selected-divider">|</span>
-            <span class="selected-device" v-for="oid in todayScheduledOrderIds" :key="oid">
-              {{ oid }} · {{ getWorkOrderById(oid)?.customer }}
+            <span class="selected-device" v-for="r in selectedDeviceRows" :key="r.order.id + '_' + r.deviceNumber">
+              {{ r.order.id }} · {{ r.deviceName }}
             </span>
           </template>
-          <span v-else class="selected-placeholder">仅支持开始今日排程工单实验</span>
+          <span v-else class="selected-placeholder">请在日历中点击选择要开始试验的测试产品</span>
         </div>
-        <button class="primary-btn" :disabled="todayScheduledOrderIds.length === 0" @click="emit('start-scheduled-test')">
+        <button class="primary-btn" :disabled="selectedDeviceRows.length === 0" @click="emit('start-scheduled-test')">
           <Icon icon="mdi:play" class="start-icon" />开始实验
         </button>
       </div>

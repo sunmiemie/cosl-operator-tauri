@@ -10,11 +10,32 @@ export interface HighTempPressureOrderDTO {
   target_temp: number
   target_pressure: number
   applicant: string
+  use_device?: string
+  max_diameter?: number | null
+  hold_time?: number | null
+  admin_signature_url?: string | null
+  sanxin_confirm_date?: string | null
+  sanxin_tester_item_1?: string | null
+  sanxin_tester_item_2?: string | null
+  sanxin_is_sanxin?: boolean | number | null
+  instrument_count?: number
+  instrument_names?: string
+  instrument_sns?: string
+  test_types?: string
+  instruments?: HighTempPressureOrderInstrumentDTO[]
   remark: string
   status: number
   status_text?: string
   created_at: string
   updated_at: string
+}
+
+export interface HighTempPressureOrderInstrumentDTO {
+  instrument_name: string
+  instrument_sn: string
+  test_type?: string
+  quantity?: number
+  max_diameter?: number | null
 }
 
 export interface HighTempPressureOrderListResponse {
@@ -35,6 +56,11 @@ export interface ListHighTempPressureOrdersParams {
   status?: number | string
 }
 
+export interface MutationResponse {
+  code: number
+  msg?: string
+}
+
 export async function listHighTempPressureOrders(
   params: ListHighTempPressureOrdersParams,
   headers?: Record<string, string>
@@ -49,5 +75,16 @@ export async function listHighTempPressureOrders(
     '/test/high-temp-pressure/order/list/',
     headers,
     query
+  )
+}
+
+export async function startHighTempPressureOrder(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<MutationResponse>> {
+  return http.post<MutationResponse>(
+    `/test/high-temp-pressure/order/start/${orderId}/`,
+    {},
+    headers
   )
 }
