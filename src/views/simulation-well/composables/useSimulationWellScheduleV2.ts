@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 import { getSimulatedWellOrderDetail, listSimulatedWellOrders, type SimulatedWellOrderDTO } from '@/services/simulated-well-api'
+import { listSimulatedWellDownholeWorks } from '@/services/simulated-well-downhole-api'
 import type { CalendarDay, DownholeDevice, TimeSlot, UnscheduledDeviceRow, WorkOrder } from '../types'
 
 function getMonday(d: Date) {
@@ -43,28 +44,54 @@ export function useSimulationWellSchedule() {
 
   const workOrders = ref<WorkOrder[]>([])
 
+  const buildSavedDownholeDeviceIds = (items: any[]) => {
+    const set = new Set<string>()
+    ;(items || []).forEach((work) => {
+      const devices = Array.isArray(work?.devices) ? work.devices : []
+      devices.forEach((device: any) => {
+        const orderId = normalizeText(device?.orderId || device?.order_id || '')
+        const sn = normalizeText(device?.sn || device?.code || device?.device_number || '')
+        if (!orderId || !sn) return
+        set.add(`${orderId}::${sn}`)
+      })
+    })
+    return set
+  }
+
   const refreshWorkOrders = async () => {
     await initAuth()
-    const res = await listSimulatedWellOrders(
-      { page: 1, pageSize: 2000, status: 1, includeDevices: true },
-      getAuthHeaders()
-    )
-    if (!res.success) return
-    if (res.data?.code !== 0) return
+    const headers = getAuthHeaders()
+    const [orderRes, downholeRes] = await Promise.all([
+      listSimulatedWellOrders(
+        { page: 1, pageSize: 2000, status: 1, includeDevices: true },
+        headers
+      ),
+      listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000 }, headers)
+    ])
+    if (!orderRes.success) return
+    if (orderRes.data?.code !== 0) return
 
-    workOrders.value = (res.data.data?.list || []).map((dto) => {
+    const savedDownholeDeviceIds =
+      downholeRes.success && downholeRes.data?.code === 0
+        ? buildSavedDownholeDeviceIds(downholeRes.data.data?.list || [])
+        : new Set<string>()
+
+    workOrders.value = (orderRes.data.data?.list || []).map((dto) => {
       const orderId = dto.task_number
       const devices = dto.devices || []
+      const remainingDevices = devices.filter(
+        (d) => !savedDownholeDeviceIds.has(`${orderId}::${normalizeText(d.device_number)}`)
+      )
       return {
         id: orderId,
         dbId: dto.id,
         customer: normalizeText(dto.customer_unit) || '—',
-        devices: dto.device_count ?? devices.length ?? 0,
+        devices: remainingDevices.length,
         status: String(dto.status_text || dto.status || ''),
         createTime: toYmd(dto.created_at) || '',
         planTime: toYmd(dto.plan_date) || '',
         taskDesc: normalizeText(dto.task_desc) || '',
-        deviceList: devices.map((d) => ({
+        deviceList: remainingDevices.map((d) => ({
           id: `${orderId}::${d.device_number}`,
           name: normalizeText(d.device_name) || '—',
           sn: normalizeText(d.device_number) || '',
@@ -485,6 +512,30 @@ export function useSimulationWellSchedule() {
     selectedScheduledDeviceIds.value = Array.from(set)
   }
 
+  function consumeDevices(deviceIds: string[]) {
+    const consumed = new Set((deviceIds || []).filter(Boolean))
+    if (consumed.size === 0) return
+
+    workOrders.value = workOrders.value.map((order) => {
+      const nextDeviceList = (order.deviceList || []).filter((d) => !consumed.has(d.id))
+      return {
+        ...order,
+        devices: nextDeviceList.length,
+        deviceList: nextDeviceList
+      }
+    })
+
+    const nextScheduled = { ...scheduledEvents.value }
+    const nextTentative = { ...scheduledEventsTentative.value }
+    consumed.forEach((id) => {
+      delete nextScheduled[id]
+      delete nextTentative[id]
+    })
+    scheduledEvents.value = nextScheduled
+    scheduledEventsTentative.value = nextTentative
+    selectedScheduledDeviceIds.value = selectedScheduledDeviceIds.value.filter((id) => !consumed.has(id))
+  }
+
   const getEvent = (deviceId: string) => {
     const normal = scheduledEvents.value[deviceId]
     if (normal) return { ...normal, isTentative: false }
@@ -629,6 +680,7 @@ export function useSimulationWellSchedule() {
     handleUnschedule,
     handleUnscheduleTentative,
     handleSelectScheduledDevice,
+    consumeDevices,
     getWorkOrderById,
     getDeviceRow,
     startResize,

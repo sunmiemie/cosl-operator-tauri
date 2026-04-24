@@ -26,7 +26,9 @@ const list = ref<SimulatedWellDownholeWorkItem[]>([])
 const keyword = ref('')
 const createMode = ref(false)
 
-const formatTestEnv = (env: Record<string, any>) => {
+const formatTestEnv = (value: any) => {
+  if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  const env = value || {}
   const text = env?.text ?? env?.env_text
   if (text !== undefined && text !== null && `${text}`.trim() !== '') return String(text).trim()
   const depth = env?.wellDepth ?? env?.depth
@@ -39,7 +41,9 @@ const formatTestEnv = (env: Record<string, any>) => {
   return parts.length ? parts.join(' / ') : '-'
 }
 
-const formatInterval = (interval: Record<string, any>) => {
+const formatInterval = (value: any) => {
+  if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  const interval = value || {}
   const text = interval?.text ?? interval?.interval_text
   if (text !== undefined && text !== null && `${text}`.trim() !== '') return String(text).trim()
   const mainFrom = interval?.mainFrom
@@ -89,10 +93,21 @@ const openCreate = () => {
 const handleSave = async (payload: any) => {
   try {
     await initAuth()
+    const envText = [
+      payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
+      payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
+      payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+    const intervalText =
+      payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
+        ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
+        : ''
     const body = {
       well_name: payload?.wellName || '',
-      test_environment: payload?.testEnvironment || {},
-      test_interval: payload?.testInterval || {},
+      env_text: envText,
+      interval_text: intervalText,
       order_ids: payload?.orderIds || [],
       devices: payload?.devices || [],
       status: 0,
@@ -227,8 +242,8 @@ onMounted(() => {
               <tr v-for="row in list" :key="row.id">
                 <td class="cell-id">{{ row.work_no }}</td>
                 <td>{{ row.well_name || '-' }}</td>
-                <td>{{ formatTestEnv(row.test_environment) }}</td>
-                <td>{{ formatInterval(row.test_interval) }}</td>
+                <td>{{ formatTestEnv((row as any).env_text ?? (row as any).test_environment) }}</td>
+                <td>{{ formatInterval((row as any).interval_text ?? (row as any).test_interval) }}</td>
                 <td style="text-align: center">{{ row.device_count || 0 }}</td>
                 <td style="text-align: center">
                   <span :class="getStatusClass(row)">{{ getStatusLabel(row) }}</span>

@@ -203,7 +203,7 @@ const handleGridDrop = (e: DragEvent) => {
                     <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
                       <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                     </span>
-                    {{ (order.deviceList || []).length }}台
+                    {{ (order.deviceList || []).filter((x) => !scheduledDeviceIdSet.has(x.id)).length }}台
                   </td>
                   <td class="cell-plan">{{ order.planTime || '-' }}</td>
                   <td class="cell-desc">{{ order.taskDesc || '-' }}</td>
@@ -224,6 +224,12 @@ const handleGridDrop = (e: DragEvent) => {
                       >
                         <span>{{ d.name }}</span>
                         <span class="instrument-sn">{{ d.code || d.sn }}</span>
+                      </div>
+                      <div
+                        v-if="(order.deviceList || []).filter((x) => !scheduledDeviceIdSet.has(x.id)).length === 0"
+                        class="empty-state"
+                      >
+                        <p>当前无待排程设备</p>
                       </div>
                     </div>
                   </td>

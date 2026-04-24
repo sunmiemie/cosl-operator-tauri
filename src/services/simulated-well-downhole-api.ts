@@ -4,8 +4,10 @@ export interface SimulatedWellDownholeWorkItem {
   id: number
   work_no: string
   well_name: string
-  test_environment: Record<string, any>
-  test_interval: Record<string, any>
+  env_text: string
+  interval_text: string
+  order_ids?: string[]
+  devices?: any[]
   device_count: number
   status: number
   status_text?: string
@@ -52,12 +54,12 @@ export async function listSimulatedWellDownholeWorks(
 export interface CreateSimulatedWellDownholeWorkPayload {
   work_no?: string
   well_name: string
-  test_environment: Record<string, any>
-  test_interval: Record<string, any>
+  env_text?: string
+  interval_text?: string
   order_ids: string[]
   devices: any[]
   status?: number
-  extra?: Record<string, any>
+  report_count?: number
 }
 
 export interface CreateSimulatedWellDownholeWorkResponse {
@@ -82,6 +84,34 @@ export interface DeleteSimulatedWellDownholeWorkResponse {
   msg?: string
 }
 
+export interface SimulatedWellDownholeWorkDetailResponse {
+  code: number
+  data: SimulatedWellDownholeWorkItem
+  msg?: string
+}
+
+export async function getSimulatedWellDownholeWorkDetail(
+  id: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<SimulatedWellDownholeWorkDetailResponse>> {
+  return http.get<SimulatedWellDownholeWorkDetailResponse>(
+    `/test/simulated-well/downhole/detail/${id}/`,
+    headers
+  )
+}
+
+export async function updateSimulatedWellDownholeWork(
+  id: number,
+  payload: Partial<CreateSimulatedWellDownholeWorkPayload>,
+  headers?: Record<string, string>
+): Promise<ApiResponse<CreateSimulatedWellDownholeWorkResponse>> {
+  return http.put<CreateSimulatedWellDownholeWorkResponse>(
+    `/test/simulated-well/downhole/detail/${id}/`,
+    payload,
+    headers
+  )
+}
+
 export async function deleteSimulatedWellDownholeWork(
   id: number,
   headers?: Record<string, string>
@@ -91,4 +121,3 @@ export async function deleteSimulatedWellDownholeWork(
     headers
   )
 }
-

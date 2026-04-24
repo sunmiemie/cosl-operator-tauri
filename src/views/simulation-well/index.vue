@@ -163,25 +163,21 @@ async function handleViewOrderDetail(orderId: string) {
 async function handleSaveDownhole(payload: any) {
   try {
     await initAuth()
+    const envText = [
+      payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
+      payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
+      payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+    const intervalText =
+      payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
+        ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
+        : ''
     const body = {
       well_name: payload?.wellName || '',
-      test_environment: {
-        ...(payload?.testEnvironment || {}),
-        text: [
-          payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
-          payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
-          payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
-        ]
-          .filter(Boolean)
-          .join(' ')
-      },
-      test_interval: {
-        ...(payload?.testInterval || {}),
-        text:
-          payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
-            ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
-            : ''
-      },
+      env_text: envText,
+      interval_text: intervalText,
       order_ids: payload?.orderIds || [],
       devices: payload?.devices || [],
       status: 1,
@@ -197,6 +193,8 @@ async function handleSaveDownhole(payload: any) {
       ElMessage.error(res.data?.msg || '保存下井作业失败')
       return
     }
+    schedule.consumeDevices(schedule.selectedStartDeviceIds.value)
+    await schedule.refreshWorkOrders()
     ElMessage.success('下井作业已保存')
     router.replace({ path: '/simulation-well', query: { view: 'downhole-work' } })
   } catch (e) {
@@ -216,7 +214,11 @@ async function handleSaveDownhole(payload: any) {
           <p class="header-subtitle">模拟井测试系统</p>
         </div>
       </div>
-      <div class="header-right"></div>
+      <div class="header-right">
+        <button class="week-cal-nav" @click="router.replace({ path: '/simulation-well', query: { view: 'test-report' } })">
+          测试报告
+        </button>
+      </div>
     </div>
 
     <SimulationWellDashboard
