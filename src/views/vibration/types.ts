@@ -4,6 +4,7 @@ export interface WorkOrder {
   id: string
   dbId?: number
   type: string
+  mode: 'pre' | 'formal'
   applicant: string
   phone: string
   device: string

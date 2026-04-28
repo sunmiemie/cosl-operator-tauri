@@ -77,7 +77,7 @@ const {
 const currentWorkOrder = computed(() => currentWorkOrderSnapshot.value)
 
 const testMode = computed<'formal' | 'pre'>(() =>
-  forcedMode.value ? forcedMode.value : (currentWorkOrder.value?.type === '模拟实验' ? 'pre' : 'formal')
+  forcedMode.value ? forcedMode.value : (currentWorkOrder.value?.mode === 'pre' ? 'pre' : 'formal')
 )
 
 const testing = useVibrationTesting({
@@ -126,7 +126,10 @@ async function startExperiment() {
 
 function handleStartupCheckComplete() {
   showStartupCheck.value = false
-  stage.value = 'start'
+  stage.value = testMode.value === 'pre' ? 'testing' : 'start'
+  if (testMode.value === 'pre') {
+    testing.startVibTestMonitor()
+  }
 }
 
 function submitDevCheck() {
@@ -135,7 +138,10 @@ function submitDevCheck() {
     if (result.reason === 'has-no') showSafetyWarning.value = true
     return
   }
-  stage.value = 'start'
+  stage.value = testMode.value === 'pre' ? 'testing' : 'start'
+  if (testMode.value === 'pre') {
+    testing.startVibTestMonitor()
+  }
 }
 
 function continueAfterSafetyWarning() {
@@ -203,6 +209,13 @@ function confirmStartVibration() {
 function convertToFormal() {
   testing.pauseVibTest()
   forcedMode.value = 'formal'
+  if (currentWorkOrderSnapshot.value) {
+    currentWorkOrderSnapshot.value = {
+      ...currentWorkOrderSnapshot.value,
+      mode: 'formal',
+      type: '正式实验'
+    }
+  }
   devCheckItems.value.forEach(i => { i.answer = 'yes'; i.remark = '' })
   showSafetyWarning.value = false
   stage.value = 'devcheck'

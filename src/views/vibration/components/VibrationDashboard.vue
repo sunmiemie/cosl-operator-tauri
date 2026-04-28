@@ -192,7 +192,7 @@ const getScheduledStyle = (item: any) => {
                 <td class="cell-applicant">{{ order.applicant }}</td>
                 <td class="cell-param">{{ order.level }} / {{ order.duration }}分</td>
                 <td class="cell-type">
-                  <span class="type-tag" :class="order.type === '模拟实验' ? 'sim' : 'formal'">
+                  <span class="type-tag" :class="order.mode === 'pre' ? 'sim' : 'formal'">
                     {{ order.type }}
                   </span>
                 </td>
@@ -247,7 +247,7 @@ const getScheduledStyle = (item: any) => {
                   class="scheduled-item"
                   :class="[
                     { 'is-selected': selectedScheduledOrderIds.includes(it.orderId) },
-                    (getOrderById(it.orderId)?.type === '模拟实验' ? 'type-sim' : 'type-formal'),
+                    (getOrderById(it.orderId)?.mode === 'pre' ? 'type-sim' : 'type-formal'),
                     (isDragging ? 'is-dragging' : ''),
                     (isResizing && resizingOrderId === it.orderId ? 'is-resizing' : '')
                   ]"
@@ -322,7 +322,7 @@ const getScheduledStyle = (item: any) => {
 .scheduled-item.is-dragging { pointer-events: none; }
 .scheduled-item.is-resizing { transition: none !important; transform: none !important; }
 .scheduled-item.is-resizing:hover { transform: none !important; }
-.scheduled-item.type-sim.is-selected { background: linear-gradient(135deg, #f97316, #ea580c) !important; box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.35) !important; }
+.scheduled-item.type-sim.is-selected { background: linear-gradient(135deg, #facc15, #eab308) !important; box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.35) !important; }
 .scheduled-content { display: flex; align-items: flex-start; }
 .device-name { overflow: hidden; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .scheduled-tag { overflow: hidden; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
