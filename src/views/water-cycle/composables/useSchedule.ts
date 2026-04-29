@@ -3,9 +3,25 @@ import { listWaterCycleOrders, mapWaterCycleOrder, type WaterCycleOrder } from '
 // 如果需要引用 store 中的变量：
 // import { selectedOrder } from './useTestStore'
 
-export function useSchedule() {
+export type ScheduleChangePayload = {
+  orderId: string
+  dateStr: string
+  startTimeKey: string
+  endTimeKey: string
+  span: number
+  startAtHour: string
+  endAtHour: string
+  test_date: string
+  start_time: string
+  end_time: string
+}
+
+export type UseScheduleOptions = {
+  onScheduleChange?: (payload: ScheduleChangePayload, order?: WaterCycleOrder) => void | Promise<void>
+}
+
+export function useSchedule(options: UseScheduleOptions = {}) {
   // ============ 基础状态 ============
-  const userName = ref('Operator')
   const searchKeyword = ref('') // 待排程工单的搜索关键字
   
   const slotHeightPx = 44
@@ -118,7 +134,7 @@ export function useSchedule() {
   const weekLabel = computed(() => {
     if (!currentWeekDays.value.length) return ''
     const start = currentWeekDays.value[0]; const end = currentWeekDays.value[6]
-    //return `${start.month}月${start.dayNum}日 ～ ${end.month}月${end.dayNum}日`
+    return `${start.month}月${start.dayNum}日 ～ ${end.month}月${end.dayNum}日`
   })
 
   // 生成日历左侧的时间轴 (06:00 - 22:00，每小时一格)
@@ -140,6 +156,60 @@ export function useSchedule() {
     })
     return map
   })
+
+  const timeKeyToTimeString = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    const mm = timeKey.slice(2, 4)
+    if (!/^\d{2}$/.test(hh) || !/^\d{2}$/.test(mm)) return '00:00:00'
+    return `${hh}:${mm}:00`
+  }
+
+  const timeKeyToHour = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    if (!/^\d{2}$/.test(hh)) return ''
+    return hh
+  }
+
+  const timeKeyToLabel = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    const mm = timeKey.slice(2, 4)
+    if (!/^\d{2}$/.test(hh) || !/^\d{2}$/.test(mm)) return ''
+    return `${hh}:${mm}`
+  }
+
+  const getEndTimeKey = (startTimeKey: string, span: number) => {
+    const startIdx = timeKeyToIndex.value[startTimeKey]
+    if (startIdx === undefined) return ''
+    const endIdx = startIdx + Math.max(1, span)
+    return timeSlots.value[endIdx]?.key || ''
+  }
+
+  const getScheduleChangePayload = (orderId: string): ScheduleChangePayload | null => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return null
+    const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
+    if (!endTimeKey) return null
+    const startHh = timeKeyToHour(ev.startTimeKey)
+    const endHh = timeKeyToHour(endTimeKey)
+    return {
+      orderId: ev.orderId,
+      dateStr: ev.dateStr,
+      startTimeKey: ev.startTimeKey,
+      endTimeKey,
+      span: ev.span,
+      startAtHour: `${ev.dateStr} ${startHh}`,
+      endAtHour: `${ev.dateStr} ${endHh}`,
+      test_date: ev.dateStr,
+      start_time: timeKeyToTimeString(ev.startTimeKey),
+      end_time: timeKeyToTimeString(endTimeKey)
+    }
+  }
+
+  const getScheduleText = (orderId: string) => {
+    const p = getScheduleChangePayload(orderId)
+    if (!p) return ''
+    return p.startAtHour
+  }
 
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
@@ -316,6 +386,11 @@ export function useSchedule() {
       ...scheduledEvents.value,
       [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: 1 }
     }
+    selectedScheduledOrderIds.value = [orderId]
+    const payload = getScheduleChangePayload(orderId)
+    if (payload) {
+      void options.onScheduleChange?.(payload, getOrderById(orderId))
+    }
     if (isDragging.value) {
       isDragging.value = false
       draggedOrder.value = null
@@ -334,7 +409,7 @@ export function useSchedule() {
   }
 
   // 从日历中移除已排程的工单
-  function handleUnschedule(cellKey: string, orderId: string) {
+  function handleUnschedule(_cellKey: string, orderId: string) {
     const next = { ...scheduledEvents.value }
     delete next[orderId]
     scheduledEvents.value = next
@@ -403,6 +478,10 @@ export function useSchedule() {
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      const payload = getScheduleChangePayload(orderId)
+      if (payload) {
+        void options.onScheduleChange?.(payload, getOrderById(orderId))
+      }
       resizing.value = null
     }
 
@@ -430,6 +509,10 @@ export function useSchedule() {
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      const payload = getScheduleChangePayload(orderId)
+      if (payload) {
+        void options.onScheduleChange?.(payload, getOrderById(orderId))
+      }
       resizing.value = null
     }
 
@@ -449,6 +532,7 @@ export function useSchedule() {
     nextWeek: () => { calBase.value = addDays(calBase.value, 7) },
     loadPresetSchedule,
     getCellKey, handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop,
-    handleUnschedule, selectScheduledOrder, getEvent, startResize, startResizeTop, scheduledLayoutItems, maxLaneCount, scheduleOrder, resizingOrderId, isResizing
+    handleUnschedule, selectScheduledOrder, getEvent, startResize, startResizeTop, scheduledLayoutItems, maxLaneCount, scheduleOrder, resizingOrderId, isResizing,
+    getScheduleChangePayload, getScheduleText
   }
 }

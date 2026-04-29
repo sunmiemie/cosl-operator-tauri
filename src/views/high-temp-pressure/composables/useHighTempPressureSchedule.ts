@@ -224,6 +224,38 @@ export function useHighTempPressureSchedule() {
     return map
   })
 
+  const timeKeyToHour = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    if (!/^\d{2}$/.test(hh)) return ''
+    return hh
+  }
+
+  const getEndTimeKey = (startTimeKey: string, span: number) => {
+    const startIdx = timeKeyToIndex.value[startTimeKey]
+    if (startIdx === undefined) return ''
+    const endIdx = startIdx + Math.max(1, span)
+    return timeSlots.value[endIdx]?.key || ''
+  }
+
+  const getScheduleChangePayload = (instrumentId: string) => {
+    const ev = scheduledEvents.value[instrumentId]
+    if (!ev) return null
+    const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
+    if (!endTimeKey) return null
+    const startHh = timeKeyToHour(ev.startTimeKey)
+    const endHh = timeKeyToHour(endTimeKey)
+    if (!startHh || !endHh) return null
+    return {
+      instrumentId: ev.instrumentId,
+      dateStr: ev.dateStr,
+      startTimeKey: ev.startTimeKey,
+      endTimeKey,
+      span: ev.span,
+      startAtHour: `${ev.dateStr} ${startHh}`,
+      endAtHour: `${ev.dateStr} ${endHh}`,
+    }
+  }
+
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
     Object.values(scheduledEvents.value).forEach((ev) => {
@@ -448,6 +480,7 @@ export function useHighTempPressureSchedule() {
         span: Math.min(1, maxSpan),
       },
     }
+    selectedScheduledOrderIds.value = [instrumentId]
 
     if (isDragging.value) {
       isDragging.value = false
@@ -643,6 +676,7 @@ export function useHighTempPressureSchedule() {
     startResize,
     startResizeTop,
     isOrderFullyScheduled,
+    getScheduleChangePayload,
     resizingInstrumentId,
     isResizing,
   }

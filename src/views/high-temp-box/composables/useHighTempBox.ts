@@ -3,6 +3,8 @@ import { invoke } from '@tauri-apps/api/core'
 import * as echarts from 'echarts'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
+import { useAuth } from '@/composables/useAuth'
+import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import type { OcrRegion } from '@/types/ocr'
 import { listHighTempBoxOrders, mapHighTempBoxOrder, updateHighTempBoxOrder, type HighTempBoxOrder } from '@/services/high-temp-box-order-api'
 
@@ -28,6 +30,7 @@ interface TempHistoryPoint {
 }
 
 export function useHighTempBox() {
+  const { initAuth, getAuthHeaders } = useAuth()
   const STARTUP_GUIDE_STEPS = [
     { badge: '第一步', text: '接通冷水机电源，旋转"启动开关"至启动位置，确认指示灯亮起。', warning: null, images: ['/guide/step1.jpg'] },
     { badge: '第二步', text: '打开液压控制箱，检查并按下绿色的"ON"启动按钮。', warning: null, images: ['/guide/step2.jpg'] },
@@ -242,6 +245,38 @@ export function useHighTempBox() {
     return map
   })
 
+  const timeKeyToHour = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    if (!/^\d{2}$/.test(hh)) return ''
+    return hh
+  }
+
+  const getEndTimeKey = (startTimeKey: string, span: number) => {
+    const startIdx = timeKeyToIndex.value[startTimeKey]
+    if (startIdx === undefined) return ''
+    const endIdx = startIdx + Math.max(1, span)
+    return timeSlots.value[endIdx]?.key || ''
+  }
+
+  const getScheduleChangePayload = (orderId: string) => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return null
+    const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
+    if (!endTimeKey) return null
+    const startHh = timeKeyToHour(ev.startTimeKey)
+    const endHh = timeKeyToHour(endTimeKey)
+    if (!startHh || !endHh) return null
+    return {
+      orderId: ev.orderId,
+      dateStr: ev.dateStr,
+      startTimeKey: ev.startTimeKey,
+      endTimeKey,
+      span: ev.span,
+      startAtHour: `${ev.dateStr} ${startHh}`,
+      endAtHour: `${ev.dateStr} ${endHh}`,
+    }
+  }
+
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
     Object.values(scheduledEvents.value).forEach((ev) => {
@@ -411,6 +446,7 @@ export function useHighTempBox() {
       ...scheduledEvents.value,
       [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
     }
+    selectedScheduledOrder.value = orderId
     if (isDragging.value) {
       isDragging.value = false
       draggedOrderId.value = null
@@ -525,6 +561,37 @@ export function useHighTempBox() {
 
     const selected = selectedScheduledOrderInfo.value || (selectedScheduledOrder.value ? getOrderById(selectedScheduledOrder.value) : null)
     if (!selected) return
+    const scheduleInfo = getScheduleChangePayload(selected.id)
+    console.log('[high-temp-box schedule]', scheduleInfo ? `${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}` : '', scheduleInfo)
+    if (scheduleInfo) {
+      const ok = await initAuth()
+      if (!ok) {
+        const cont = confirm('未登录，无法推送第三方排期，是否仍继续开始实验？')
+        if (!cont) return
+      } else {
+        const headers = getAuthHeaders()
+        const testType = (await resolveEngineerAssistantTestTypeId('高温箱', headers)) || ''
+        if (testType) {
+          const equipmentId = String((selected as any).testPlatform || (selected as any).deviceNumber || (selected as any).deviceName || (selected as any).taskNumber || selected.id)
+          const testId = String((selected as any).dbId ?? selected.id)
+          const resp = await pushEngineerAssistantSchedules(
+            {
+              schedulesInfo: [
+                { testId, testType, equipmentId, startTime: scheduleInfo.startAtHour, endTime: scheduleInfo.endAtHour },
+              ],
+            },
+            headers
+          )
+          if (!resp.success || !resp.data || resp.data.code !== 0) {
+            const cont = confirm('推送第三方排期失败，是否仍继续开始实验？')
+            if (!cont) return
+          }
+        } else {
+          const cont = confirm('未匹配到第三方测试类型（高温箱），是否仍继续开始实验？')
+          if (!cont) return
+        }
+      }
+    }
 
     orderStatusMutating.value = true
     try {
@@ -1082,6 +1149,7 @@ export function useHighTempBox() {
     startResizeTop,
     resizingOrderId,
     isResizing,
+    getScheduleChangePayload,
     startExperiment,
     cancelExperiment,
     backToDashboard,

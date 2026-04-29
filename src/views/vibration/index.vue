@@ -9,6 +9,8 @@ import { useVibrationChecks } from './composables/useVibrationChecks'
 import { useVibrationTesting } from './composables/useVibrationTesting'
 import { useVibrationReport } from './composables/useVibrationReport'
 import { updateVibrationTableOrder } from '@/services/vibration-table-order-api'
+import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
+import { useAuth } from '@/composables/useAuth'
 import type { Stage, WorkOrder } from './types'
 
 const stage = ref<Stage>('dashboard')
@@ -53,7 +55,10 @@ const {
   isResizing,
   handleUnschedule,
   selectScheduledOrder,
+  getScheduleChangePayload,
 } = useVibrationSchedule()
+
+const { initAuth, getAuthHeaders } = useAuth()
 
 const {
   showStartupCheck,
@@ -104,6 +109,37 @@ async function startExperiment() {
 
   const selected = selectedScheduledOrders.value[0]
   if (!selected) return
+  const scheduleInfo = getScheduleChangePayload(selected.id)
+  console.log('[vibration schedule]', scheduleInfo ? `${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}` : '', scheduleInfo)
+  if (scheduleInfo) {
+    const ok = await initAuth()
+    if (!ok) {
+      const cont = confirm('未登录，无法推送第三方排期，是否仍继续开始实验？')
+      if (!cont) return
+    } else {
+      const headers = getAuthHeaders()
+      const testType = (await resolveEngineerAssistantTestTypeId('振动', headers)) || ''
+      if (testType) {
+        const equipmentId = String((selected as any).device || selected.id)
+        const testId = String((selected as any).dbId ?? selected.id)
+        const resp = await pushEngineerAssistantSchedules(
+          {
+            schedulesInfo: [
+              { testId, testType, equipmentId, startTime: scheduleInfo.startAtHour, endTime: scheduleInfo.endAtHour },
+            ],
+          },
+          headers
+        )
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          const cont = confirm('推送第三方排期失败，是否仍继续开始实验？')
+          if (!cont) return
+        }
+      } else {
+        const cont = confirm('未匹配到第三方测试类型（振动台），是否仍继续开始实验？')
+        if (!cont) return
+      }
+    }
+  }
 
   orderStatusMutating.value = true
   try {

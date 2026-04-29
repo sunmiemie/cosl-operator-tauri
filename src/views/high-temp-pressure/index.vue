@@ -12,6 +12,7 @@ import { useHighTempPressureSchedule } from './composables/useHighTempPressureSc
 import { useHighTempPressureStartupCheck } from './composables/useHighTempPressureStartupCheck'
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
 import { useAuth } from '@/composables/useAuth'
+import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
 
 const schedule = useHighTempPressureSchedule()
@@ -29,7 +30,7 @@ function backToStartupCheck() {
   startupCheck.openStartupCheck()
 }
 
-function handleStartScheduledTest() {
+async function handleStartScheduledTest() {
   if (schedule.selectedScheduledOrders.value.length === 0) {
     ElMessage.warning('请先在日历中选择已排程的仪器')
     return
@@ -38,6 +39,37 @@ function handleStartScheduledTest() {
   if (!current) {
     ElMessage.warning('未找到已选中的仪器')
     return
+  }
+  const scheduleInfo = schedule.getScheduleChangePayload(current.instrument.id)
+  console.log('[high-temp-pressure schedule]', scheduleInfo ? `${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}` : '', scheduleInfo)
+  if (scheduleInfo) {
+    const ok = await initAuth()
+    if (!ok) {
+      const cont = confirm('未登录，无法推送第三方排期，是否仍继续开始实验？')
+      if (!cont) return
+    } else {
+      const headers = getAuthHeaders()
+      const testType = (await resolveEngineerAssistantTestTypeId('高温高压井', headers)) || ''
+      if (testType) {
+        const equipmentId = String(current.instrument.id)
+        const testId = String(current.order.dbId ?? current.order.id)
+        const resp = await pushEngineerAssistantSchedules(
+          {
+            schedulesInfo: [
+              { testId, testType, equipmentId, startTime: scheduleInfo.startAtHour, endTime: scheduleInfo.endAtHour },
+            ],
+          },
+          headers
+        )
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          const cont = confirm('推送第三方排期失败，是否仍继续开始实验？')
+          if (!cont) return
+        }
+      } else {
+        const cont = confirm('未匹配到第三方测试类型（高温高压井），是否仍继续开始实验？')
+        if (!cont) return
+      }
+    }
   }
   startupCheck.openStartupCheck()
 }

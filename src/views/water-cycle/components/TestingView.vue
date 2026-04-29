@@ -135,8 +135,8 @@ async function loadCachedRoi() {
 async function saveAndExitRoiConfig() {
   isOcrConfigMode.value = false; activeRoiKey.value = null
   try { 
-    await invoke('write_cache', { cacheType: 'temp', id: 'wc-ocr-roi', content: JSON.stringify(roiRegions.value) }) 
-  } catch (e) { console.error('持久化写入缓存失败') }
+    await invoke('write_cache', { cacheType: 'temp', id: 'wc-ocr-roi', data: JSON.stringify(roiRegions.value) }) 
+  } catch (e) { console.error('持久化写入缓存失败:', e) }
   drawRoiOverlay()
 }
 

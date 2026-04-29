@@ -2,6 +2,8 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import { updateWaterCycleOrder } from '@/services/water-cycle-api'
+import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
+import { useAuth } from '@/composables/useAuth'
 
 // 跳出一层目录 (../) 找到逻辑层
 import { useSchedule } from '../composables/useSchedule'
@@ -10,12 +12,14 @@ import { currentView, selectedOrder } from '../composables/useTestStore'
 // 引入同级组件
 import StartupCheckModal from './StartupCheckModal.vue'
 
+const { initAuth, getAuthHeaders } = useAuth()
+
 // 引入抽象出的排程逻辑
 const {
   searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, loadPresetSchedule, getCellKey, getMonday,
   handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
-  workOrdersLoading, refreshWorkOrders
+  workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload
 } = useSchedule()
 
 const timeColWidth = 60
@@ -128,8 +132,40 @@ function gotoDate(e: Event) {
 }
 
 // 点击开始实验按钮
-function handleStartTest() {
+async function handleStartTest() {
   if (selectedScheduledOrders.value.length > 0) {
+    const o = selectedScheduledOrders.value[0]
+    const p = getScheduleChangePayload(o.id)
+    console.log('[water-cycle schedule]', p ? `${p.startAtHour} ~ ${p.endAtHour}` : '', p)
+    if (p) {
+      const ok = await initAuth()
+      if (!ok) {
+        const cont = confirm('未登录，无法推送第三方排期，是否仍继续开始实验？')
+        if (!cont) return
+      } else {
+        const headers = getAuthHeaders()
+        const testType = (await resolveEngineerAssistantTestTypeId('水循环', headers)) || ''
+        if (testType) {
+          const equipmentId = String((o as any).testPlatform || (o as any).deviceNumber || (o as any).deviceName || (o as any).taskNumber || o.id)
+          const testId = String((o as any).dbId ?? o.id)
+          const resp = await pushEngineerAssistantSchedules(
+            {
+              schedulesInfo: [
+                { testId, testType, equipmentId, startTime: p.startAtHour, endTime: p.endAtHour },
+              ],
+            },
+            headers
+          )
+          if (!resp.success || !resp.data || resp.data.code !== 0) {
+            const cont = confirm('推送第三方排期失败，是否仍继续开始实验？')
+            if (!cont) return
+          }
+        } else {
+          const cont = confirm('未匹配到第三方测试类型（水循环），是否仍继续开始实验？')
+          if (!cont) return
+        }
+      }
+    }
     // 将当前选中打算测试的工单存入全局状态，供后续页面使用
     selectedOrder.value = selectedScheduledOrders.value[0]
     showStartupCheck.value = true
@@ -243,7 +279,7 @@ async function onStartupComplete() {
                   }"
                   :style="getScheduledStyle(it)"
                   @click="selectScheduledOrder(it.orderId)"
-                :title="`${getOrderById(it.orderId)?.taskNumber || ''} · ${getOrderById(it.orderId)?.deviceName || ''}`"
+                :title="`${getOrderById(it.orderId)?.taskNumber || ''} · ${getOrderById(it.orderId)?.deviceName || ''} · ${getScheduleText(it.orderId)}`"
                 >
                   <div class="scheduled-content">
                     <span class="device-name">{{ getOrderById(it.orderId)?.taskNumber }}</span>

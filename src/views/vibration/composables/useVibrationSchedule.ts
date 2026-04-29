@@ -151,6 +151,38 @@ export function useVibrationSchedule() {
     return map
   })
 
+  const timeKeyToHour = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    if (!/^\d{2}$/.test(hh)) return ''
+    return hh
+  }
+
+  const getEndTimeKey = (startTimeKey: string, span: number) => {
+    const startIdx = timeKeyToIndex.value[startTimeKey]
+    if (startIdx === undefined) return ''
+    const endIdx = startIdx + Math.max(1, span)
+    return timeSlots.value[endIdx]?.key || ''
+  }
+
+  const getScheduleChangePayload = (orderId: string) => {
+    const ev = scheduledEvents.value[orderId]
+    if (!ev) return null
+    const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
+    if (!endTimeKey) return null
+    const startHh = timeKeyToHour(ev.startTimeKey)
+    const endHh = timeKeyToHour(endTimeKey)
+    if (!startHh || !endHh) return null
+    return {
+      orderId: ev.orderId,
+      dateStr: ev.dateStr,
+      startTimeKey: ev.startTimeKey,
+      endTimeKey,
+      span: ev.span,
+      startAtHour: `${ev.dateStr} ${startHh}`,
+      endAtHour: `${ev.dateStr} ${endHh}`,
+    }
+  }
+
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
     Object.values(scheduledEvents.value).forEach((ev) => {
@@ -320,6 +352,7 @@ export function useVibrationSchedule() {
       ...scheduledEvents.value,
       [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
     }
+    selectedScheduledOrderIds.value = [orderId]
     if (isDragging.value) {
       isDragging.value = false
       draggedOrder.value = null
@@ -472,6 +505,7 @@ export function useVibrationSchedule() {
     getEvent,
     startResize,
     startResizeTop,
+    getScheduleChangePayload,
     resizingOrderId,
     isResizing,
   }

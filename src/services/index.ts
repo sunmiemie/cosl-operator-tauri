@@ -40,6 +40,37 @@ export type {
   HistoryReportParams, 
 } from './report'
 
+export {
+  getEngineerAssistantUsers,
+  getEngineerAssistantTestTypes,
+  getEngineerAssistantTestStatuses,
+  getEngineerAssistantApplicationForms,
+  getEngineerAssistantApplicationFormDetail,
+  pushEngineerAssistantProcesses,
+  pushEngineerAssistantEquipment,
+  pushEngineerAssistantSchedules,
+  changeEngineerAssistantStatus,
+  pushEngineerAssistantReports,
+  resolveEngineerAssistantTestTypeId,
+  pushHighTempBoxScheduleToEngineerAssistant,
+  pushHighTempPressureScheduleToEngineerAssistant,
+  pushVibrationScheduleToEngineerAssistant,
+} from './engineer-assistant-api'
+
+export type {
+  EngineerAssistantUser,
+  EngineerAssistantTestType,
+  EngineerAssistantTestStatus,
+  EngineerAssistantApplicationForm,
+  EngineerAssistantScheduleInfo,
+  EngineerAssistantTimeRange,
+  PushEngineerAssistantProcessesBody,
+  PushEngineerAssistantEquipmentBody,
+  PushEngineerAssistantSchedulesBody,
+  ChangeEngineerAssistantStatusBody,
+  PushEngineerAssistantReportsBody,
+} from './engineer-assistant-api'
+
 // 工时统计服务
 export { 
   worktimeApi, 
