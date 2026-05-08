@@ -58,7 +58,7 @@ export interface AppConfig {
 const DEFAULT_LOCKER_PASSWORD = '25d55ad283aa400af464c76d713c07ad'
 
 const defaultConfig: AppConfig = {
-  backendUrl: 'http://localhost:8080',
+  backendUrl: 'http://127.0.0.1:8000',
   themeMode: ThemeMode.DARK,
   language: 'zh-CN',
   autoStart: false,
@@ -133,12 +133,18 @@ export async function initializeConfig(): Promise<AppConfig> {
       const flojoyPythonPath = await store.get<string>('flojoyPythonPath')
       const flojoyEnvInitialized = await store.get<boolean>('flojoyEnvInitialized')
 
-      // 检查是否需要写入默认值（首次启动）
+      // 检查是否需要写入默认值（首次启动）或迁移旧默认地址
       let needsSave = false
+      const correctBackendUrl = defaultConfig.backendUrl
+      const isOldDefaultUrl =
+        !backendUrl ||
+        backendUrl === 'http://localhost:8080' ||
+        backendUrl === 'http://127.0.0.1:8080' ||
+        backendUrl === 'http://localhost:60034'
 
-      // 基础配置
-      if (backendUrl === null || backendUrl === undefined) {
-        await store.set('backendUrl', defaultConfig.backendUrl)
+      // 基础配置：首次或旧默认地址 → 使用正确后端地址
+      if (backendUrl === null || backendUrl === undefined || isOldDefaultUrl) {
+        await store.set('backendUrl', correctBackendUrl)
         needsSave = true
       }
       if (themeMode === null || themeMode === undefined) {
@@ -211,12 +217,16 @@ export async function initializeConfig(): Promise<AppConfig> {
       // 保存默认配置到文件
       if (needsSave) {
         await store.save()
-        console.log('配置文件已创建，使用默认配置')
+        console.log('配置文件已创建或已迁移，使用默认配置')
       }
 
-      // 合并配置
+      // 合并配置（后端地址使用迁移后的正确值）
+      const resolvedBackendUrl =
+        backendUrl === null || backendUrl === undefined || isOldDefaultUrl
+          ? correctBackendUrl
+          : backendUrl
       config.value = {
-        backendUrl: backendUrl ?? defaultConfig.backendUrl,
+        backendUrl: resolvedBackendUrl,
         themeMode: themeMode ?? defaultConfig.themeMode,
         language: language ?? defaultConfig.language,
         autoStart: autoStart ?? defaultConfig.autoStart,

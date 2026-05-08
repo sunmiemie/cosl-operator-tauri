@@ -28,7 +28,7 @@ const statusClass = computed(() => {
 
 // 连接设置
 const showSettingsDialog = ref(false)
-const backendUrl = ref('http://localhost:8080')
+const backendUrl = ref('http://127.0.0.1:8000')
 const isSaving = ref(false)
 const saveSuccess = ref(false)
 const isTestingConnection = ref(false)
@@ -48,7 +48,7 @@ onMounted(async () => {
   isMaximized.value = await appWindow.isMaximized()
   
   // 加载后端地址配置
-  backendUrl.value = config.value.backendUrl || 'http://localhost:8080'
+  backendUrl.value = config.value.backendUrl || 'http://127.0.0.1:8000'
   
   // 启动连接状态检测
   startChecking()
@@ -76,7 +76,7 @@ async function closeWindow() {
 // 打开设置对话框（需要密码）
 function openSettingsDialog() {
   requirePassword(() => {
-    backendUrl.value = config.value.backendUrl || 'http://localhost:8080'
+    backendUrl.value = config.value.backendUrl || 'http://127.0.0.1:8000'
     showSettingsDialog.value = true
   })
 }
