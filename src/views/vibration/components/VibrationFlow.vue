@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import type { DevCheckItem, ReportFile, ShutdownCheckItem, Stage, WorkOrder } from '../types'
+import type {
+  DevCheckItem,
+  ReportFile,
+  ShutdownCheckItem,
+  Stage,
+  VibrationAnalysisSummary,
+  VibrationCaptureRecord,
+  WorkOrder,
+} from '../types'
 
 defineProps<{
   stage: Stage
@@ -17,11 +25,25 @@ defineProps<{
   vibDataCount: number
   formattedDuration: string
   isRunning: boolean
+  isPaused: boolean
   liveFileName: string
   liveAx: string
   liveAy: string
   liveAz: string
   testMode: 'formal' | 'pre'
+  videoReady: boolean
+  backendProcessingRequired: boolean
+  videoFileName: string
+  videoUrl: string
+  videoDurationText: string
+  sampleIntervalSeconds: number
+  captureStatusText: string
+  captureProgressPct: number
+  latestCaptureUrl: string
+  analysisCompleted: boolean
+  sessionStarted: boolean
+  analysisSummary: VibrationAnalysisSummary | null
+  analysisPreviewRecords: VibrationCaptureRecord[]
   reportProgress: number
   reportFiles: ReportFile[]
   fileGenRunning: boolean
@@ -37,6 +59,9 @@ const emit = defineEmits<{
   'go-prev-stage': []
   'go-next-stage': []
   'set-cal-step': [step: 'amp' | 'dur']
+  'select-video': []
+  'clear-video': []
+  'start-vib-test': []
   'pause-vib-test': []
   'resume-vib-test': []
   'open-abort-warning': []
@@ -174,21 +199,53 @@ const emit = defineEmits<{
         <div v-if="calStep === 'amp'" class="cal-layout">
           <div class="cal-main">
             <div class="cal-title">振级校验</div>
-            <div class="camera-feed-box">
-              <div class="scan-line-anim"></div>
-              <div class="cam-label">LIVE · 振动台主控界面采集</div>
+            <div class="video-upload-card">
+              <div class="video-upload-toolbar">
+                <button class="btn btn-primary" type="button" @click="emit('select-video')">
+                  <Icon icon="mdi:video-plus" />
+                  上传试验视频
+                </button>
+                <button v-if="videoReady" class="btn btn-secondary" type="button" @click="emit('clear-video')">清空视频</button>
+              </div>
+              <div v-if="videoReady" class="video-preview-shell">
+                <div v-if="backendProcessingRequired" class="upload-empty-state">
+                  <Icon icon="mdi:cog-transfer-outline" class="upload-empty-icon" />
+                  <div class="upload-empty-title">当前 `.wmv` 将由 Python 脚本实时处理</div>
+                  <div class="upload-empty-text">该文件无法在页面内直接预览，但点击开始图像采集后会自动切换为项目内 Python 脚本实时抽帧模式。</div>
+                </div>
+                <video v-else :src="videoUrl" class="video-preview" controls preload="metadata"></video>
+                <div class="video-meta-grid">
+                  <div class="meta-card">
+                    <span class="meta-label">视频文件</span>
+                    <span class="meta-value">{{ videoFileName }}</span>
+                  </div>
+                  <div class="meta-card">
+                    <span class="meta-label">视频时长</span>
+                    <span class="meta-value">{{ videoDurationText }}</span>
+                  </div>
+                  <div class="meta-card">
+                    <span class="meta-label">采样间隔</span>
+                    <span class="meta-value">{{ sampleIntervalSeconds }} 秒</span>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="upload-empty-state">
+                <Icon icon="mdi:file-video-outline" class="upload-empty-icon" />
+                <div class="upload-empty-title">上传振动台 `.wmv` 试验视频</div>
+                <div class="upload-empty-text">开始试验后通过 `.wmv` 录屏进行图像采集，系统会在测试阶段按固定时间间隔抽帧并输出实验数据。</div>
+              </div>
             </div>
             <div class="alert info mt-4">
               <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">请在振动台主控计算机上切换到振级输入界面，参照右侧工单信息正确设定振动量级参数，确认无误后点击下一步。</div>
+              <div class="alert-text">请上传本次振动试验 `.wmv` 录屏视频，并确认视频中包含振动台主控界面。进入测试阶段后系统会按固定间隔完成图像采集。</div>
             </div>
             <div class="alert warning mt-2">
               <Icon icon="mdi:alert" class="alert-icon" />
-              <div class="alert-text"><strong>重要：</strong>振级设置必须与工单信息完全一致，设置错误可能导致试件损坏或测试结果不准确。</div>
+              <div class="alert-text"><strong>重要：</strong>仅支持 `.wmv` 视频，且需完整覆盖试验过程并包含主要参数显示区域，否则会影响后续实验数据输出。</div>
             </div>
             <div class="btn-row mt-4">
               <button class="cancel-btn" @click="emit('go-prev-stage')">上一步</button>
-              <button class="next-btn" style="margin-top:auto; align-self:flex-end" @click="emit('set-cal-step', 'dur')">下一步：时长校验</button>
+              <button class="next-btn" :disabled="!videoReady" style="margin-top:auto; align-self:flex-end" @click="emit('set-cal-step', 'dur')">下一步：时长校验</button>
             </div>
           </div>
           <div class="cal-side">
@@ -220,13 +277,19 @@ const emit = defineEmits<{
         <div v-if="calStep === 'dur'" class="cal-layout">
           <div class="cal-main">
             <div class="cal-title">振动时长校验</div>
-            <div class="camera-feed-box">
-              <div class="scan-line-anim"></div>
-              <div class="cam-label">LIVE · 振动时长设置界面采集</div>
+            <div class="video-upload-card compact">
+              <div class="video-status-row">
+                <span class="status-pill" :class="videoReady ? 'done' : 'pending'">{{ videoReady ? '视频已就绪' : '未上传视频' }}</span>
+                <span class="video-status-text">{{ videoReady ? `${videoFileName} · ${videoDurationText}` : '请返回上一步上传 `.wmv` 试验视频' }}</span>
+              </div>
+              <div class="alert info no-margin">
+                <Icon icon="mdi:movie-open-play" class="alert-icon blue" />
+                <div class="alert-text">测试阶段将基于该视频进行图像抽帧，并输出采样记录、图像采集结果和实验汇总数据。</div>
+              </div>
             </div>
             <div class="alert info mt-4">
               <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">请在振动台主控计算机上切换到时长设置界面，参照工单信息正确设定振动时长，确认后点击完成校验。</div>
+              <div class="alert-text">请确认视频试验时长与工单要求一致，完成校验后进入测试阶段开始图像采集。</div>
             </div>
             <div class="alert warning mt-2">
               <Icon icon="mdi:alert" class="alert-icon" />
@@ -234,7 +297,7 @@ const emit = defineEmits<{
             </div>
             <div class="btn-row mt-4">
               <button class="cancel-btn" @click="emit('set-cal-step', 'amp')">上一步</button>
-              <button class="next-btn" @click="emit('go-next-stage')">完成校验，进入振动测试</button>
+              <button class="next-btn" :disabled="!videoReady" @click="emit('go-next-stage')">完成校验，进入振动测试</button>
             </div>
           </div>
           <div class="cal-side">
@@ -263,40 +326,46 @@ const emit = defineEmits<{
       <div v-else-if="stage === 'testing'" class="panel-card test-panel-full">
         <div class="status-grid">
           <div class="status-box">
-            <div class="status-header">⚡ 振动状态</div>
+            <div class="status-header">试验状态</div>
             <div class="status-row"><span class="label">振动量级</span><span class="value orange">{{ liveLevel }}</span></div>
             <div class="status-row mt-1"><span class="label">频率</span><span class="value cyan">{{ liveFreq }}</span></div>
           </div>
           <div class="status-box">
-            <div class="status-header">📡 采集状态</div>
+            <div class="status-header">图像采集</div>
             <div class="status-row"><span class="label">已采集</span><span class="value green">{{ vibDataCount }} 条</span></div>
-            <div class="status-row mt-1"><span class="label">测试时长</span><span class="value white">{{ formattedDuration }}</span></div>
+            <div class="status-row mt-1"><span class="label">历经时间</span><span class="value white">{{ formattedDuration }}</span></div>
           </div>
           <div class="status-box">
-            <div class="status-header">⏱ 系统状态</div>
-            <div class="status-row"><span class="label">测试状态</span><span class="badge" :class="isRunning ? 'badge-green' : 'badge-gray'">{{ isRunning ? '● 测试中' : '● 已暂停' }}</span></div>
-            <div class="file-info">📁 {{ liveFileName }}</div>
+            <div class="status-header">数据输出</div>
+            <div class="status-row"><span class="label">采集状态</span><span class="badge" :class="isRunning ? 'badge-green' : 'badge-gray'">{{ isRunning ? '● 采集中' : analysisCompleted ? '● 已完成' : '● 未开始' }}</span></div>
+            <div class="file-info">{{ liveFileName }}</div>
           </div>
         </div>
 
         <div class="test-layout">
           <div class="card chart-card">
             <div class="card-header">
-              <h3 class="card-title">📈 实时振动波形</h3>
-              <div class="chart-legend">
-                <span class="cyan">■ CH1 响应</span>
-                <span class="amber">■ CH2 驱动</span>
-              </div>
+              <h3 class="card-title">视频图像采集预览</h3>
+              <div class="chart-legend"><span class="cyan">{{ captureStatusText }}</span></div>
             </div>
             <div class="chart-body">
-              <canvas id="test-osc-canvas" style="width:100%;height:100%;display:block"></canvas>
-              <div class="camera-label">实时波形显示区域</div>
+              <img v-if="latestCaptureUrl" :src="latestCaptureUrl" class="capture-preview-image" alt="图像采集预览" />
+              <div v-else-if="videoReady && backendProcessingRequired" class="capture-empty-state">
+                <Icon icon="mdi:cog-transfer-outline" class="upload-empty-icon" />
+                <div>当前 `.wmv` 由 Python 脚本读取，开始采集后实时显示结果图</div>
+              </div>
+              <video v-else-if="videoReady" :src="videoUrl" class="capture-preview-image" controls preload="metadata"></video>
+              <div v-else class="capture-empty-state">
+                <Icon icon="mdi:file-video-outline" class="upload-empty-icon" />
+                <div>请先上传 `.wmv` 试验视频</div>
+              </div>
+              <div class="camera-label">图像采集进度 {{ captureProgressPct }}%</div>
             </div>
           </div>
 
           <div class="side-info">
             <div class="card">
-              <div class="card-header"><h3 class="card-title">📋 当前工单</h3></div>
+              <div class="card-header"><h3 class="card-title">当前工单</h3></div>
               <div class="info-body">
                 <div v-if="currentWorkOrder" class="wo-info">
                   <div>{{ currentWorkOrder.id }}</div>
@@ -306,12 +375,35 @@ const emit = defineEmits<{
               </div>
             </div>
             <div class="card">
-              <div class="card-header"><h3 class="card-title">📊 实时参数</h3></div>
+              <div class="card-header"><h3 class="card-title">采集概况</h3></div>
               <div class="info-body">
-                <div class="param-grid">
+                <div class="video-info-stack">
+                  <div class="info-line"><span>视频文件</span><strong>{{ videoFileName || '-' }}</strong></div>
+                  <div class="info-line"><span>视频时长</span><strong>{{ videoDurationText }}</strong></div>
+                  <div class="info-line"><span>采样间隔</span><strong>{{ sampleIntervalSeconds }} 秒</strong></div>
+                  <div class="info-line"><span>采集状态</span><strong>{{ captureStatusText }}</strong></div>
+                </div>
+                <div class="param-grid mt-3">
                   <div class="param-box"><div class="label">X轴加速度</div><div class="val red">{{ liveAx }}</div></div>
                   <div class="param-box"><div class="label">Y轴加速度</div><div class="val cyan">{{ liveAy }}</div></div>
                   <div class="param-box full"><div class="label">Z轴加速度</div><div class="val amber">{{ liveAz }}</div></div>
+                </div>
+              </div>
+            </div>
+            <div class="card" v-if="analysisSummary || analysisPreviewRecords.length">
+              <div class="card-header"><h3 class="card-title">实验数据预览</h3></div>
+              <div class="info-body">
+                <div v-if="analysisSummary" class="video-info-stack summary-stack">
+                  <div class="info-line"><span>采样记录</span><strong>{{ analysisSummary.recordCount }} 条</strong></div>
+                  <div class="info-line"><span>有效图像</span><strong>{{ analysisSummary.screenDetectedCount }} 张</strong></div>
+                  <div class="info-line"><span>平均响应</span><strong>{{ analysisSummary.avgResponse }}</strong></div>
+                  <div class="info-line"><span>最大驱动</span><strong>{{ analysisSummary.maxDrive }}</strong></div>
+                </div>
+                <div class="preview-record-list" v-if="analysisPreviewRecords.length">
+                  <div v-for="record in analysisPreviewRecords" :key="record.timeSec" class="preview-record-item">
+                    <span>{{ record.values.elapsedTime.raw }}</span>
+                    <strong>{{ record.values.response.raw }} {{ record.values.response.unit }}</strong>
+                  </div>
                 </div>
               </div>
             </div>
@@ -319,10 +411,12 @@ const emit = defineEmits<{
         </div>
 
         <div class="test-controls">
-          <button class="test-btn pause" v-if="isRunning" @click="emit('pause-vib-test')">⏸ 测试暂停</button>
-          <button class="test-btn pause" v-else @click="emit('resume-vib-test')">▶ 继续测试</button>
+          <button class="test-btn start" v-if="!sessionStarted" :disabled="!videoReady" @click="emit('start-vib-test')">开始图像采集</button>
+          <button class="test-btn pause" v-else-if="isRunning" @click="emit('pause-vib-test')">暂停采集</button>
+          <button class="test-btn pause" v-else-if="isPaused" @click="emit('resume-vib-test')">继续采集</button>
+          <button class="test-btn pause" v-else @click="emit('resume-vib-test')">{{ analysisCompleted ? '重新采集' : '开始图像采集' }}</button>
           <button class="test-btn stop" @click="emit('open-abort-warning')">⏹ 测试中止</button>
-          <button class="test-btn end" @click="emit('end-vib-test')">{{ testMode === 'pre' ? '预试验结束' : '测试结束' }}</button>
+          <button class="test-btn end" :disabled="!vibDataCount" @click="emit('end-vib-test')">{{ testMode === 'pre' ? '预试验结束' : '测试结束' }}</button>
           <button class="test-btn end" v-if="testMode === 'pre'" @click="emit('convert-to-formal')">转入正式工单</button>
         </div>
       </div>
@@ -336,7 +430,13 @@ const emit = defineEmits<{
           <div class="content-pad">
             <div class="alert info" style="margin-bottom:12px">
               <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">点击“生成文件”后将依次生成 CSV/PNG/DOC，占位文件会自动下载以便保存。</div>
+              <div class="alert-text">点击“生成文件”后将依次输出实验数据 CSV、图像采集结果 PNG 和测试报告 DOC，完成后自动进入关机检查。</div>
+            </div>
+            <div v-if="analysisSummary" class="report-summary-grid">
+              <div class="meta-card"><span class="meta-label">采样记录</span><span class="meta-value">{{ analysisSummary.recordCount }} 条</span></div>
+              <div class="meta-card"><span class="meta-label">有效图像</span><span class="meta-value">{{ analysisSummary.screenDetectedCount }} 张</span></div>
+              <div class="meta-card"><span class="meta-label">平均响应</span><span class="meta-value">{{ analysisSummary.avgResponse }}</span></div>
+              <div class="meta-card"><span class="meta-label">最大驱动</span><span class="meta-value">{{ analysisSummary.maxDrive }}</span></div>
             </div>
             <div class="kv" style="margin-top:8px">
               <div class="k">{{ reportFiles[0].name }}</div><div class="v">{{ reportFiles[0].status }}</div>
@@ -347,7 +447,6 @@ const emit = defineEmits<{
           <div class="modal-actions">
             <button class="cancel-btn" @click="emit('set-stage-testing')">返回测试</button>
             <button class="next-btn" :disabled="fileGenRunning" @click="emit('start-file-gen')">生成文件</button>
-            <button class="next-btn" :disabled="!allFilesDone" @click="emit('set-stage-shutdown')">下一步：关机检查</button>
           </div>
         </div>
       </div>

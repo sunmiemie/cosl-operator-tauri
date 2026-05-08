@@ -41,6 +41,7 @@ export function useSimulationWellSchedule() {
   const slotHeightPx = 44
   const isDragging = ref(false)
   const draggedDeviceId = ref<string | null>(null)
+  const draggedDeviceMeta = ref<{ id: string; label: string; sn: string } | null>(null)
 
   const workOrders = ref<WorkOrder[]>([])
 
@@ -114,6 +115,8 @@ export function useSimulationWellSchedule() {
   type ScheduledEvent = {
     deviceId: string
     orderId: string
+    deviceName: string
+    deviceNumber: string
     dateStr: string
     startTimeKey: string
     span: number
@@ -258,6 +261,8 @@ export function useSimulationWellSchedule() {
         out.push({
           deviceId: x.ev.deviceId,
           orderId: x.ev.orderId,
+          deviceName: x.ev.deviceName,
+          deviceNumber: x.ev.deviceNumber,
           dateStr,
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
@@ -429,17 +434,20 @@ export function useSimulationWellSchedule() {
 
   function loadPresetSchedule() {}
 
-  function handleDeviceDragStart(e: DragEvent, device: { id: string }) {
+  function handleDeviceDragStart(e: DragEvent, device: { id: string; label: string; sn: string }) {
     draggedDeviceId.value = device.id
+    draggedDeviceMeta.value = device
     isDragging.value = true
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', device.id)
+      e.dataTransfer.setData('application/json', JSON.stringify(device))
     }
   }
 
   function handleDragEnd() {
     draggedDeviceId.value = null
+    draggedDeviceMeta.value = null
     isDragging.value = false
   }
 
@@ -450,7 +458,14 @@ export function useSimulationWellSchedule() {
 
   function handleDragLeave() {}
 
-  function scheduleDevice(deviceId: string, dateStr: string, timeKey: string, isPast: boolean, isTentative: boolean) {
+  function scheduleDevice(
+    deviceId: string,
+    dateStr: string,
+    timeKey: string,
+    isPast: boolean,
+    isTentative: boolean,
+    meta?: { label?: string; sn?: string } | null
+  ) {
     if (isPast) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
@@ -464,6 +479,8 @@ export function useSimulationWellSchedule() {
     const nextEvent: ScheduledEvent = {
       deviceId,
       orderId: info.order.id,
+      deviceName: normalizeText(meta?.label) || info.deviceName,
+      deviceNumber: normalizeText(meta?.sn) || info.deviceNumber,
       dateStr,
       startTimeKey: timeKey,
       span: Math.min(1, maxSpan)
@@ -486,8 +503,20 @@ export function useSimulationWellSchedule() {
     e.preventDefault()
     const deviceId = e.dataTransfer?.getData('text/plain') || draggedDeviceId.value
     if (!deviceId) return
+    let meta = draggedDeviceMeta.value
+    const raw = e.dataTransfer?.getData('application/json')
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw)
+        meta = {
+          id: String(parsed?.id || deviceId),
+          label: String(parsed?.label || ''),
+          sn: String(parsed?.sn || '')
+        }
+      } catch {}
+    }
     const isTentative = !!(e && (e.shiftKey || (e as DragEvent & { altKey?: boolean }).altKey))
-    scheduleDevice(deviceId, dateStr, timeKey, isPast, isTentative)
+    scheduleDevice(deviceId, dateStr, timeKey, isPast, isTentative, meta)
   }
 
   function handleUnschedule(cellKey: string, deviceId: string) {
@@ -553,6 +582,8 @@ export function useSimulationWellSchedule() {
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
     const next = { deviceId, orderId: ev.orderId, dateStr: ev.dateStr, startTimeKey: ev.startTimeKey, span: nextSpan }
+    next.deviceName = ev.deviceName
+    next.deviceNumber = ev.deviceNumber
     if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [deviceId]: next }
     else scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: next }
   }
@@ -576,7 +607,15 @@ export function useSimulationWellSchedule() {
     if (!nextStartKey) return
     const maxSpan = Math.max(1, timeSlots.value.length - 1 - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
-    const next = { deviceId, orderId: ev.orderId, dateStr: ev.dateStr, startTimeKey: nextStartKey, span: nextSpan }
+    const next = {
+      deviceId,
+      orderId: ev.orderId,
+      deviceName: ev.deviceName,
+      deviceNumber: ev.deviceNumber,
+      dateStr: ev.dateStr,
+      startTimeKey: nextStartKey,
+      span: nextSpan
+    }
     if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [deviceId]: next }
     else scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: next }
   }

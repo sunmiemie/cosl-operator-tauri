@@ -46,6 +46,7 @@ export function useVibrationSchedule() {
     return {
       id: dto.order_no,
       dbId: dto.id,
+      deviceNumber: (dto as any).device_number || (dto as any).deviceNumber || '',
       type: mode === 'pre' ? '预实验' : '正式实验',
       mode,
       applicant: dto.applicant,
@@ -377,6 +378,11 @@ export function useVibrationSchedule() {
     }
   }
 
+  function removeScheduledOrder(orderId: string) {
+    if (!orderId) return
+    handleUnschedule('', orderId)
+  }
+
   function selectScheduledOrder(orderId: string) {
     const arr = selectedScheduledOrderIds.value
     selectedScheduledOrderIds.value = arr.includes(orderId) ? arr.filter(id => id !== orderId) : [...arr, orderId]
@@ -501,6 +507,7 @@ export function useVibrationSchedule() {
     handleDrop,
     scheduleOrder,
     handleUnschedule,
+    removeScheduledOrder,
     selectScheduledOrder,
     getEvent,
     startResize,

@@ -6,6 +6,8 @@ export type VibrationTableOrderDTO = {
   order_type: string
   applicant: string
   device_name: string
+  device_number?: string
+  deviceNumber?: string
   level: string
   duration: number
   test_date: string | null

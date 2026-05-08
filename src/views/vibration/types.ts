@@ -3,6 +3,7 @@ export type Stage = 'dashboard' | 'devcheck' | 'start' | 'calibration' | 'testin
 export interface WorkOrder {
   id: string
   dbId?: number
+  deviceNumber?: string
   type: string
   mode: 'pre' | 'formal'
   applicant: string
@@ -55,4 +56,35 @@ export interface ReportFile {
   name: string
   status: string
   done: boolean
+}
+
+export interface VibrationCaptureFieldValue {
+  raw: string
+  value: number | null
+  unit: string
+}
+
+export interface VibrationCaptureRecord {
+  timeSec: number
+  screenDetected: boolean
+  chartScreenshotUrl: string
+  values: {
+    target: VibrationCaptureFieldValue
+    level: VibrationCaptureFieldValue
+    response: VibrationCaptureFieldValue
+    drive: VibrationCaptureFieldValue
+    elapsedTime: VibrationCaptureFieldValue
+    remainingTime: VibrationCaptureFieldValue
+  }
+}
+
+export interface VibrationAnalysisSummary {
+  sourceVideoName: string
+  sampleIntervalSeconds: number
+  durationSeconds: number
+  recordCount: number
+  screenDetectedCount: number
+  avgResponse: number
+  maxDrive: number
+  lastElapsedTime: string
 }

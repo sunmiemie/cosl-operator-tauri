@@ -6,6 +6,7 @@ import type { ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '.
 
 const props = defineProps<{
   unscheduledOrders: WorkOrder[]
+  workOrdersLoading: boolean
   searchKeyword: string
   calBase: Date
   weekLabel: string
@@ -51,6 +52,7 @@ const emit = defineEmits<{
   'select-scheduled-order': [orderId: string]
   unschedule: [cellKey: string, orderId: string]
   'start-scheduled-test': []
+  'refresh': []
 }>()
 
 const detailVisible = ref(false)
@@ -166,7 +168,12 @@ const handleGridDrop = (e: DragEvent) => {
             <Icon icon="mdi:format-list-bulleted" class="header-icon" />
             <span>待测试工单</span>
           </div>
-          <span class="count-badge">{{ unscheduledOrders.length }}</span>
+          <div class="header-actions">
+            <button class="icon-btn" :disabled="workOrdersLoading" title="刷新" @click="emit('refresh')">
+              <Icon icon="mdi:refresh" />
+            </button>
+            <span class="count-badge">{{ unscheduledOrders.length }}</span>
+          </div>
         </div>
         <div class="search-box">
           <Icon icon="mdi:magnify" class="search-icon" />

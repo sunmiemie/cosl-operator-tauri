@@ -173,7 +173,7 @@ const handleGridDrop = (e: DragEvent) => {
         <input
           :value="searchKeyword"
           type="text"
-          placeholder="搜索工单号/客户/设备/描述"
+          placeholder="搜索工单号/客户/设备/测试工单内容"
           @input="emit('update:searchKeyword', ($event.target as HTMLInputElement).value)"
         />
         <button v-if="searchKeyword" class="clear-btn" @click="emit('update:searchKeyword', '')">
@@ -190,7 +190,7 @@ const handleGridDrop = (e: DragEvent) => {
                 <th>客户</th>
                 <th>设备</th>
                 <th>计划时间</th>
-                <th>描述</th>
+                <th>测试工单内容</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -287,10 +287,10 @@ const handleGridDrop = (e: DragEvent) => {
                   }"
                   :style="getScheduledStyle(it)"
                   @click="emit('select-scheduled-device', it.deviceId)"
-                  :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getDeviceRow(it.deviceId)?.deviceName || ''} · ${getDeviceRow(it.deviceId)?.deviceNumber || ''}`"
+                  :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getWorkOrderById(it.orderId)?.planTime || ''} · ${getWorkOrderById(it.orderId)?.taskDesc || ''}`"
                 >
                   <div class="scheduled-content">
-                    <span class="device-name">{{ getDeviceRow(it.deviceId)?.deviceName || it.orderId }}</span>
+                    <span class="device-name">{{ it.orderId }}</span>
                     <button
                       v-if="!it.isTentative"
                       class="remove-btn"
@@ -309,8 +309,8 @@ const handleGridDrop = (e: DragEvent) => {
                     </button>
                   </div>
                   <div class="scheduled-tag">
-                    <template v-if="it.isTentative">待排程 · </template>{{ getWorkOrderById(it.orderId)?.customer }} ·
-                    {{ getDeviceRow(it.deviceId)?.deviceNumber || '' }}
+                    <template v-if="it.isTentative">待排程 · </template>{{ getWorkOrderById(it.orderId)?.customer || '-' }} ·
+                    {{ getWorkOrderById(it.orderId)?.planTime || '-' }}
                   </div>
                   <div class="resize-handle-top" @mousedown.stop.prevent="emit('start-resize-top', it.deviceId, $event)"></div>
                   <div class="resize-handle" @mousedown.stop.prevent="emit('start-resize', it.deviceId, $event)"></div>

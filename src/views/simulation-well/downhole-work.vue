@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElDialog, ElMessage, ElMessageBox } from 'element-plus'
 import EquipmentPackage from './equipment-package.vue'
 import { useAuth } from '@/composables/useAuth'
 import {
   createSimulatedWellDownholeWork,
+  getSimulatedWellDownholeWorkDetail,
   deleteSimulatedWellDownholeWork,
   listSimulatedWellDownholeWorks,
   type SimulatedWellDownholeWorkItem
@@ -21,6 +22,9 @@ const loading = ref(false)
 const list = ref<SimulatedWellDownholeWorkItem[]>([])
 const keyword = ref('')
 const createMode = ref(false)
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detailRow = ref<SimulatedWellDownholeWorkItem | null>(null)
 
 const formatTestEnv = (value: any) => {
   if (typeof value === 'string' && value.trim() !== '') return value.trim()
@@ -158,8 +162,62 @@ const canDelete = (row: SimulatedWellDownholeWorkItem) => {
   return Number(n || 0) <= 0
 }
 
-const handleView = (row: SimulatedWellDownholeWorkItem) => {
-  ElMessage.info(`查看作业：${row.work_no}`)
+const normalizeTextList = (value: any): string[] => {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean)
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return []
+    try {
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item || '').trim()).filter(Boolean)
+    } catch {}
+    return text
+      .split(/[\n,，;；]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+const normalizeDeviceTools = (device: any) => {
+  const tools = device?.supportingTools ?? device?.support_tools ?? device?.match_instruments ?? []
+  if (!Array.isArray(tools)) return []
+  return tools
+    .map((item: any) => {
+      if (typeof item === 'string') return { code: '', zh: item.trim(), en: '' }
+      return {
+        code: String(item?.code || '').trim(),
+        zh: String(item?.zh || item?.nameCN || item?.name || '').trim(),
+        en: String(item?.en || item?.nameEN || '').trim()
+      }
+    })
+    .filter((item: any) => item.code || item.zh || item.en)
+}
+
+const detailOrderList = computed(() => normalizeTextList(detailRow.value?.order_ids))
+const detailDeviceList = computed(() => (Array.isArray(detailRow.value?.devices) ? detailRow.value?.devices : []))
+
+const handleView = async (row: SimulatedWellDownholeWorkItem) => {
+  detailVisible.value = true
+  detailLoading.value = true
+  detailRow.value = null
+  try {
+    await initAuth()
+    const res = await getSimulatedWellDownholeWorkDetail(row.id, getAuthHeaders())
+    if (!res.success) {
+      ElMessage.error(res.error || '获取下井作业详情失败')
+      detailVisible.value = false
+      return
+    }
+    if (res.data?.code !== 0) {
+      ElMessage.error(res.data?.msg || '获取下井作业详情失败')
+      detailVisible.value = false
+      return
+    }
+    detailRow.value = res.data.data || null
+  } finally {
+    detailLoading.value = false
+  }
 }
 
 const handleEdit = (row: SimulatedWellDownholeWorkItem) => {
@@ -251,7 +309,193 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <ElDialog v-model="detailVisible" title="下井作业详情" width="980px" destroy-on-close>
+      <div v-loading="detailLoading" class="downhole-detail">
+        <template v-if="detailRow">
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">作业ID</span>
+              <span class="detail-value">{{ detailRow.work_no || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">井名称</span>
+              <span class="detail-value">{{ detailRow.well_name || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">测试环境</span>
+              <span class="detail-value">{{ formatTestEnv((detailRow as any).env_text ?? (detailRow as any).test_environment) }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">测试井段</span>
+              <span class="detail-value">{{ formatInterval((detailRow as any).interval_text ?? (detailRow as any).test_interval) }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">状态</span>
+              <span class="detail-value">{{ getStatusLabel(detailRow) }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">报告数量</span>
+              <span class="detail-value">{{ formatReportCount(detailRow.report_count) }}</span>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-section-title">关联工单</div>
+            <div v-if="detailOrderList.length" class="detail-chip-list">
+              <span v-for="orderId in detailOrderList" :key="orderId" class="detail-chip">{{ orderId }}</span>
+            </div>
+            <div v-else class="detail-empty">暂无关联工单</div>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-section-title">测试产品</div>
+            <div v-if="detailDeviceList.length" class="detail-device-list">
+              <div v-for="(device, index) in detailDeviceList" :key="device?.id || `${device?.name}-${index}`" class="detail-device-card">
+                <div class="detail-device-head">
+                  <div class="detail-device-title">{{ device?.name || device?.label || '-' }}</div>
+                  <div class="detail-device-sn">{{ device?.sn || device?.code || '-' }}</div>
+                </div>
+                <div class="detail-device-meta">
+                  <span>模板编号：{{ device?.template || '-' }}</span>
+                  <span>模板名称：{{ device?.templateName || device?.template_name || '-' }}</span>
+                </div>
+                <div class="detail-device-tools">
+                  <span class="detail-sub-label">配接仪器</span>
+                  <div v-if="normalizeDeviceTools(device).length" class="detail-chip-list">
+                    <span
+                      v-for="tool in normalizeDeviceTools(device)"
+                      :key="`${tool.code}-${tool.zh}-${tool.en}`"
+                      class="detail-chip"
+                    >
+                      {{ [tool.code, tool.zh || tool.en].filter(Boolean).join(' ') }}
+                    </span>
+                  </div>
+                  <div v-else class="detail-empty">暂无配接仪器</div>
+                </div>
+              </div>
+            </div>
+            <div v-else class="detail-empty">暂无测试产品</div>
+          </div>
+        </template>
+        <div v-else class="detail-empty">暂无详情数据</div>
+      </div>
+    </ElDialog>
   </div>
 </template>
 
 <style scoped src="./components/simulation-well.shared.css"></style>
+<style scoped>
+.downhole-detail {
+  min-height: 220px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  margin-bottom: 18px;
+}
+
+.detail-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.detail-label {
+  min-width: 72px;
+  color: #64748b;
+}
+
+.detail-value {
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.detail-section {
+  margin-top: 18px;
+}
+
+.detail-section-title {
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.detail-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+}
+
+.detail-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-device-card {
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.detail-device-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.detail-device-title {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.detail-device-sn {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.detail-device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 10px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.detail-device-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-sub-label {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.detail-empty {
+  color: #94a3b8;
+  font-size: 13px;
+}
+</style>

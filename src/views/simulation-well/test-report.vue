@@ -62,6 +62,7 @@ const selectedOperation = ref<SimulatedWellDownholeWorkItem | null>(null)
 const selectedDevice = ref<ReportOperationDevice | null>(null)
 const selectedTemplate = ref<SimulatedWellReportTemplateDetail | null>(null)
 const templateCatalog = ref<SimulatedWellReportTemplateListItem[]>([])
+const templateDetails = ref<SimulatedWellReportTemplateDetail[]>([])
 const templateMessage = ref('')
 const previewReport = ref<(SimulatedWellReportItem & { meta: ReportMeta }) | null>(null)
 
@@ -80,6 +81,76 @@ function normalizeCode(value: unknown) {
   return String(value || '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
+}
+
+function normalizeText(value: unknown) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\u4E00-\u9FA5]/g, '')
+}
+
+function cleanTemplateText(value: unknown) {
+  return String(value || '')
+    .replace(/\|+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+type TemplateProduct = {
+  code: string
+  zh: string
+  en: string
+}
+
+function normalizeTemplateProduct(item: any): TemplateProduct {
+  if (typeof item === 'string') {
+    const text = cleanTemplateText(item)
+    const codeMatches = text.match(/[A-Z]{2,}\d+[A-Z0-9]*/g) || []
+    const code = codeMatches[0] || ''
+    const nextSameCodeIndex = code ? text.indexOf(code, text.indexOf(code) + code.length) : -1
+    if (code && nextSameCodeIndex > code.length) {
+      return {
+        code,
+        zh: text.slice(code.length, nextSameCodeIndex).trim(),
+        en: text.slice(nextSameCodeIndex + code.length).trim(),
+      }
+    }
+    const rest = code ? text.slice(text.indexOf(code) + code.length).trim() : text
+    const englishStart = rest.search(/[A-Za-z]/)
+    return {
+      code,
+      zh: englishStart >= 0 ? rest.slice(0, englishStart).trim() : rest,
+      en: englishStart >= 0 ? rest.slice(englishStart).trim() : '',
+    }
+  }
+
+  return {
+    code: cleanTemplateText(item?.code || ''),
+    zh: cleanTemplateText(item?.zh || item?.nameCN || item?.name || ''),
+    en: cleanTemplateText(item?.en || item?.nameEN || ''),
+  }
+}
+
+function mergeTemplateProductLists(...lists: any[][]): TemplateProduct[] {
+  const map = new Map<string, TemplateProduct>()
+  lists.forEach((list) => {
+    ;(Array.isArray(list) ? list : []).forEach((item) => {
+      const product = normalizeTemplateProduct(item)
+      const key = `${normalizeCode(product.code)}::${normalizeText(product.zh)}::${normalizeText(product.en)}`
+      if (!key || key === '::::') return
+      const prev = map.get(key)
+      map.set(key, {
+        code: product.code || prev?.code || '',
+        zh: product.zh || prev?.zh || '',
+        en: product.en || prev?.en || '',
+      })
+    })
+  })
+  return Array.from(map.values())
+}
+
+function templateKey(template: { report_no?: string; report_name?: string }) {
+  return `${normalizeCode(template.report_no)}::${normalizeText(template.report_name)}`
 }
 
 function reportDeviceKey(workNo: unknown, sn: unknown) {
@@ -112,16 +183,67 @@ function getCurrentUserName() {
   return userInfo.value?.nickName || userInfo.value?.username || '当前操作人'
 }
 
+function extractStructuredStringValue(text: string, key: string) {
+  const patterns = [
+    new RegExp(`["']${key}["']\\s*:\\s*["']([^"']+)["']`),
+    new RegExp(`${key}\\s*[:：]\\s*([^,}\\]]+)`),
+  ]
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match?.[1]) return cleanTemplateText(match[1])
+  }
+  return ''
+}
+
+function normalizeField(field: any) {
+  if (typeof field !== 'string') return field
+  const text = field.trim()
+  if (!text) return ''
+
+  if (
+    (text.startsWith('{') && text.endsWith('}')) ||
+    (text.startsWith('[') && text.endsWith(']'))
+  ) {
+    try {
+      return JSON.parse(text)
+    } catch {
+      try {
+        const repaired = text
+          .replace(/\bNone\b/g, 'null')
+          .replace(/\bTrue\b/g, 'true')
+          .replace(/\bFalse\b/g, 'false')
+          .replace(/'/g, '"')
+        return JSON.parse(repaired)
+      } catch {
+        const maybeObject: Record<string, any> = {}
+        ;['nameCN', 'name', 'label', 'zh', 'title', 'code', 'nameEN', 'en', 'titleEN', 'type'].forEach((key) => {
+          const value = extractStructuredStringValue(text, key)
+          if (value) maybeObject[key] = value
+        })
+        if (Object.keys(maybeObject).length) return maybeObject
+      }
+    }
+  }
+
+  return cleanTemplateText(text)
+}
+
 function getFieldLabel(field: any, fallback: string) {
-  return field?.nameCN || field?.name || field?.label || field?.zh || field?.title || field?.code || fallback
+  const normalized = normalizeField(field)
+  if (typeof normalized === 'string') return normalized || fallback
+  return normalized?.nameCN || normalized?.name || normalized?.label || normalized?.zh || normalized?.title || normalized?.code || fallback
 }
 
 function getFieldLabelEn(field: any) {
-  return field?.nameEN || field?.en || field?.titleEN || ''
+  const normalized = normalizeField(field)
+  if (typeof normalized === 'string') return ''
+  return normalized?.nameEN || normalized?.en || normalized?.titleEN || ''
 }
 
 function getFieldType(field: any) {
-  return field?.type || 'radio'
+  const normalized = normalizeField(field)
+  if (typeof normalized === 'string') return 'radio'
+  return normalized?.type || 'radio'
 }
 
 function fieldKey(prefix: string, index: number, suffix = '') {
@@ -301,7 +423,7 @@ async function fetchOperations() {
 }
 
 async function ensureTemplateCatalog() {
-  if (templateCatalog.value.length > 0) return
+  if (templateCatalog.value.length > 0 && templateDetails.value.length > 0) return
   await initAuth()
   const res = await listSimulatedWellReportTemplates(
     { currentPage: 1, pageSize: 500 },
@@ -309,61 +431,135 @@ async function ensureTemplateCatalog() {
   )
   if (!res.success || res.data?.code !== 0) return
   templateCatalog.value = res.data.data?.list || []
+
+  const detailResults = await Promise.allSettled(
+    templateCatalog.value.map((item) => getSimulatedWellReportTemplateDetail(item.id, getAuthHeaders()))
+  )
+  templateDetails.value = detailResults
+    .map((result) => (result.status === 'fulfilled' ? result.value : null))
+    .filter((res): res is NonNullable<typeof res> => !!res && res.success && res.data?.code === 0)
+    .map((res) => res.data.data)
 }
 
-function getFallbackTemplate(templateCodeValue: string): SimulatedWellReportTemplateDetail | null {
-  const normalized = normalizeCode(templateCodeValue)
-  const item = (extractedFields as any[]).find((entry) => {
-    const refNo = normalizeCode(entry?.tableRefNo)
-    const fileName = normalizeCode(entry?.fileName)
-    return refNo === normalized || fileName.includes(normalized)
-  })
-  if (!item) return null
-  return {
-    id: 0,
-    report_no: item.tableRefNo || templateCodeValue,
-    report_name: item.fileName?.replace(/\.docx$/i, '') || templateCodeValue,
+const fallbackTemplateDetails = computed<SimulatedWellReportTemplateDetail[]>(() =>
+  ((extractedFields as any[]) || []).map((item, index) => ({
+    id: -(index + 1),
+    report_no: item.tableRefNo || item.fileName || `LOCAL_TEMPLATE_${index + 1}`,
+    report_name: item.fileName?.replace(/\.docx$/i, '') || item.tableRefNo || `本地模板${index + 1}`,
     test_products: item.testProducts || [],
     match_instruments: item.supportingTools || [],
     test_items: item.testItems || [],
     evaluation_standards: item.evaluations || [],
-    updated_at: ''
-  }
+    updated_at: '',
+  }))
+)
+
+const templateLibrary = computed<SimulatedWellReportTemplateDetail[]>(() => {
+  const map = new Map<string, SimulatedWellReportTemplateDetail>()
+
+  templateDetails.value.forEach((item) => {
+    map.set(templateKey(item), {
+      ...item,
+      test_products: mergeTemplateProductLists(item.test_products as any[]),
+    })
+  })
+
+  fallbackTemplateDetails.value.forEach((item) => {
+    const key = templateKey(item)
+    const normalizedItem = {
+      ...item,
+      test_products: mergeTemplateProductLists(item.test_products as any[]),
+    }
+    if (!map.has(key)) {
+      map.set(key, normalizedItem)
+      return
+    }
+    const existing = map.get(key)!
+    map.set(key, {
+      ...existing,
+      report_name: existing.report_name || normalizedItem.report_name,
+      test_products: mergeTemplateProductLists(existing.test_products as any[], normalizedItem.test_products as any[]),
+      test_items: Array.isArray(existing.test_items) && existing.test_items.length ? existing.test_items : normalizedItem.test_items,
+      evaluation_standards:
+        Array.isArray(existing.evaluation_standards) && existing.evaluation_standards.length
+          ? existing.evaluation_standards
+          : normalizedItem.evaluation_standards,
+    })
+  })
+
+  return Array.from(map.values())
+})
+
+function getTemplateMatchScore(deviceName: string, product: any) {
+  const normalizedProduct = normalizeTemplateProduct(product)
+  const deviceNameNorm = normalizeText(deviceName)
+  const deviceCodeNorm = normalizeCode(deviceName)
+  const productCodeNorm = normalizeCode(normalizedProduct.code)
+  const productZhNorm = normalizeText(normalizedProduct.zh)
+  const productEnNorm = normalizeText(normalizedProduct.en)
+
+  let score = 0
+  if (productCodeNorm && deviceCodeNorm.includes(productCodeNorm)) score = Math.max(score, 100)
+  if (productZhNorm && (deviceNameNorm.includes(productZhNorm) || productZhNorm.includes(deviceNameNorm))) score = Math.max(score, 80)
+  if (productEnNorm && (deviceNameNorm.includes(productEnNorm) || productEnNorm.includes(deviceNameNorm))) score = Math.max(score, 70)
+
+  const mergedNameNorm = normalizeText(`${normalizedProduct.code}${normalizedProduct.zh}${normalizedProduct.en}`)
+  if (mergedNameNorm && deviceNameNorm.includes(mergedNameNorm)) score = Math.max(score, 90)
+  return score
 }
 
-async function loadTemplate(templateCodeValue: string) {
+function findMatchedTemplateByProduct(deviceName: string) {
+  let bestMatch: SimulatedWellReportTemplateDetail | null = null
+  let bestScore = 0
+
+  templateLibrary.value.forEach((template) => {
+    const products = Array.isArray(template.test_products) ? template.test_products : []
+    products.forEach((product) => {
+      const score = getTemplateMatchScore(deviceName, product)
+      if (score > bestScore) {
+        bestScore = score
+        bestMatch = template
+      }
+    })
+  })
+
+  return bestScore > 0 ? bestMatch : null
+}
+
+function findMatchedTemplateByCode(templateCodeValue: string) {
+  const normalized = normalizeCode(templateCodeValue)
+  if (!normalized) return null
+  return (
+    templateLibrary.value.find(
+      (item) =>
+        normalizeCode(item.report_no) === normalized ||
+        normalizeCode(item.report_name).includes(normalized)
+    ) || null
+  )
+}
+
+async function loadTemplate(device: ReportOperationDevice) {
   selectedTemplate.value = null
   templateMessage.value = ''
-  if (!templateCodeValue) {
-    templateMessage.value = '当前设备未关联报告模板，将使用基础报告表单。'
-    return
-  }
 
   templateLoading.value = true
   try {
     await ensureTemplateCatalog()
-    const normalized = normalizeCode(templateCodeValue)
-    const match = templateCatalog.value.find(
-      (item) =>
-        normalizeCode(item.report_no) === normalized ||
-        normalizeCode(item.report_name).includes(normalized)
-    )
-    if (match) {
-      const detailRes = await getSimulatedWellReportTemplateDetail(match.id, getAuthHeaders())
-      if (detailRes.success && detailRes.data?.code === 0) {
-        selectedTemplate.value = detailRes.data.data
-        return
-      }
-    }
 
-    const fallback = getFallbackTemplate(templateCodeValue)
-    if (fallback) {
-      selectedTemplate.value = fallback
-      templateMessage.value = '模板详情未在后台配置，已使用本地解析数据回显。'
+    const matchByProduct = findMatchedTemplateByProduct(device.deviceName)
+    if (matchByProduct) {
+      selectedTemplate.value = matchByProduct
       return
     }
 
-    templateMessage.value = '未找到对应模板，将使用基础报告表单。'
+    const matchByCode = findMatchedTemplateByCode(device.template)
+    if (matchByCode) {
+      selectedTemplate.value = matchByCode
+      templateMessage.value = '未按测试产品匹配到模板，已按模板编号回退匹配。'
+      return
+    }
+
+    templateMessage.value = '未找到与当前测试产品对应的报告模板，将使用基础报告表单。'
   } finally {
     templateLoading.value = false
   }
@@ -394,7 +590,7 @@ function pickOperation(work: SimulatedWellDownholeWorkItem) {
 async function pickDevice(device: ReportOperationDevice) {
   selectedDevice.value = device
   resetReportForm()
-  await loadTemplate(device.template)
+  await loadTemplate(device)
   mode.value = 'add-report'
 }
 

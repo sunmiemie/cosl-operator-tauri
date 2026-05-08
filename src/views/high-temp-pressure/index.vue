@@ -152,6 +152,7 @@ onMounted(async () => {
       <DashboardPanel
         v-if="testing.currentPanel.value === 'dashboard'"
         :unscheduled-orders="schedule.unscheduledOrders.value"
+        :work-orders-loading="schedule.workOrdersLoading.value"
         :search-keyword="schedule.searchKeyword.value"
         :cal-base="schedule.calBase.value"
         :week-label="schedule.weekLabel.value"
@@ -185,6 +186,7 @@ onMounted(async () => {
         @select-scheduled-order="schedule.handleSelectScheduledOrder"
         @unschedule="schedule.handleUnschedule"
         @start-scheduled-test="handleStartScheduledTest"
+        @refresh="schedule.refreshWorkOrders"
       />
 
       <StartPanel

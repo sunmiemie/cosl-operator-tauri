@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
+import { useAuth } from '@/composables/useAuth'
+import {
+  getSimulatedWellReportTemplateDetail,
+  listSimulatedWellReportTemplates,
+  type SimulatedWellReportTemplateDetail,
+} from '@/services/simulated-well-report-template-api'
+import extractedFields from './extracted_fields.json'
 
 const props = defineProps<{
   todayScheduledOrders: any[]
@@ -8,6 +15,250 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits(['back', 'save'])
+const { initAuth, getAuthHeaders } = useAuth()
+
+type TemplateInstrument = {
+  code: string
+  zh: string
+  en: string
+}
+
+type ResolvedTemplateMeta = {
+  templateCode: string
+  templateName: string
+  supportTools: TemplateInstrument[]
+}
+
+type ResolvedDeviceRow = {
+  id: string
+  name: string
+  sn: string
+  code: string
+  template: string
+  templateName: string
+  supportTools: TemplateInstrument[]
+}
+
+const templateLoading = ref(false)
+const templateLoadMessage = ref('')
+const templateDetails = ref<SimulatedWellReportTemplateDetail[]>([])
+const selectedSupportToolMap = ref<Record<string, boolean>>({})
+
+function normalizeCode(value: unknown) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+}
+
+function normalizeText(value: unknown) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\u4E00-\u9FA5]/g, '')
+}
+
+function cleanTemplateText(value: unknown) {
+  return String(value || '')
+    .replace(/\|+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function templateKey(template: { report_no?: string; report_name?: string }) {
+  return `${normalizeCode(template.report_no)}::${normalizeText(template.report_name)}`
+}
+
+function parseTemplateStringItem(value: unknown): TemplateInstrument {
+  const text = cleanTemplateText(value)
+  if (!text) return { code: '', zh: '', en: '' }
+
+  const codeMatches = text.match(/[A-Z]{2,}\d+[A-Z0-9]*/g) || []
+  const code = codeMatches[0] || ''
+  const nextSameCodeIndex = code ? text.indexOf(code, text.indexOf(code) + code.length) : -1
+
+  if (code && nextSameCodeIndex > code.length) {
+    return {
+      code,
+      zh: text.slice(code.length, nextSameCodeIndex).trim(),
+      en: text.slice(nextSameCodeIndex + code.length).trim(),
+    }
+  }
+
+  if (code) {
+    const rest = text.slice(text.indexOf(code) + code.length).trim()
+    const englishStart = rest.search(/[A-Za-z]/)
+    if (englishStart >= 0) {
+      return {
+        code,
+        zh: rest.slice(0, englishStart).trim(),
+        en: rest.slice(englishStart).trim(),
+      }
+    }
+    return { code, zh: rest, en: '' }
+  }
+
+  return { code: '', zh: text, en: '' }
+}
+
+function normalizeInstrument(item: any): TemplateInstrument {
+  if (typeof item === 'string') {
+    return parseTemplateStringItem(item)
+  }
+  return {
+    code: cleanTemplateText(item?.code || ''),
+    zh: cleanTemplateText(item?.zh || item?.nameCN || item?.name || ''),
+    en: cleanTemplateText(item?.en || item?.nameEN || ''),
+  }
+}
+
+function mergeInstrumentLists(...lists: any[][]): TemplateInstrument[] {
+  const map = new Map<string, TemplateInstrument>()
+  lists.forEach((list) => {
+    ;(Array.isArray(list) ? list : []).forEach((item) => {
+      const normalized = normalizeInstrument(item)
+      const key = `${normalizeCode(normalized.code)}::${normalizeText(normalized.zh)}::${normalizeText(normalized.en)}`
+      if (!key || key === '::::') return
+      const prev = map.get(key)
+      map.set(key, {
+        code: normalized.code || prev?.code || '',
+        zh: normalized.zh || prev?.zh || '',
+        en: normalized.en || prev?.en || '',
+      })
+    })
+  })
+  return Array.from(map.values())
+}
+
+const fallbackTemplateDetails = computed<SimulatedWellReportTemplateDetail[]>(() => {
+  return ((extractedFields as any[]) || []).map((item, index) => ({
+    id: -(index + 1),
+    report_no: String(item?.tableRefNo || item?.fileName || `LOCAL_TEMPLATE_${index + 1}`),
+    report_name: String(item?.fileName || item?.tableRefNo || `本地模板${index + 1}`).replace(/\.docx$/i, ''),
+    test_products: Array.isArray(item?.testProducts) ? item.testProducts : [],
+    match_instruments: Array.isArray(item?.supportingTools) ? item.supportingTools : [],
+    test_items: Array.isArray(item?.testItems) ? item.testItems : [],
+    evaluation_standards: Array.isArray(item?.evaluations) ? item.evaluations : [],
+    updated_at: '',
+  }))
+})
+
+const templateLibrary = computed<SimulatedWellReportTemplateDetail[]>(() => {
+  const map = new Map<string, SimulatedWellReportTemplateDetail>()
+  templateDetails.value.forEach((item) =>
+    map.set(templateKey(item), {
+      ...item,
+      test_products: mergeInstrumentLists(item.test_products as any[]),
+      match_instruments: mergeInstrumentLists(item.match_instruments as any[]),
+    }),
+  )
+  fallbackTemplateDetails.value.forEach((item) => {
+    const key = templateKey(item)
+    if (!map.has(key)) {
+      map.set(key, {
+        ...item,
+        test_products: mergeInstrumentLists(item.test_products as any[]),
+        match_instruments: mergeInstrumentLists(item.match_instruments as any[]),
+      })
+      return
+    }
+    const existing = map.get(key)!
+    map.set(key, {
+      ...existing,
+      report_name: existing.report_name || item.report_name,
+      test_products: mergeInstrumentLists(existing.test_products as any[], item.test_products as any[]),
+      match_instruments: mergeInstrumentLists(existing.match_instruments as any[], item.match_instruments as any[]),
+    })
+  })
+  return Array.from(map.values())
+})
+
+function getTemplateMatchScore(deviceName: string, product: any) {
+  const normalizedProduct = normalizeInstrument(product)
+  const deviceNameNorm = normalizeText(deviceName)
+  const deviceCodeNorm = normalizeCode(deviceName)
+  const productCodeNorm = normalizeCode(normalizedProduct.code)
+  const productZhNorm = normalizeText(normalizedProduct.zh)
+  const productEnNorm = normalizeText(normalizedProduct.en)
+
+  let score = 0
+  if (productCodeNorm && deviceCodeNorm.includes(productCodeNorm)) score = Math.max(score, 100)
+  if (productZhNorm && (deviceNameNorm.includes(productZhNorm) || productZhNorm.includes(deviceNameNorm))) score = Math.max(score, 80)
+  if (productEnNorm && (deviceNameNorm.includes(productEnNorm) || productEnNorm.includes(deviceNameNorm))) score = Math.max(score, 70)
+
+  const mergedNameNorm = normalizeText(`${normalizedProduct.code}${normalizedProduct.zh}${normalizedProduct.en}`)
+  if (mergedNameNorm && deviceNameNorm.includes(mergedNameNorm)) score = Math.max(score, 90)
+  return score
+}
+
+function findMatchedTemplate(deviceName: string): SimulatedWellReportTemplateDetail | null {
+  let bestMatch: SimulatedWellReportTemplateDetail | null = null
+  let bestScore = 0
+
+  templateLibrary.value.forEach((template) => {
+    const products = Array.isArray(template.test_products) ? template.test_products : []
+    products.forEach((product) => {
+      const score = getTemplateMatchScore(deviceName, product)
+      if (score > bestScore) {
+        bestScore = score
+        bestMatch = template
+      }
+    })
+  })
+
+  return bestScore > 0 ? bestMatch : null
+}
+
+function resolveTemplateMeta(deviceName: string, fallbackTemplate?: string): ResolvedTemplateMeta {
+  const matchedTemplate = findMatchedTemplate(deviceName)
+  if (!matchedTemplate) {
+    return {
+      templateCode: fallbackTemplate || 'DEFAULT_DOWNHOLE_REPORT',
+      templateName: '',
+      supportTools: [],
+    }
+  }
+
+  return {
+    templateCode: matchedTemplate.report_no || fallbackTemplate || 'DEFAULT_DOWNHOLE_REPORT',
+    templateName: matchedTemplate.report_name || '',
+    supportTools: mergeInstrumentLists(matchedTemplate.match_instruments as any[]),
+  }
+}
+
+async function loadTemplateLibrary() {
+  if (templateLoading.value) return
+  templateLoading.value = true
+  templateLoadMessage.value = ''
+  try {
+    await initAuth()
+    const catalogRes = await listSimulatedWellReportTemplates(
+      { currentPage: 1, pageSize: 500 },
+      getAuthHeaders(),
+    )
+
+    if (!catalogRes.success || catalogRes.data?.code !== 0) {
+      templateLoadMessage.value = '后台模板获取失败，已使用本地模板信息匹配。'
+      return
+    }
+
+    const catalog = catalogRes.data.data?.list || []
+    const detailResults = await Promise.allSettled(
+      catalog.map((item) => getSimulatedWellReportTemplateDetail(item.id, getAuthHeaders())),
+    )
+
+    templateDetails.value = detailResults
+      .map((result) => (result.status === 'fulfilled' ? result.value : null))
+      .filter((res): res is NonNullable<typeof res> => !!res && res.success && res.data?.code === 0)
+      .map((res) => res.data.data)
+
+    if (!templateDetails.value.length) {
+      templateLoadMessage.value = '后台模板详情为空，已使用本地模板信息匹配。'
+    }
+  } catch {
+    templateLoadMessage.value = '模板加载失败，已使用本地模板信息匹配。'
+  } finally {
+    templateLoading.value = false
+  }
+}
 
 // 辅助：生成设备唯一标识
 const getDevKey = (orderId: string, device: any, index: number) => {
@@ -35,12 +286,18 @@ const startedOrderDevices = computed(() => {
         deviceList: []
       })
     }
+    const resolvedTemplate = resolveTemplateMeta(
+      device?.deviceName || device?.name || '',
+      device?.template || 'CBMT61XA_REPORT',
+    )
     grouped.get(orderId).deviceList.push({
       id: device?.id || `${orderId}_${device?.sn || index + 1}`,
       name: device?.deviceName || device?.name || '-',
       sn: device?.sn || device?.code || '',
       code: device?.code || device?.sn || '',
-      template: device?.template || 'CBMT61XA_REPORT'
+      template: resolvedTemplate.templateCode,
+      templateName: resolvedTemplate.templateName,
+      supportTools: resolvedTemplate.supportTools,
     })
   })
   return Array.from(grouped.values())
@@ -48,7 +305,87 @@ const startedOrderDevices = computed(() => {
 
 const startedOrderIds = computed(() => startedOrderDevices.value.map((order: any) => order.id))
 const selectedSupportingOrders = computed(() =>
-  props.todayScheduledOrders.filter((order: any) => startedOrderIds.value.includes(order.id) && order.supportingTools?.length)
+  startedOrderDevices.value
+    .map((order: any) => ({
+      ...order,
+      deviceList: (order.deviceList || []).filter((device: ResolvedDeviceRow) => device.supportTools?.length),
+    }))
+    .filter((order: any) => order.deviceList.length),
+)
+
+function getSupportToolKey(orderId: string, device: ResolvedDeviceRow, tool: TemplateInstrument) {
+  return [
+    orderId,
+    device.id,
+    normalizeCode(tool.code),
+    normalizeText(tool.zh || tool.en || tool.code),
+  ].join('::')
+}
+
+watch(
+  selectedSupportingOrders,
+  (orders) => {
+    const next: Record<string, boolean> = { ...selectedSupportToolMap.value }
+    const validKeys = new Set<string>()
+
+    orders.forEach((order: any) => {
+      ;(order.deviceList || []).forEach((device: ResolvedDeviceRow) => {
+        ;(device.supportTools || []).forEach((tool) => {
+          const key = getSupportToolKey(order.id, device, tool)
+          validKeys.add(key)
+          if (next[key] === undefined) next[key] = false
+        })
+      })
+    })
+
+    Object.keys(next).forEach((key) => {
+      if (!validKeys.has(key)) delete next[key]
+    })
+
+    selectedSupportToolMap.value = next
+  },
+  { immediate: true, deep: true },
+)
+
+function isToolSelected(orderId: string, device: ResolvedDeviceRow, tool: TemplateInstrument) {
+  return selectedSupportToolMap.value[getSupportToolKey(orderId, device, tool)] === true
+}
+
+function toggleSupportTool(orderId: string, device: ResolvedDeviceRow, tool: TemplateInstrument, checked: boolean) {
+  selectedSupportToolMap.value = {
+    ...selectedSupportToolMap.value,
+    [getSupportToolKey(orderId, device, tool)]: checked,
+  }
+}
+
+const resolvedDownholeDevices = computed(() =>
+  startedOrderDevices.value.flatMap((order: any) =>
+    (order.deviceList || []).map((device: ResolvedDeviceRow) => ({
+      orderId: order.id,
+      customer: order.customer,
+      deviceName: device.name,
+      sn: device.sn,
+      code: device.code,
+      template: device.template,
+      templateName: device.templateName,
+      supportingTools: device.supportTools,
+    })),
+  ),
+)
+
+const flattenedSupportingTools = computed(() =>
+  selectedSupportingOrders.value.flatMap((order: any) =>
+    (order.deviceList || []).flatMap((device: ResolvedDeviceRow) =>
+      (device.supportTools || [])
+        .filter((tool) => isToolSelected(order.id, device, tool))
+        .map((tool) => ({
+          ...tool,
+          orderId: order.id,
+          sourceDeviceName: device.name,
+          template: device.template,
+        })),
+    ),
+  ),
 )
 
 // --- 表单状态 ---
@@ -77,8 +414,8 @@ const repeatIntervalTo = ref('')
 function saveDownholeOperation() {
   const payload = {
     orderIds: startedOrderIds.value,
-    devices: props.downholeDevices,
-    supportingTools: selectedSupportingOrders.value.flatMap((o: any) => (o.supportingTools || [])),
+    devices: resolvedDownholeDevices.value,
+    supportingTools: flattenedSupportingTools.value,
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
     testObjective: selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value,
@@ -90,6 +427,10 @@ function saveDownholeOperation() {
   }
   emit('save', payload)
 }
+
+onMounted(() => {
+  void loadTemplateLibrary()
+})
 </script>
 
 <template>
@@ -110,6 +451,8 @@ function saveDownholeOperation() {
     <div class="downhole-content">
       <div class="downhole-card">
         <div class="downhole-card-title">工单测试产品 <span class="english-sub">Order Test Products</span></div>
+        <div v-if="templateLoading" class="hint-text">正在根据测试设备名称匹配测试报告模板...</div>
+        <div v-else-if="templateLoadMessage" class="hint-text">{{ templateLoadMessage }}</div>
         <div v-if="!startedOrderDevices.length" class="empty-state"><p>未选择开始实验的测试产品</p></div>
         <div v-for="order in startedOrderDevices" :key="'table-' + order.id" class="order-table-group">
           <div class="table-group-header">
@@ -130,7 +473,10 @@ function saveDownholeOperation() {
                 <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
                   <td>{{ device.name }}</td>
                   <td>{{ device.sn || device.code || 'SN-' + (idx + 1) }}</td>
-                  <td>{{ device.template || device.code || 'CBMT61XA_REPORT' }}</td>
+                  <td>
+                    <div>{{ device.template || device.code || 'CBMT61XA_REPORT' }}</div>
+                    <div v-if="device.templateName" class="cell-subtext">{{ device.templateName }}</div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -144,26 +490,59 @@ function saveDownholeOperation() {
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
             <span class="group-customer">{{ order.customer }}</span>
-            <span class="group-count">{{ order.supportingTools?.length || 0 }} 个配接仪器</span>
+            <span class="group-count">{{ order.deviceList?.length || 0 }} 个测试产品已匹配</span>
           </div>
           <div class="table-wrapper">
             <table class="data-table">
               <thead>
                 <tr>
+                  <th>测试产品</th>
+                  <th>报告模板</th>
                   <th>配接仪器</th>
-                  <th>仪器编号</th>
-                  <th>关联模板</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(tool, idx) in order.supportingTools" :key="getDevKey(order.id, tool, idx)">
-                  <td>{{ tool.name }}</td>
-                  <td>{{ tool.sn || 'SN-' + (idx + 1) }}</td>
-                  <td>{{ tool.template || tool.code || 'SUPPORT_TOOL_REPORT' }}</td>
+                <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
+                  <td>
+                    <div>{{ device.name }}</div>
+                    <div class="cell-subtext">{{ device.sn || device.code || 'SN-' + (idx + 1) }}</div>
+                  </td>
+                  <td>
+                    <div>{{ device.template || 'DEFAULT_DOWNHOLE_REPORT' }}</div>
+                    <div v-if="device.templateName" class="cell-subtext">{{ device.templateName }}</div>
+                  </td>
+                  <td>
+                    <div class="tool-list">
+                      <div class="tool-selector-inline">
+                        <label
+                          v-for="tool in device.supportTools"
+                          :key="`${device.id}_${tool.code || tool.zh || tool.en}`"
+                          class="tool-inline-option"
+                          :class="{ 'is-selected': isToolSelected(order.id, device, tool) }"
+                        >
+                          <input
+                            type="checkbox"
+                            :checked="isToolSelected(order.id, device, tool)"
+                            @change="toggleSupportTool(order.id, device, tool, ($event.target as HTMLInputElement).checked)"
+                          />
+                          <span class="tool-inline-text">
+                            <span class="tool-option-name">{{ tool.zh || tool.code || '-' }}</span>
+                            <span v-if="tool.code" class="tool-code">{{ tool.code }}</span>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+      <div v-else class="downhole-card">
+        <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
+        <div class="empty-state">
+          <p>{{ templateLoading ? '正在匹配测试报告模板...' : '当前测试产品未匹配到配接仪器信息' }}</p>
         </div>
       </div>
 
@@ -436,6 +815,47 @@ function saveDownholeOperation() {
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table th { padding: 10px; background: #3b82f6; color: #fff; text-align: left; }
 .data-table td { padding: 10px; border-bottom: 1px solid #f1f5f9; }
+.cell-subtext { margin-top: 4px; font-size: 12px; color: #64748b; word-break: break-all; }
+.hint-text { margin-top: 8px; font-size: 12px; color: #64748b; }
+.tool-list { display: flex; }
+.tool-selector-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.tool-inline-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tool-inline-option:hover {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+.tool-inline-option.is-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+.tool-inline-option input {
+  margin: 0;
+}
+.tool-inline-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tool-option-name {
+  color: #0f172a;
+  font-weight: 500;
+}
+.tool-code { font-size: 12px; color: #475569; }
 
 /* 底部表单特定样式 */
 .form-card-styled {

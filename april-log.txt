@@ -1,0 +1,4 @@
+﻿138d49a|2026-04-29|feat(engineer-assistant): 闆嗘垚绗笁鏂规帓鏈熸帹閫佸姛鑳?a6767d3|2026-04-28|feat(vibration): update work order handling and UI for testing modes
+62fcb2f|2026-04-24|feat(妯℃嫙浜曚笅浜?: 鏀寔涓嬩簳浣滀笟璁惧娑堣€椾笌鎶ュ憡妯℃澘鎺ュ彛
+3f622dc|2026-04-22|feat(simulation-well): 鏂板璁惧閰嶅椤甸潰骞朵紭鍖栦笅浜曚綔涓氭祦绋?2272e97|2026-04-22|feat(high-temp-pressure, simulation-well): 鎵╁睍宸ュ崟璇︽儏涓庝笅浜曚綔涓氱鐞?59ed6d7|2026-04-07|feat(宸ュ崟鐘舵€佺鐞?: 闆嗘垚鍚庣API瀹炵幇宸ュ崟鐘舵€佸悓姝ヤ笌鍒锋柊鍔熻兘
+b235750|2026-04-02|feat(鏃ョ▼): 涓烘尟鍔ㄣ€侀珮娓╅珮鍘嬨€佹ā鎷熶簳鍜岄珮娓╃妯″潡娣诲姞鏃ョ▼椤规嫋鎷藉拰澶у皬璋冩暣鍔熻兘

@@ -4,6 +4,7 @@ mod scanner;
 mod cache;
 mod flojoy;
 mod ocr;
+mod vibration_video;
 
 use tauri::{Manager, RunEvent};
 
@@ -58,6 +59,8 @@ pub fn run() {
         .manage(flojoy::FlojoyBackendState::default())
         // 注册 OCR 状态管理
         .manage(ocr::OcrState::default())
+        // 注册振动视频处理状态管理
+        .manage(vibration_video::VibrationVideoState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -114,6 +117,14 @@ pub fn run() {
             ocr::stop_ocr_stream,
             ocr::is_ocr_streaming,
             ocr::release_ocr,
+            vibration_video::extract_vibration_video_data,
+            vibration_video::start_vibration_video_stream,
+            vibration_video::pause_vibration_video_stream,
+            vibration_video::stop_vibration_video_stream,
+            vibration_video::get_vibration_capture_status,
+            vibration_video::get_vibration_capture_result,
+            vibration_video::export_vibration_capture_output,
+            vibration_video::write_vibration_report_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

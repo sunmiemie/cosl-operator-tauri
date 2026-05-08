@@ -41,7 +41,8 @@
     ],
     "resources": [
       "resources/flojoy/**/*",
-      "resources/models/*"
+      "resources/models/*",
+      "resources/vibration/**/*"
     ]
   }
 }
