@@ -77,8 +77,18 @@ async function handleStartScheduledTest() {
 async function handleConfirmStart() {
   const current = schedule.currentSelected.value
   const dbId = current?.order?.dbId
-  if (!dbId) {
+  if (!current) {
+    ElMessage.error('未找到已选中的仪器')
+    return
+  }
+  if (!dbId && !schedule.isOrderStarted(current.order.id)) {
     ElMessage.error('未找到工单ID')
+    return
+  }
+
+  if (schedule.isOrderStarted(current.order.id) || current.order.statusCode === 2) {
+    schedule.markOrderStarted(current.order.id)
+    testing.confirmStart()
     return
   }
 
@@ -86,7 +96,8 @@ async function handleConfirmStart() {
     await initAuth()
     const res = await startHighTempPressureOrder(dbId, getAuthHeaders())
     if (res.success && res.data?.code === 0) {
-      schedule.refreshWorkOrders()
+      schedule.markOrderStarted(current.order.id)
+      await schedule.refreshWorkOrders()
       testing.confirmStart()
       return
     }
@@ -99,6 +110,19 @@ async function handleConfirmStart() {
 async function handleConfirmEnd() {
   const current = schedule.currentSelected.value
   const dbId = current?.order?.dbId
+  if (!current) {
+    ElMessage.error('未找到已选中的仪器')
+    return
+  }
+
+  const hasRemaining = schedule.hasRemainingInstrumentsAfterCompleting(current.order.id, current.instrument.id)
+  if (hasRemaining) {
+    schedule.markInstrumentCompleted(current.instrument.id)
+    ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
+    testing.endTest()
+    return
+  }
+
   if (!dbId) {
     ElMessage.error('未找到工单ID')
     return
@@ -108,6 +132,8 @@ async function handleConfirmEnd() {
     await initAuth()
     const res = await finishHighTempPressureOrder(dbId, getAuthHeaders())
     if (res.success && res.data?.code === 0) {
+      schedule.markInstrumentCompleted(current.instrument.id)
+      schedule.clearOrderProgress(current.order.id)
       await schedule.refreshWorkOrders()
       testing.endTest()
       return
@@ -173,6 +199,7 @@ onMounted(async () => {
         :get-cell-key="schedule.getCellKey"
         :get-instrument-by-id="schedule.getInstrumentById"
         :get-order-by-instrument-id="schedule.getOrderByInstrumentId"
+        :is-instrument-pending="schedule.isInstrumentPending"
         @update:search-keyword="schedule.searchKeyword.value = $event"
         @instrument-drag-start="schedule.handleInstrumentDragStart"
         @drag-end="schedule.handleDragEnd"

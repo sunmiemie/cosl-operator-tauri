@@ -36,6 +36,7 @@ const props = defineProps<{
   getCellKey: (dateStr: string, timeKey: string) => string
   getInstrumentById: (id: string) => { id: string; label: string; sn: string } | null
   getOrderByInstrumentId: (id: string) => WorkOrder | undefined
+  isInstrumentPending: (id: string) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -221,7 +222,7 @@ const handleGridDrop = (e: DragEvent) => {
                     <td class="expanded-cell" colspan="5">
                       <div class="instrument-list">
                         <div
-                          v-for="item in order.items.filter((x) => !scheduledInstrumentIdSet.has(x.id))"
+                          v-for="item in order.items.filter((x) => !scheduledInstrumentIdSet.has(x.id) && isInstrumentPending(x.id))"
                           :key="item.id"
                           class="instrument-item"
                           draggable="true"

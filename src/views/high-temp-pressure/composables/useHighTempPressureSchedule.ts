@@ -7,6 +7,8 @@ import {
 } from '@/services/high-temp-pressure-api'
 import type { InstrumentItem, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
+const HTP_PROGRESS_STORAGE_KEY = 'high-temp-pressure-progress'
+
 function getMonday(d: Date) {
   const dt = new Date(d)
   const day = dt.getDay()
@@ -103,6 +105,13 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   }
 }
 
+function cloneWorkOrder(order: WorkOrder): WorkOrder {
+  return {
+    ...order,
+    items: order.items.map(item => ({ ...item })),
+  }
+}
+
 export function useHighTempPressureSchedule() {
   const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
@@ -110,6 +119,9 @@ export function useHighTempPressureSchedule() {
   const selectedScheduledOrderIds = ref<string[]>([])
   const isDragging = ref(false)
   const slotHeightPx = 44
+  const completedInstrumentIds = ref<Record<string, true>>({})
+  const startedOrderIds = ref<Record<string, true>>({})
+  const retainedOrders = ref<Record<string, WorkOrder>>({})
 
   type ScheduledEvent = {
     instrumentId: string
@@ -122,6 +134,80 @@ export function useHighTempPressureSchedule() {
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
+
+  const persistProgressState = () => {
+    try {
+      window.localStorage.setItem(
+        HTP_PROGRESS_STORAGE_KEY,
+        JSON.stringify({
+          completedInstrumentIds: completedInstrumentIds.value,
+          startedOrderIds: startedOrderIds.value,
+          retainedOrders: retainedOrders.value,
+        })
+      )
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  const hydrateProgressState = () => {
+    try {
+      const raw = window.localStorage.getItem(HTP_PROGRESS_STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as {
+        completedInstrumentIds?: Record<string, true>
+        startedOrderIds?: Record<string, true>
+        retainedOrders?: Record<string, WorkOrder>
+      }
+      completedInstrumentIds.value = parsed.completedInstrumentIds || {}
+      startedOrderIds.value = parsed.startedOrderIds || {}
+      retainedOrders.value = parsed.retainedOrders || {}
+    } catch {
+      completedInstrumentIds.value = {}
+      startedOrderIds.value = {}
+      retainedOrders.value = {}
+    }
+  }
+
+  hydrateProgressState()
+
+  const syncRetainedOrder = (order: WorkOrder | undefined) => {
+    if (!order) return
+    retainedOrders.value = {
+      ...retainedOrders.value,
+      [order.id]: cloneWorkOrder(order),
+    }
+  }
+
+  const getRetainedOrder = (orderId: string) => retainedOrders.value[orderId]
+
+  const mergeOrderWithRetained = (order: WorkOrder, retainedOrder?: WorkOrder) => {
+    if (!retainedOrder || !shouldKeepOrderLocally(retainedOrder)) return order
+
+    const itemMap = new Map<string, InstrumentItem>()
+    retainedOrder.items.forEach((item) => {
+      if (!completedInstrumentIds.value[item.id]) {
+        itemMap.set(item.id, { ...item })
+      }
+    })
+    order.items.forEach((item) => {
+      if (!completedInstrumentIds.value[item.id] && !itemMap.has(item.id)) {
+        itemMap.set(item.id, { ...item })
+      }
+    })
+
+    return {
+      ...order,
+      expanded: retainedOrder.expanded || order.expanded,
+      items: Array.from(itemMap.values()),
+    }
+  }
+
+  const shouldKeepOrderLocally = (order: WorkOrder | undefined) => {
+    if (!order) return false
+    if (!startedOrderIds.value[order.id]) return false
+    return order.items.some((item) => !completedInstrumentIds.value[item.id])
+  }
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
@@ -160,7 +246,13 @@ export function useHighTempPressureSchedule() {
         if (page > 50) break
       }
 
-      workOrders.value = all
+      const mergedOrders = all.map(order => mergeOrderWithRetained(order, getRetainedOrder(order.id)))
+      const seenOrderIds = new Set(mergedOrders.map(order => order.id))
+      const retainedList = Object.values(retainedOrders.value)
+        .filter(order => !seenOrderIds.has(order.id) && shouldKeepOrderLocally(order))
+        .map(order => cloneWorkOrder(order))
+
+      workOrders.value = [...mergedOrders, ...retainedList]
     } catch (error) {
       workOrdersError.value = error instanceof Error ? error.message : '加载高温高压井工单失败'
     } finally {
@@ -348,8 +440,11 @@ export function useHighTempPressureSchedule() {
     const keyword = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) =>
-      (order.statusCode !== undefined && SCHEDULABLE_STATUS.has(order.statusCode)) &&
-      order.items.some((item) => !scheduledInstrumentIds.has(item.id)) &&
+      (
+        (order.statusCode !== undefined && SCHEDULABLE_STATUS.has(order.statusCode)) ||
+        (!!startedOrderIds.value[order.id] && order.items.some((item) => !completedInstrumentIds.value[item.id]))
+      ) &&
+      order.items.some((item) => !scheduledInstrumentIds.has(item.id) && !completedInstrumentIds.value[item.id]) &&
       (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
@@ -633,6 +728,78 @@ export function useHighTempPressureSchedule() {
     return order.items.every((it) => !!scheduledEvents.value[it.id])
   }
 
+  const isInstrumentPending = (instrumentId: string) => !completedInstrumentIds.value[instrumentId]
+
+  const markOrderStarted = (orderId: string) => {
+    if (!orderId) return
+    startedOrderIds.value = { ...startedOrderIds.value, [orderId]: true }
+    const order = getOrderById(orderId)
+    if (order) {
+      syncRetainedOrder(order)
+    }
+    persistProgressState()
+  }
+
+  const isOrderStarted = (orderId: string) => !!startedOrderIds.value[orderId]
+
+  const markInstrumentCompleted = (instrumentId: string) => {
+    if (!instrumentId) return
+    completedInstrumentIds.value = { ...completedInstrumentIds.value, [instrumentId]: true }
+    const currentOrder = getOrderByInstrumentId(instrumentId)
+    const retainedOrder = currentOrder ? getRetainedOrder(currentOrder.id) : undefined
+    const sourceOrder = retainedOrder || currentOrder
+    if (sourceOrder) {
+      const remainingItems = sourceOrder.items
+        .filter(item => item.id !== instrumentId)
+        .filter(item => !completedInstrumentIds.value[item.id])
+        .map(item => ({ ...item }))
+
+      if (remainingItems.length > 0) {
+        retainedOrders.value = {
+          ...retainedOrders.value,
+          [sourceOrder.id]: {
+            ...cloneWorkOrder(sourceOrder),
+            items: remainingItems,
+          },
+        }
+      } else {
+        const nextRetained = { ...retainedOrders.value }
+        delete nextRetained[sourceOrder.id]
+        retainedOrders.value = nextRetained
+      }
+    }
+    handleUnschedule('', instrumentId)
+    persistProgressState()
+  }
+
+  const getRemainingInstrumentCount = (orderId: string, excludingInstrumentId?: string) => {
+    const order = getOrderById(orderId)
+    if (!order) return 0
+    return order.items.filter((item) => item.id !== excludingInstrumentId && !completedInstrumentIds.value[item.id]).length
+  }
+
+  const hasRemainingInstrumentsAfterCompleting = (orderId: string, instrumentId: string) =>
+    getRemainingInstrumentCount(orderId, instrumentId) > 0
+
+  const clearOrderProgress = (orderId: string) => {
+    if (!orderId) return
+    const order = getOrderById(orderId)
+    const nextCompleted = { ...completedInstrumentIds.value }
+    order?.items.forEach((item) => {
+      delete nextCompleted[item.id]
+    })
+    completedInstrumentIds.value = nextCompleted
+
+    const nextStarted = { ...startedOrderIds.value }
+    delete nextStarted[orderId]
+    startedOrderIds.value = nextStarted
+
+    const nextRetained = { ...retainedOrders.value }
+    delete nextRetained[orderId]
+    retainedOrders.value = nextRetained
+    persistProgressState()
+  }
+
   return {
     searchKeyword,
     draggedOrder,
@@ -679,5 +846,12 @@ export function useHighTempPressureSchedule() {
     getScheduleChangePayload,
     resizingInstrumentId,
     isResizing,
+    isInstrumentPending,
+    markOrderStarted,
+    isOrderStarted,
+    markInstrumentCompleted,
+    getRemainingInstrumentCount,
+    hasRemainingInstrumentsAfterCompleting,
+    clearOrderProgress,
   }
 }
