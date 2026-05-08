@@ -76,12 +76,12 @@ async function handleStartScheduledTest() {
 
 async function handleConfirmStart() {
   const current = schedule.currentSelected.value
-  const dbId = current?.order?.dbId
   if (!current) {
     ElMessage.error('未找到已选中的仪器')
     return
   }
-  if (!dbId && !schedule.isOrderStarted(current.order.id)) {
+  const dbId = current.order.dbId
+  if (typeof dbId !== 'number' && !schedule.isOrderStarted(current.order.id)) {
     ElMessage.error('未找到工单ID')
     return
   }
@@ -94,6 +94,7 @@ async function handleConfirmStart() {
 
   try {
     await initAuth()
+    if (typeof dbId !== 'number') return
     const res = await startHighTempPressureOrder(dbId, getAuthHeaders())
     if (res.success && res.data?.code === 0) {
       schedule.markOrderStarted(current.order.id)
@@ -117,6 +118,8 @@ async function handleConfirmEnd() {
 
   const hasRemaining = schedule.hasRemainingInstrumentsAfterCompleting(current.order.id, current.instrument.id)
   if (hasRemaining) {
+    const captureSaved = await testing.finalizeVideoCapture()
+    if (!captureSaved) return
     schedule.markInstrumentCompleted(current.instrument.id)
     ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
     testing.endTest()
@@ -130,6 +133,8 @@ async function handleConfirmEnd() {
 
   try {
     await initAuth()
+    const captureSaved = await testing.finalizeVideoCapture()
+    if (!captureSaved) return
     const res = await finishHighTempPressureOrder(dbId, getAuthHeaders())
     if (res.success && res.data?.code === 0) {
       schedule.markInstrumentCompleted(current.instrument.id)
@@ -144,7 +149,15 @@ async function handleConfirmEnd() {
   }
 }
 
+function handleConfirmStop() {
+  const current = schedule.currentSelected.value
+  testing.stopTest()
+  schedule.cancelScheduledInstrument(current?.instrument.id)
+  ElMessage.info('已中止本次测试，视频采集状态已重置')
+}
+
 onMounted(async () => {
+  testing.resetTestSession()
   schedule.resetScheduleState()
   await schedule.refreshWorkOrders()
 })
@@ -231,6 +244,14 @@ onMounted(async () => {
         :test-running="testing.testRunning.value"
         :csv-count="testing.csvCount.value"
         :current-selected="schedule.currentSelected.value"
+        :video-file-name="testing.videoFileName.value"
+        :video-url="testing.videoUrl.value"
+        :capture-progress-pct="testing.captureProgressPct.value"
+        :capture-status-text="testing.captureStatusText.value"
+        :latest-frame-url="testing.latestFrameUrl.value"
+        :exported-capture-dir="testing.exportedCaptureDir.value"
+        :video-measurements="testing.videoMeasurements.value"
+        @select-video="testing.selectVideoFile"
         @pause="testing.pauseTest"
         @resume="testing.resumeTest"
         @open-stop-modal="testing.showModal('stop-test')"
@@ -246,7 +267,7 @@ onMounted(async () => {
       @close="testing.closeModal"
       @confirm-start="handleConfirmStart"
       @confirm-end="handleConfirmEnd"
-      @confirm-stop="testing.stopTest"
+      @confirm-stop="handleConfirmStop"
     />
   </div>
 </template>

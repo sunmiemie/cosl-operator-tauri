@@ -3,6 +3,7 @@ mod camera;
 mod scanner;
 mod cache;
 mod flojoy;
+mod high_temp_pressure_video;
 mod ocr;
 mod vibration_video;
 
@@ -59,6 +60,8 @@ pub fn run() {
         .manage(flojoy::FlojoyBackendState::default())
         // 注册 OCR 状态管理
         .manage(ocr::OcrState::default())
+        // 注册高温高压井视频识别状态管理
+        .manage(high_temp_pressure_video::HighTempPressureVideoState::default())
         // 注册振动视频处理状态管理
         .manage(vibration_video::VibrationVideoState::default())
         .invoke_handler(tauri::generate_handler![
@@ -125,6 +128,12 @@ pub fn run() {
             vibration_video::get_vibration_capture_result,
             vibration_video::export_vibration_capture_output,
             vibration_video::write_vibration_report_files,
+            high_temp_pressure_video::start_high_temp_pressure_video_stream,
+            high_temp_pressure_video::pause_high_temp_pressure_video_stream,
+            high_temp_pressure_video::stop_high_temp_pressure_video_stream,
+            high_temp_pressure_video::get_high_temp_pressure_capture_status,
+            high_temp_pressure_video::get_high_temp_pressure_capture_result,
+            high_temp_pressure_video::export_high_temp_pressure_capture_output,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -42,7 +42,8 @@
     "resources": [
       "resources/flojoy/**/*",
       "resources/models/*",
-      "resources/vibration/**/*"
+      "resources/vibration/**/*",
+      "resources/high-temp-pressure/**/*"
     ]
   }
 }

@@ -613,6 +613,18 @@ export function useHighTempPressureSchedule() {
     }
   }
 
+  function clearSelectedSchedule() {
+    selectedScheduledOrderIds.value = []
+  }
+
+  function cancelScheduledInstrument(instrumentId?: string) {
+    if (instrumentId) {
+      handleUnschedule('', instrumentId)
+      return
+    }
+    clearSelectedSchedule()
+  }
+
   function resetScheduleState() {
     scheduledEvents.value = {}
     selectedScheduledOrderIds.value = []
@@ -838,6 +850,8 @@ export function useHighTempPressureSchedule() {
     scheduleInstrument,
     handleSelectScheduledOrder,
     handleUnschedule,
+    clearSelectedSchedule,
+    cancelScheduledInstrument,
     resetScheduleState,
     getEvent,
     startResize,
