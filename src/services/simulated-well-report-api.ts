@@ -102,3 +102,18 @@ export async function getSimulatedWellReportDetail(
     headers
   )
 }
+
+export interface DeleteSimulatedWellReportResponse {
+  code: number
+  msg?: string
+}
+
+export async function deleteSimulatedWellReport(
+  id: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<DeleteSimulatedWellReportResponse>> {
+  return http.delete<DeleteSimulatedWellReportResponse>(
+    `/test/simulated-well/report/detail/${id}/`,
+    headers
+  )
+}

@@ -186,7 +186,7 @@ async function handleSaveDownhole(payload: any) {
 
     const res = await createSimulatedWellDownholeWork(body, getAuthHeaders())
     if (!res.success) {
-      ElMessage.error(res.message || '保存下井作业失败')
+      ElMessage.error(res.error || '保存下井作业失败')
       return
     }
     if (res.data?.code !== 0) {
@@ -274,7 +274,6 @@ async function handleSaveDownhole(payload: any) {
       v-else-if="currentView === 'downhole-work'"
       :today-scheduled-orders="startSelectedOrders"
       :downhole-devices="startSelectedDevices"
-      @back="backToDashboard"
       @save="handleSaveDownhole"
     />
 

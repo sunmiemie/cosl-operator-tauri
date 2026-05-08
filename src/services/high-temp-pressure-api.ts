@@ -88,3 +88,14 @@ export async function startHighTempPressureOrder(
     headers
   )
 }
+
+export async function finishHighTempPressureOrder(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<MutationResponse>> {
+  return http.post<MutationResponse>(
+    `/test/high-temp-pressure/order/finish/${orderId}/`,
+    {},
+    headers
+  )
+}

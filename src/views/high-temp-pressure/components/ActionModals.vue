@@ -19,7 +19,7 @@ const emit = defineEmits<{
   <div class="modal-overlay" v-if="activeModal" @click.self="emit('close')">
     <div class="startup-check-modal" v-if="activeModal === 'confirm-start'">
       <h2 class="modal-title">启动前确认</h2>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="two-col">
         <div>
           <div class="alert alert-warning">
             <div style="display:flex;gap:8px;align-items:flex-start">
@@ -73,19 +73,27 @@ const emit = defineEmits<{
     </div>
 
     <div class="modal" v-if="activeModal === 'end-test'">
-      <div class="modal-header">确定测试已完成？</div>
+      <div class="modal-header modal-header-row">
+        <Icon icon="mdi:check-circle-outline" />
+        <span>确认测试已完成？</span>
+      </div>
       <div class="modal-body">
-        <p>系统将会停止数据记录并生成报告。</p>
+        <p class="text-muted">系统将会停止数据记录并生成报告。</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" @click="emit('close')">取消</button>
-        <button class="btn btn-success" style="background:#409eff;border:none" @click="emit('confirm-end')">确认</button>
+        <button class="btn btn-primary" @click="emit('confirm-end')">确认</button>
       </div>
     </div>
 
     <div class="modal" v-if="activeModal === 'stop-test'">
-      <div class="modal-header">确定要中止测试吗？</div>
-      <div class="modal-body"><p class="text-danger">此操作不可恢复！所有数据将会丢失。</p></div>
+      <div class="modal-header modal-header-row">
+        <Icon icon="mdi:alert-octagon-outline" />
+        <span>确定要中止测试吗？</span>
+      </div>
+      <div class="modal-body">
+        <p class="text-danger">此操作不可恢复！所有数据将会丢失。</p>
+      </div>
       <div class="modal-footer">
         <button class="btn btn-outline" @click="emit('close')">取消</button>
         <button class="btn btn-danger" @click="emit('confirm-stop')">确认中止</button>

@@ -37,7 +37,7 @@ function getStatusText(status?: number, fallback?: string) {
     2: '测试中',
     3: '待审核',
     4: '待重做',
-    5: '正常',
+    5: '已完成',
     6: '异常',
     7: '暂存',
     8: '疑问',

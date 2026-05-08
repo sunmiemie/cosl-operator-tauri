@@ -1,19 +1,19 @@
 /* Base Colors & Variables */
 .high-temp-pressure-page {
-  --blue: #2196f3;
-  --blue-light: #bbdefb;
-  --green: #4caf50;
-  --green-bright: #2e7d32;
-  --red: #f44336;
-  --red-bright: #d32f2f;
-  --orange: #ff9800;
-  --cyan: #00bcd4;
-  --gray-100: #f5f7fa;
-  --gray-200: #e4e7eb;
-  --gray-300: #cbd5e1;
-  --gray-500: #9e9e9e;
-  --text-primary: #2c3e50;
-  --text-secondary: #7f8c8d;
+  --blue: var(--color-accent-blue);
+  --blue-light: rgba(88, 166, 255, 0.25);
+  --green: var(--color-accent-green, #10b981);
+  --green-bright: var(--color-accent-green, #10b981);
+  --red: var(--color-error, #ef4444);
+  --red-bright: var(--color-error, #ef4444);
+  --orange: var(--color-accent-amber, #f59e0b);
+  --cyan: var(--color-accent-cyan, #06b6d4);
+  --gray-100: var(--color-bg-tertiary);
+  --gray-200: var(--color-border);
+  --gray-300: var(--color-border);
+  --gray-500: var(--color-text-tertiary);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
   --radius: 8px;
   --navy: #1a2332;
   
@@ -74,16 +74,16 @@
   flex-direction: column;
   overflow: hidden;
 
-  background: #fff;
+  background: var(--color-bg-secondary);
   border-radius: var(--radius);
-  border: 1px solid var(--gray-200);
+  border: 1px solid var(--color-border);
 }
 
 /* 顶部工具栏 */
 .topbar {
   padding: 12px 16px;
-  border-bottom: 1px solid var(--gray-200);
-  background: var(--gray-100);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
 
   display: flex;
   justify-content: space-between;
@@ -108,22 +108,22 @@
   padding: 4px 12px;
 
   border-radius: 12px;
-  background: var(--gray-200);
-  color: var(--gray-500);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
 
   cursor: pointer;
 }
 
 /* 当前步骤 */
 .ts.active {
-  background: var(--blue);
+  background: var(--color-accent-blue);
   color: #fff;
 }
 
 /* 已完成步骤 */
 .ts.done {
-  background: rgba(76, 175, 80, 0.2);
-  color: var(--green);
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--color-accent-green, #10b981);
 }
 
 /* 内容区域 */
@@ -1025,20 +1025,21 @@
 
 .btn { padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; transition: all 0.2s; }
 .btn-primary { background: var(--color-accent-blue); color: #fff; }
-.btn-outline { border-color: var(--gray-500); background: transparent; color: var(--color-text-primary); }
+.btn-outline { border-color: var(--color-border); background: transparent; color: var(--color-text-primary); }
 .btn-success { background: var(--green); color: #fff; }
 .btn-danger { background: var(--red); color: #fff; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-lg { padding: 10px 20px; font-size: 15px; }
 .btn-sm { padding: 4px 8px; font-size: 12px; }
 
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal { background: #fff; border-radius: 12px; width: 400px; max-width: 90vw; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
-.modal-header { padding: 16px; background: var(--color-bg-tertiary); font-weight: 600; border-bottom: 1px solid var(--color-border); }
-.modal-body { padding: 20px; }
-.modal-footer { padding: 12px 16px; border-top: 1px solid var(--color-border); display: flex; justify-content: flex-end; gap: 8px; }
-.alert { padding: 10px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; }
-.alert-warning { background: rgba(255,152,0,0.1); color: var(--orange); }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 120; padding: 16px; backdrop-filter: blur(4px); }
+.modal { background: var(--color-bg-secondary); border-radius: 16px; width: 520px; max-width: 92vw; overflow: hidden; box-shadow: 0 20px 40px -12px rgba(0,0,0,0.3); border: 1px solid var(--color-border); }
+.modal-header { padding: 16px 18px; background: var(--color-bg-tertiary); font-weight: 700; border-bottom: 1px solid var(--color-border); color: var(--color-text-primary); }
+.modal-header-row { display: flex; align-items: center; gap: 8px; }
+.modal-body { padding: 18px; color: var(--color-text-primary); }
+.modal-footer { padding: 12px 16px; border-top: 1px solid var(--color-border); display: flex; justify-content: flex-end; gap: 10px; }
+.alert { padding: 12px; border-radius: 10px; margin-bottom: 12px; font-size: 13px; border: 1px solid var(--color-border); background: var(--color-bg-tertiary); }
+.alert-warning { background: rgba(245, 158, 11, 0.12); color: var(--color-accent-amber, #f59e0b); border-color: rgba(245, 158, 11, 0.22); }
 .alert-icon { font-size: 16px; }
 .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .info-key { font-size: 11px; color: var(--color-text-secondary); }

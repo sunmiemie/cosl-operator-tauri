@@ -13,7 +13,7 @@ import { useHighTempPressureStartupCheck } from './composables/useHighTempPressu
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
 import { useAuth } from '@/composables/useAuth'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
-import { startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
+import { finishHighTempPressureOrder, startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
 
 const schedule = useHighTempPressureSchedule()
 const startupCheck = useHighTempPressureStartupCheck()
@@ -93,6 +93,28 @@ async function handleConfirmStart() {
     ElMessage.error(res.data?.msg || res.error || '开始测试失败')
   } catch (e) {
     ElMessage.error('开始测试失败')
+  }
+}
+
+async function handleConfirmEnd() {
+  const current = schedule.currentSelected.value
+  const dbId = current?.order?.dbId
+  if (!dbId) {
+    ElMessage.error('未找到工单ID')
+    return
+  }
+
+  try {
+    await initAuth()
+    const res = await finishHighTempPressureOrder(dbId, getAuthHeaders())
+    if (res.success && res.data?.code === 0) {
+      await schedule.refreshWorkOrders()
+      testing.endTest()
+      return
+    }
+    ElMessage.error(res.data?.msg || res.error || '结束测试失败')
+  } catch (e) {
+    ElMessage.error('结束测试失败')
   }
 }
 
@@ -194,7 +216,7 @@ onMounted(async () => {
       :current-selected="schedule.currentSelected.value"
       @close="testing.closeModal"
       @confirm-start="handleConfirmStart"
-      @confirm-end="testing.endTest"
+      @confirm-end="handleConfirmEnd"
       @confirm-stop="testing.stopTest"
     />
   </div>

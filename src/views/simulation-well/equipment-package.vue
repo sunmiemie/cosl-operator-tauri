@@ -318,19 +318,25 @@ function saveDownholeOperation() {
 
 .header-subtitle {
   font-size: 0.8125rem;
-  color: #64748b;
+  color: var(--color-text-secondary);
   margin-top: 0.125rem;
   margin-bottom: 0;
 }
 
 .week-cal-nav {
-  padding: 5px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-primary);
   cursor: pointer;
-  font-size: 12px;
-  color: #1e293b;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  transition: all 0.2s;
 }
 
 .downhole-content {
@@ -342,8 +348,8 @@ function saveDownholeOperation() {
 }
 
 .downhole-card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 12px;
 }
@@ -524,15 +530,15 @@ function saveDownholeOperation() {
 .form-input {
   height: 36px;
   padding: 0 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-primary);
   font-size: 13px;
   outline: none;
 }
 
 .form-input:focus {
-  border-color: #3b82f6;
+  border-color: var(--color-primary, #3b82f6);
 }
 
 .form-input.full-width { width: 100%; }
@@ -552,13 +558,19 @@ function saveDownholeOperation() {
 }
 
 .primary-btn {
-  padding: 12px 24px;
-  background: #3b82f6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  background: var(--color-primary, #3b82f6);
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
 .empty-state { text-align: center; padding: 20px; color: grey; }

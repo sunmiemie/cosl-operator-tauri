@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import {
   createSimulatedWellReport,
+  deleteSimulatedWellReport,
   listSimulatedWellReports,
   type SimulatedWellReportItem
 } from '@/services/simulated-well-report-api'
@@ -79,6 +80,13 @@ function normalizeCode(value: unknown) {
   return String(value || '')
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
+}
+
+function reportDeviceKey(workNo: unknown, sn: unknown) {
+  const w = normalizeCode(workNo)
+  const s = normalizeCode(sn)
+  if (!w || !s) return ''
+  return `${w}::${s}`
 }
 
 function statusText(value: number | undefined, fallback?: string) {
@@ -183,7 +191,34 @@ const selectableOperations = computed(() =>
   operations.value.filter((item) => Number(item.device_count || 0) > 0 && Array.isArray(item.devices) && item.devices.length > 0)
 )
 
-const selectedOperationDevices = computed(() => buildOperationDevices(selectedOperation.value))
+const reportedDeviceKeys = computed(() => {
+  const set = new Set<string>()
+  reports.value.forEach((report) => {
+    const meta = safeParseRemark((report as any).remark)
+    const workNo = (report as any).task_number || meta?.downhole_work_no || meta?.task_number || meta?.work_no
+    const sn =
+      meta?.device_sn ||
+      meta?.deviceSn ||
+      meta?.device_number ||
+      meta?.deviceNo ||
+      meta?.sn ||
+      meta?.code
+    const key = reportDeviceKey(workNo, sn)
+    if (key) set.add(key)
+  })
+  return set
+})
+
+const selectedOperationDevices = computed(() => {
+  const workNo = selectedOperation.value?.work_no
+  const list = buildOperationDevices(selectedOperation.value)
+  if (!workNo) return list
+  return list.filter((device) => {
+    if (!device.sn) return true
+    const key = reportDeviceKey(workNo, device.sn)
+    return !key || !reportedDeviceKeys.value.has(key)
+  })
+})
 const reportTitle = computed(
   () => selectedTemplate.value?.report_name || selectedDevice.value?.template || '井下测试综合报告'
 )
@@ -208,6 +243,42 @@ async function fetchReports() {
   } finally {
     loading.value = false
   }
+}
+
+async function handleDeleteReport(row: SimulatedWellReportItem) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除测试报告「${row.report_no}」吗？`,
+      '确认删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  await initAuth()
+  const res = await deleteSimulatedWellReport(row.id, getAuthHeaders())
+  if (!res.success) {
+    ElMessage.error(res.error || '删除失败')
+    return
+  }
+  if (res.data?.code !== 0) {
+    ElMessage.error(res.data?.msg || '删除失败')
+    return
+  }
+  const workNo = String((row as any).task_number || (row as any).meta?.downhole_work_no || '').trim()
+  if (workNo) {
+    await fetchOperations()
+    const target = operations.value.find((item) => String((item as any).work_no || '').trim() === workNo)
+    if (target?.id) {
+      const nextCount = Math.max(0, Number((target as any).report_count || 0) - 1)
+      const updateRes = await updateSimulatedWellDownholeWork(target.id, { report_count: nextCount }, getAuthHeaders())
+      if (updateRes.success && updateRes.data?.code === 0) {
+        ;(target as any).report_count = nextCount
+      }
+    }
+  }
+  ElMessage.success('已删除')
+  await fetchReports()
 }
 
 async function fetchOperations() {
@@ -301,7 +372,7 @@ async function loadTemplate(templateCodeValue: string) {
 async function openCreateFlow() {
   mode.value = 'select-operation'
   resetSelection()
-  await fetchOperations()
+  await Promise.all([fetchOperations(), fetchReports()])
 }
 
 function backStep() {
@@ -450,8 +521,8 @@ onMounted(async () => {
 
     <div class="downhole-content">
       <div v-if="mode === 'list'" class="downhole-card">
-        <div class="section-header-row">
-          <div class="search-box inline" style="max-width: 420px">
+        <div class="section-header-row list-toolbar">
+          <div class="search-box inline report-search">
             <Icon icon="mdi:magnify" class="search-icon" />
             <input v-model="reportKeyword" placeholder="搜索报告编号 / 作业号 / 设备 / 人员" />
           </div>
@@ -495,6 +566,7 @@ onMounted(async () => {
                   <div class="action-buttons">
                     <button class="action-btn action-btn-view" @click="openPreview(row)">查看</button>
                     <button class="action-btn action-btn-view" @click="ElMessage.info('下载流程待接入')">下载</button>
+                    <button class="action-btn action-btn-danger" @click="handleDeleteReport(row)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -547,7 +619,7 @@ onMounted(async () => {
           <p class="section-desc">
             已选择作业：<strong>{{ selectedOperation.work_no }}</strong> / {{ selectedOperation.well_name || '-' }}
           </p>
-          <div v-if="!selectedOperationDevices.length" class="empty-state"><p>该下井作业未保存测试设备</p></div>
+          <div v-if="!selectedOperationDevices.length" class="empty-state"><p>该下井作业暂无可选设备</p></div>
           <div v-else class="device-card-grid">
             <button
               v-for="device in selectedOperationDevices"
@@ -804,12 +876,12 @@ onMounted(async () => {
 
         <div class="downhole-card">
           <div class="downhole-card-title">测试结论 <span class="english-sub">Test Conclusion</span></div>
-          <div class="inline-radio-group">
-            <label class="rect-radio wide">
+          <div class="inline-radio-group conclusion-radio-group">
+            <label class="rect-radio wide conclusion-radio" :class="{ selected: conclusion === 'qualified' }">
               <input v-model="conclusion" type="radio" value="qualified" />
               <span class="radio-label-ok">所测资料合格</span>
             </label>
-            <label class="rect-radio wide">
+            <label class="rect-radio wide conclusion-radio" :class="{ selected: conclusion === 'unqualified' }">
               <input v-model="conclusion" type="radio" value="unqualified" />
               <span class="radio-label-fail">所测资料存在不合格项</span>
             </label>
@@ -966,7 +1038,7 @@ onMounted(async () => {
 
 .header-subtitle {
   font-size: 0.8125rem;
-  color: #64748b;
+  color: var(--color-text-secondary);
   margin-top: 0.125rem;
   margin-bottom: 0;
 }
@@ -979,6 +1051,23 @@ onMounted(async () => {
   gap: 10px;
 }
 
+.section-header-row {
+  justify-content: space-between;
+}
+
+.section-header-row.list-toolbar {
+  margin-bottom: 14px;
+}
+
+.search-box.inline.report-search {
+  max-width: 420px;
+}
+
+.header-actions .primary-btn,
+.header-actions .week-cal-nav {
+  min-width: 120px;
+}
+
 .downhole-content {
   flex: 1;
   overflow-y: auto;
@@ -988,8 +1077,8 @@ onMounted(async () => {
 }
 
 .downhole-card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 12px;
 }
@@ -1002,12 +1091,12 @@ onMounted(async () => {
 .english-sub,
 .tiny-hint {
   font-size: 12px;
-  color: #64748b;
+  color: var(--color-text-secondary);
 }
 
 .section-desc,
 .inline-hint {
-  color: #64748b;
+  color: var(--color-text-secondary);
   font-size: 13px;
   margin-top: 8px;
 }
@@ -1019,52 +1108,77 @@ onMounted(async () => {
 .week-cal-nav,
 .action-btn,
 .primary-btn {
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .week-cal-nav {
-  padding: 5px 10px;
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  color: #1e293b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  transition: all 0.2s;
 }
 
 .primary-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
+  height: 36px;
+  padding: 0 14px;
   border: 0;
-  background: #2563eb;
+  background: var(--color-primary, #3b82f6);
   color: #fff;
+  transition: all 0.2s;
+}
+
+.primary-btn:hover:not(:disabled),
+.week-cal-nav:hover:not(:disabled) {
+  filter: brightness(0.98);
 }
 
 .primary-btn:disabled {
-  background: #94a3b8;
+  background: var(--color-text-tertiary, #94a3b8);
   cursor: not-allowed;
 }
 
 .search-box.inline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   width: 100%;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 6px 10px;
+  background: transparent;
 }
 
 .search-box.inline input {
   flex: 1;
-  border: 0;
   outline: none;
-  font-size: 13px;
+  height: 36px;
+  padding: 0 16px;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  box-shadow: none;
+  box-sizing: border-box;
+  font-size: 14px;
 }
 
 .search-icon {
-  color: #64748b;
+  font-size: 20px;
+  color: var(--color-text-primary);
+  opacity: 0.9;
+}
+
+.search-box.inline input:focus {
+  border-color: var(--color-primary, #3b82f6);
 }
 
 .table-wrapper {
@@ -1078,7 +1192,7 @@ onMounted(async () => {
 
 .data-table th,
 .data-table td {
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--color-border);
   padding: 10px 8px;
   text-align: left;
   vertical-align: middle;
@@ -1087,8 +1201,8 @@ onMounted(async () => {
 
 .data-table th {
   font-weight: 600;
-  color: #334155;
-  background: #f8fafc;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
 }
 
 .action-buttons {
@@ -1098,13 +1212,19 @@ onMounted(async () => {
 
 .action-btn {
   padding: 4px 10px;
-  border: 1px solid #dbeafe;
-  background: #eff6ff;
-  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--color-accent-blue);
 }
 
 .action-btn-view {
-  background: #eff6ff;
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.action-btn-danger {
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error, #ef4444);
 }
 
 .status-badge {
@@ -1131,7 +1251,7 @@ onMounted(async () => {
 }
 
 .selected-table-row {
-  background: #eff6ff;
+  background: rgba(59, 130, 246, 0.12);
 }
 
 .device-card-grid,
@@ -1268,21 +1388,52 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  transition: all 0.2s ease;
+  cursor: pointer;
 }
 
 .rect-radio.wide {
   min-width: 220px;
 }
 
+.conclusion-radio-group {
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.conclusion-radio {
+  min-height: 44px;
+  padding: 0 16px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.conclusion-radio input {
+  accent-color: var(--color-primary, #3b82f6);
+}
+
+.conclusion-radio:hover {
+  border-color: rgba(59, 130, 246, 0.28);
+  background: var(--color-bg-hover, rgba(59, 130, 246, 0.06));
+}
+
+.conclusion-radio.selected {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.12);
+}
+
 .radio-label-ok {
-  color: #15803d;
+  color: var(--color-success, #16a34a);
+  font-weight: 600;
 }
 
 .radio-label-fail {
-  color: #dc2626;
+  color: var(--color-error, #dc2626);
+  font-weight: 600;
 }
 
 .depth-grid,

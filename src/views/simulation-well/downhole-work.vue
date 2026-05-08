@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EquipmentPackage from './equipment-package.vue'
@@ -14,10 +14,6 @@ import {
 const props = defineProps<{
   todayScheduledOrders: any[]
   downholeDevices: any[]
-}>()
-
-const emit = defineEmits<{
-  back: []
 }>()
 
 const { initAuth, getAuthHeaders } = useAuth()
@@ -67,7 +63,7 @@ const fetchList = async () => {
       getAuthHeaders()
     )
     if (!res.success) {
-      ElMessage.error(res.message || '获取下井作业失败')
+      ElMessage.error(res.error || '获取下井作业失败')
       return
     }
     if (res.data?.code !== 0) {
@@ -78,16 +74,6 @@ const fetchList = async () => {
   } finally {
     loading.value = false
   }
-}
-
-const canCreate = computed(() => (props.downholeDevices || []).length > 0)
-
-const openCreate = () => {
-  if (!canCreate.value) {
-    ElMessage.warning('请先在日历中选择要开始试验的测试产品')
-    return
-  }
-  createMode.value = true
 }
 
 const handleSave = async (payload: any) => {
@@ -115,7 +101,7 @@ const handleSave = async (payload: any) => {
     }
     const res = await createSimulatedWellDownholeWork(body, getAuthHeaders())
     if (!res.success) {
-      ElMessage.error(res.message || '新增下井作业失败')
+      ElMessage.error(res.error || '新增下井作业失败')
       return
     }
     if (res.data?.code !== 0) {
@@ -132,11 +118,15 @@ const handleSave = async (payload: any) => {
 }
 
 const handleDelete = async (row: SimulatedWellDownholeWorkItem) => {
-  await ElMessageBox.confirm(`确认删除作业「${row.work_no}」吗？`, '确认删除', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确认删除作业「${row.work_no}」吗？`, '确认删除', { type: 'warning' })
+  } catch {
+    return
+  }
   await initAuth()
   const res = await deleteSimulatedWellDownholeWork(row.id, getAuthHeaders())
   if (!res.success) {
-    ElMessage.error(res.message || '删除失败')
+    ElMessage.error(res.error || '删除失败')
     return
   }
   if (res.data?.code !== 0) {
@@ -199,22 +189,19 @@ onMounted(() => {
           <p class="header-subtitle">下井作业记录列表</p>
         </div>
       </div>
-      <div class="header-right">
-        <button class="week-cal-nav" @click="emit('back')">返回</button>
-      </div>
     </div>
 
     <div class="downhole-content">
       <div class="downhole-card">
-        <div class="section-header-row">
-          <div class="search-box inline" style="max-width: 420px">
+        <div class="section-header-row list-toolbar">
+          <div class="search-box inline downhole-search">
             <Icon icon="mdi:magnify" class="search-icon" />
             <input
               :value="keyword"
               placeholder="搜索作业ID/井名称"
               @input="keyword = ($event.target as HTMLInputElement).value"
             />
-            <button class="week-cal-nav" @click="fetchList">查询</button>
+            <button class="week-cal-nav primary search-action" @click="fetchList">查询</button>
           </div>
         </div>
 
@@ -250,9 +237,13 @@ onMounted(() => {
                 </td>
                 <td style="text-align: center">{{ formatReportCount(row.report_count) }}</td>
                 <td style="text-align: center">
-                  <button class="op-btn view" @click="handleView(row)">查看</button>
-                  <button class="op-btn edit" @click="handleEdit(row)">编辑</button>
-                  <button class="op-btn delete" :disabled="!canDelete(row)" @click="handleDelete(row)">删除</button>
+                  <div class="op-actions">
+                    <button class="op-btn view" @click="handleView(row)">查看</button>
+                    <button class="op-btn edit" @click="handleEdit(row)">编辑</button>
+                    <button class="op-btn delete" :disabled="!canDelete(row)" @click="handleDelete(row)">
+                      删除
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
