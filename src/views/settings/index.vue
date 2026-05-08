@@ -26,7 +26,7 @@ const camera = useCamera()
 const flojoyBackend = useFlojoyBackend()
 
 // 后端地址
-const backendUrl = ref('http://localhost:60034')
+const backendUrl = ref('http://127.0.0.1:8000')
 const isSaving = ref(false)
 const saveSuccess = ref(false)
 const configPath = ref('')
