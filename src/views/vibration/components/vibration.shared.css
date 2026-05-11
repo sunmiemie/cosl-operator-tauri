@@ -401,7 +401,6 @@
 .cell-applicant, .cell-param, .cell-type { color: var(--color-text-secondary); }
 
 .type-tag { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; }
-.type-tag.sim { background: rgba(250, 204, 21, 0.18); color: #ca8a04; }
 .type-tag.formal { background: rgba(59, 130, 246, 0.12); color: var(--color-accent-blue); }
 
 .empty-state {
@@ -634,7 +633,6 @@
   border-left: none;
   font-size: 10px;
 }
-.scheduled-item.type-sim { background: linear-gradient(135deg, #facc15, #eab308); }
 .scheduled-item.type-formal { background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4)); }
 
 .scheduled-item:hover {

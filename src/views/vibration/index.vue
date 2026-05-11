@@ -17,7 +17,6 @@ import type { Stage, WorkOrder } from './types'
 const stage = ref<Stage>('dashboard')
 const currentWorkOrderId = ref<string | null>(null)
 const currentWorkOrderSnapshot = ref<WorkOrder | null>(null)
-const forcedMode = ref<'formal' | 'pre' | null>(null)
 const showConfirmStartModal = ref(false)
 const calStep = ref<'amp' | 'dur'>('amp')
 
@@ -82,10 +81,8 @@ const {
 } = useVibrationChecks()
 
 const currentWorkOrder = computed(() => currentWorkOrderSnapshot.value)
-
-const testMode = computed<'formal' | 'pre'>(() =>
-  forcedMode.value ? forcedMode.value : (currentWorkOrder.value?.mode === 'pre' ? 'pre' : 'formal')
-)
+const forcedMode = ref<'formal' | 'pre'>('pre')
+const testMode = computed<'formal' | 'pre'>(() => forcedMode.value)
 
 const testing = useVibrationTesting({
   getCurrentWorkOrder: () => currentWorkOrder.value,
@@ -277,6 +274,7 @@ async function startExperiment() {
 
   currentWorkOrderId.value = selected.id
   currentWorkOrderSnapshot.value = selected
+  forcedMode.value = 'pre'
   resetStartupChecks()
   showStartupCheck.value = true
 }
@@ -358,13 +356,6 @@ function confirmStartVibration() {
 function convertToFormal() {
   testing.pauseVibTest()
   forcedMode.value = 'formal'
-  if (currentWorkOrderSnapshot.value) {
-    currentWorkOrderSnapshot.value = {
-      ...currentWorkOrderSnapshot.value,
-      mode: 'formal',
-      type: '正式实验'
-    }
-  }
   devCheckItems.value.forEach(i => { i.answer = 'yes'; i.remark = '' })
   showSafetyWarning.value = false
   stage.value = 'devcheck'

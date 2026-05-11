@@ -507,8 +507,12 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     isPaused.value = false
     stopCapturePolling()
     void invoke('stop_vibration_video_stream', { outputDir: captureOutputDir.value || null }).catch(() => undefined)
-    if (options.getTestMode() === 'pre') options.onFinishToDashboard()
-    else options.onFinishToReport()
+    const exportDir = String(exportOutputDir.value || '').trim()
+    if (options.getTestMode() === 'pre' || !exportDir) {
+      options.onFinishToDashboard()
+      return
+    }
+    options.onFinishToReport(exportDir)
   }
 
   function getOscCanvas() {

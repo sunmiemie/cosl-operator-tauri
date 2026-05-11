@@ -32,23 +32,12 @@ export function useVibrationSchedule() {
 
   const visibleOrderStatus = 1
 
-  function normalizeVibrationMode(rawType: string | null | undefined): 'pre' | 'formal' {
-    const text = String(rawType || '').trim()
-    if (!text) return 'formal'
-    if (text.includes('预实验') || text.includes('预试验') || text.includes('模拟实验') || text.includes('模拟测试')) {
-      return 'pre'
-    }
-    return 'formal'
-  }
-
   function mapVibrationTableOrder(dto: VibrationTableOrderDTO): WorkOrder {
-    const mode = normalizeVibrationMode(dto.order_type)
     return {
       id: dto.order_no,
       dbId: dto.id,
       deviceNumber: (dto as any).device_number || (dto as any).deviceNumber || '',
-      type: mode === 'pre' ? '预实验' : '正式实验',
-      mode,
+      type: '正式实验',
       applicant: dto.applicant,
       phone: '', // 后端无此字段，用空字符串或占位
       device: dto.device_name,
