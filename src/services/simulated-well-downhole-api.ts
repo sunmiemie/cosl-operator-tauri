@@ -8,6 +8,8 @@ export interface SimulatedWellDownholeWorkItem {
   interval_text: string
   order_ids?: string[]
   devices?: any[]
+  supportingTools?: any[]
+  supporting_tools?: any[]
   device_count: number
   status: number
   status_text?: string
@@ -58,6 +60,8 @@ export interface CreateSimulatedWellDownholeWorkPayload {
   interval_text?: string
   order_ids: string[]
   devices: any[]
+  supportingTools?: any[]
+  supporting_tools?: any[]
   status?: number
   report_count?: number
 }

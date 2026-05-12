@@ -895,3 +895,104 @@
 }
 
 .start-icon { font-size: 20px; }
+
+.product-picker-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.product-picker-dialog {
+  width: min(760px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.product-picker-header,
+.product-picker-actions,
+.product-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.product-picker-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.product-picker-header p {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.product-picker-actions {
+  justify-content: flex-start;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-list {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.product-picker-row {
+  display: grid;
+  grid-template-columns: 24px minmax(160px, 1fr) minmax(100px, 140px) minmax(180px, 1.2fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  cursor: pointer;
+}
+
+.product-picker-row:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.product-main {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.product-sub,
+.product-order {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--color-border);
+  border-bottom: none;
+}

@@ -12,6 +12,8 @@ import extractedFields from './extracted_fields.json'
 const props = defineProps<{
   todayScheduledOrders: any[]
   downholeDevices: any[]
+  initialWork?: any
+  mode?: 'create' | 'edit'
 }>()
 
 const emit = defineEmits(['back', 'save'])
@@ -37,6 +39,7 @@ type ResolvedDeviceRow = {
   template: string
   templateName: string
   supportTools: TemplateInstrument[]
+  selectedSupportTools?: TemplateInstrument[]
 }
 
 const templateLoading = ref(false)
@@ -126,6 +129,21 @@ function mergeInstrumentLists(...lists: any[][]): TemplateInstrument[] {
     })
   })
   return Array.from(map.values())
+}
+
+function getSourceToolList(device: any, keys: string[]) {
+  for (const key of keys) {
+    const value = device?.[key]
+    if (Array.isArray(value)) return value
+  }
+  return []
+}
+
+function isSameInstrument(a: TemplateInstrument, b: TemplateInstrument) {
+  return (
+    normalizeCode(a.code) === normalizeCode(b.code) &&
+    normalizeText(a.zh || a.en || a.code) === normalizeText(b.zh || b.en || b.code)
+  )
 }
 
 const fallbackTemplateDetails = computed<SimulatedWellReportTemplateDetail[]>(() => {
@@ -290,6 +308,13 @@ const startedOrderDevices = computed(() => {
       device?.deviceName || device?.name || '',
       device?.template || 'CBMT61XA_REPORT',
     )
+    const availableTools = mergeInstrumentLists(
+      getSourceToolList(device, ['availableSupportingTools', 'available_supporting_tools', 'supportTools', 'support_tools']),
+      resolvedTemplate.supportTools,
+    )
+    const selectedTools = mergeInstrumentLists(
+      getSourceToolList(device, ['selectedSupportingTools', 'selected_supporting_tools', 'supportingTools', 'supporting_tools']),
+    )
     grouped.get(orderId).deviceList.push({
       id: device?.id || `${orderId}_${device?.sn || index + 1}`,
       name: device?.deviceName || device?.name || '-',
@@ -297,7 +322,8 @@ const startedOrderDevices = computed(() => {
       code: device?.code || device?.sn || '',
       template: resolvedTemplate.templateCode,
       templateName: resolvedTemplate.templateName,
-      supportTools: resolvedTemplate.supportTools,
+      supportTools: availableTools,
+      selectedSupportTools: selectedTools,
     })
   })
   return Array.from(grouped.values())
@@ -333,7 +359,9 @@ watch(
         ;(device.supportTools || []).forEach((tool) => {
           const key = getSupportToolKey(order.id, device, tool)
           validKeys.add(key)
-          if (next[key] === undefined) next[key] = false
+          if (next[key] === undefined) {
+            next[key] = (device as any).selectedSupportTools?.some((selected: TemplateInstrument) => isSameInstrument(selected, tool)) || false
+          }
         })
       })
     })
@@ -360,16 +388,23 @@ function toggleSupportTool(orderId: string, device: ResolvedDeviceRow, tool: Tem
 
 const resolvedDownholeDevices = computed(() =>
   startedOrderDevices.value.flatMap((order: any) =>
-    (order.deviceList || []).map((device: ResolvedDeviceRow) => ({
-      orderId: order.id,
-      customer: order.customer,
-      deviceName: device.name,
-      sn: device.sn,
-      code: device.code,
-      template: device.template,
-      templateName: device.templateName,
-      supportingTools: device.supportTools,
-    })),
+    (order.deviceList || []).map((device: ResolvedDeviceRow) => {
+      const selectedTools = (device.supportTools || []).filter((tool) => isToolSelected(order.id, device, tool))
+      return {
+        id: device.id,
+        orderId: order.id,
+        customer: order.customer,
+        deviceName: device.name,
+        name: device.name,
+        sn: device.sn,
+        code: device.code,
+        template: device.template,
+        templateName: device.templateName,
+        supportingTools: selectedTools,
+        selectedSupportingTools: selectedTools,
+        availableSupportingTools: device.supportTools,
+      }
+    }),
   ),
 )
 
@@ -410,6 +445,29 @@ const mainIntervalFrom = ref('')
 const mainIntervalTo = ref('')
 const repeatIntervalFrom = ref('')
 const repeatIntervalTo = ref('')
+
+watch(
+  () => props.initialWork,
+  (work) => {
+    if (!work) return
+    selectedWellName.value = work.well_name || ''
+    const envText = String(work.env_text || '')
+    const depth = envText.match(/井深:?\s*([^\s/]+)/)?.[1]
+    const temp = envText.match(/井温:?\s*([^\s/]+)/)?.[1]
+    const pressure = envText.match(/井压:?\s*([^\s/]+)/)?.[1]
+    wellDepth.value = depth || ''
+    wellTemperature.value = temp || ''
+    wellPressure.value = pressure || ''
+    const intervalText = String(work.interval_text || '')
+    const mainMatch = intervalText.match(/主测井段:?\s*([^~\s/]+)\s*~\s*([^\s/]+)/)
+    const repeatMatch = intervalText.match(/复测井段:?\s*([^~\s/]+)\s*~\s*([^\s/]+)/)
+    mainIntervalFrom.value = mainMatch?.[1] || ''
+    mainIntervalTo.value = mainMatch?.[2] || ''
+    repeatIntervalFrom.value = repeatMatch?.[1] || ''
+    repeatIntervalTo.value = repeatMatch?.[2] || ''
+  },
+  { immediate: true },
+)
 
 function saveDownholeOperation() {
   const payload = {
@@ -647,7 +705,7 @@ onMounted(() => {
         </div>
 
         <div class="form-actions">
-          <button class="primary-btn" @click="saveDownholeOperation">保存下井作业</button>
+          <button class="primary-btn" @click="saveDownholeOperation">{{ props.mode === 'edit' ? '保存编辑' : '保存下井作业' }}</button>
         </div>
       </div>
     </div>

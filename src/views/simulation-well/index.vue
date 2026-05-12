@@ -23,21 +23,35 @@ const { initAuth, getAuthHeaders } = useAuth()
 const sanxinDetailVisible = ref(false)
 const sanxinDetailLoading = ref(false)
 const sanxinDetailOrder = ref<SimulatedWellOrderDTO | null>(null)
+const productPickerVisible = ref(false)
+const selectedProductIds = ref<string[]>([])
+
+const selectedOrdersFromSchedule = computed<WorkOrder[]>(() => schedule.selectedStartOrders.value)
+
+const productPickerRows = computed(() => {
+  return selectedOrdersFromSchedule.value.flatMap((order) =>
+    (order.deviceList || []).map((device) => ({
+      id: device.id,
+      orderId: order.id,
+      customer: order.customer,
+      name: device.name,
+      sn: device.code || device.sn || '',
+      template: device.template || device.code || device.sn || 'DEFAULT_DOWNHOLE_REPORT'
+    }))
+  )
+})
 
 const selectedDevicesFromSchedule = computed<DownholeDevice[]>(() => {
-  const list: DownholeDevice[] = []
-  schedule.selectedScheduledDeviceIds.value.forEach((deviceId) => {
-    const row = schedule.getDeviceRow(deviceId)
-    if (!row) return
-    list.push({
-      orderId: row.order.id,
-      customer: row.order.customer,
-      deviceName: row.deviceName,
-      sn: row.deviceNumber,
-      template: row.deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
-    })
-  })
-  return list
+  const selected = new Set(selectedProductIds.value)
+  return productPickerRows.value
+    .filter((row) => selected.has(row.id))
+    .map((row) => ({
+      orderId: row.orderId,
+      customer: row.customer,
+      deviceName: row.name,
+      sn: row.sn,
+      template: row.template
+    }))
 })
 
 const selectedDevicesFromRoute = computed<DownholeDevice[]>(() => {
@@ -95,6 +109,50 @@ const startSelectedOrders = computed<WorkOrder[]>(() => {
   return Array.from(map.values())
 })
 
+const startDevicesForSave = computed(() => {
+  return startSelectedDevices.value
+    .map((device) => `${device.orderId}::${device.sn}`)
+    .filter(Boolean)
+})
+
+watch(
+  () => productPickerRows.value.map((row) => row.id).join('|'),
+  () => {
+    const validIds = new Set(productPickerRows.value.map((row) => row.id))
+    selectedProductIds.value = selectedProductIds.value.filter((id) => validIds.has(id))
+  }
+)
+
+function toggleProductSelection(deviceId: string, checked: boolean) {
+  const set = new Set(selectedProductIds.value)
+  if (checked) set.add(deviceId)
+  else set.delete(deviceId)
+  selectedProductIds.value = Array.from(set)
+}
+
+function selectAllProducts() {
+  selectedProductIds.value = productPickerRows.value.map((row) => row.id)
+}
+
+function clearProductSelection() {
+  selectedProductIds.value = []
+}
+
+function confirmProductSelection() {
+  if (selectedDevicesFromSchedule.value.length === 0) {
+    ElMessage.warning('请先选择要开始实验的测试产品')
+    return
+  }
+  productPickerVisible.value = false
+  router.replace({
+    path: '/simulation-well',
+    query: {
+      view: 'equipment-package',
+      startDevices: JSON.stringify(selectedDevicesFromSchedule.value)
+    }
+  })
+}
+
 const normalizeView = (v: unknown): SimulationWellView => {
   if (v === 'downhole-work' || v === 'equipment-package' || v === 'test-report') return v
   return 'dashboard'
@@ -121,17 +179,12 @@ watch(
 )
 
 function handleStartScheduledTest() {
-  if (startSelectedDevices.value.length === 0) {
-    ElMessage.warning('请先在日历中点击选择要开始试验的测试产品')
+  if (selectedOrdersFromSchedule.value.length === 0) {
+    ElMessage.warning('请先在日历中点击选择要开始实验的工单')
     return
   }
-  router.replace({
-    path: '/simulation-well',
-    query: {
-      view: 'equipment-package',
-      startDevices: JSON.stringify(startSelectedDevices.value)
-    }
-  })
+  if (selectedProductIds.value.length === 0) selectAllProducts()
+  productPickerVisible.value = true
 }
 
 function backToDashboard() {
@@ -170,16 +223,23 @@ async function handleSaveDownhole(payload: any) {
     ]
       .filter(Boolean)
       .join(' ')
-    const intervalText =
+    const mainInterval =
       payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
         ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
         : ''
+    const repeatInterval =
+      payload?.testInterval?.repeatFrom || payload?.testInterval?.repeatTo
+        ? `复测井段: ${payload?.testInterval?.repeatFrom || '-'}~${payload?.testInterval?.repeatTo || '-'}`
+        : ''
+    const intervalText = [mainInterval, repeatInterval].filter(Boolean).join(' / ')
     const body = {
       well_name: payload?.wellName || '',
       env_text: envText,
       interval_text: intervalText,
       order_ids: payload?.orderIds || [],
       devices: payload?.devices || [],
+      supportingTools: payload?.supportingTools || [],
+      supporting_tools: payload?.supportingTools || [],
       status: 1,
       report_count: Number(payload?.reportCount ?? payload?.report_count ?? 0) || 0
     }
@@ -193,7 +253,7 @@ async function handleSaveDownhole(payload: any) {
       ElMessage.error(res.data?.msg || '保存下井作业失败')
       return
     }
-    schedule.consumeDevices(schedule.selectedStartDeviceIds.value)
+    schedule.consumeDevices(startDevicesForSave.value)
     await schedule.refreshWorkOrders()
     ElMessage.success('下井作业已保存')
     router.replace({ path: '/simulation-well', query: { view: 'downhole-work' } })
@@ -262,6 +322,41 @@ async function handleSaveDownhole(payload: any) {
       @view-order-detail="handleViewOrderDetail"
     />
 
+    <div v-if="currentView === 'dashboard' && productPickerVisible" class="product-picker-mask">
+      <div class="product-picker-dialog">
+        <div class="product-picker-header">
+          <div>
+            <h3>选择测试产品</h3>
+            <p>已排程工单确认开始实验后，在这里选择本次实际下井测试的产品。</p>
+          </div>
+          <button class="product-picker-close" @click="productPickerVisible = false">×</button>
+        </div>
+        <div class="product-picker-actions">
+          <button class="week-cal-nav" @click="selectAllProducts">全选</button>
+          <button class="week-cal-nav" @click="clearProductSelection">清空</button>
+          <span>已选择 {{ selectedProductIds.length }} / {{ productPickerRows.length }} 个产品</span>
+        </div>
+        <div class="product-picker-list">
+          <label v-for="row in productPickerRows" :key="row.id" class="product-picker-row">
+            <input
+              type="checkbox"
+              :checked="selectedProductIds.includes(row.id)"
+              @change="toggleProductSelection(row.id, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="product-main">{{ row.name }}</span>
+            <span class="product-sub">{{ row.sn || '-' }}</span>
+            <span class="product-order">{{ row.orderId }} · {{ row.customer }}</span>
+          </label>
+        </div>
+        <div class="product-picker-footer">
+          <button class="week-cal-nav" @click="productPickerVisible = false">取消</button>
+          <button class="primary-btn" :disabled="selectedProductIds.length === 0" @click="confirmProductSelection">
+            确认开始实验
+          </button>
+        </div>
+      </div>
+    </div>
+
     <SanxinOrderDetailModal
       v-if="currentView === 'dashboard'"
       :visible="sanxinDetailVisible"
@@ -274,7 +369,6 @@ async function handleSaveDownhole(payload: any) {
       v-else-if="currentView === 'downhole-work'"
       :today-scheduled-orders="startSelectedOrders"
       :downhole-devices="startSelectedDevices"
-      @save="handleSaveDownhole"
     />
 
     <EquipmentPackage

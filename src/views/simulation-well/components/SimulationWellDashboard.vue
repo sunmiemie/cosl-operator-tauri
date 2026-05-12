@@ -28,7 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:searchKeyword': [value: string]
-  'device-drag-start': [event: DragEvent, device: { id: string; label: string; sn: string }]
+  'device-drag-start': [event: DragEvent, order: { id: string; label: string }]
   'drag-end': []
   'prev-week': []
   'next-week': []
@@ -81,18 +81,13 @@ const layoutWithDayIndex = computed(() => {
     .filter((x) => x.dayIndex >= 0)
 })
 
-const selectedDeviceRows = computed(() => {
+const selectedOrderRows = computed(() => {
   return props.selectedScheduledDeviceIds
-    .map((id) => props.getDeviceRow(id))
-    .filter(Boolean) as Array<{ order: WorkOrder; deviceName: string; deviceNumber: string }>
+    .map((id) => props.getWorkOrderById(id))
+    .filter(Boolean) as WorkOrder[]
 })
 
-const scheduledDeviceIdSet = computed(() => {
-  const set = new Set<string>()
-  Object.values(props.scheduledOrders || {}).forEach((ids) => ids.forEach((id) => set.add(id)))
-  Object.values(props.scheduledOrdersTentative || {}).forEach((ids) => ids.forEach((id) => set.add(id)))
-  return set
-})
+const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
 
 const expandedOrderIds = ref<string[]>([])
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
@@ -196,14 +191,21 @@ const handleGridDrop = (e: DragEvent) => {
             </thead>
             <tbody>
               <template v-for="order in unscheduledOrders" :key="order.id">
-                <tr @click="toggleExpanded(order.id)">
+                <tr
+                  class="order-row"
+                  :class="{ 'is-scheduled': scheduledOrderIdSet.has(order.id) }"
+                  draggable="true"
+                  @click="toggleExpanded(order.id)"
+                  @dragstart="emit('device-drag-start', $event, { id: order.id, label: order.id })"
+                  @dragend="emit('drag-end')"
+                >
                   <td class="cell-id">{{ order.id }}</td>
                   <td class="cell-customer">{{ order.customer }}</td>
                   <td class="cell-device cell-detail">
                     <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
                       <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                     </span>
-                    {{ (order.deviceList || []).filter((x) => !scheduledDeviceIdSet.has(x.id)).length }}台
+                    {{ order.deviceList?.length || 0 }}台
                   </td>
                   <td class="cell-plan">{{ order.planTime || '-' }}</td>
                   <td class="cell-desc">{{ order.taskDesc || '-' }}</td>
@@ -215,18 +217,15 @@ const handleGridDrop = (e: DragEvent) => {
                   <td class="expanded-cell" colspan="6">
                     <div class="instrument-list">
                       <div
-                        v-for="d in (order.deviceList || []).filter((x) => !scheduledDeviceIdSet.has(x.id))"
+                        v-for="d in (order.deviceList || [])"
                         :key="d.id"
                         class="instrument-item"
-                        draggable="true"
-                        @dragstart="emit('device-drag-start', $event, { id: d.id, label: d.name, sn: d.code || d.sn || '' })"
-                        @dragend="emit('drag-end')"
                       >
                         <span>{{ d.name }}</span>
                         <span class="instrument-sn">{{ d.code || d.sn }}</span>
                       </div>
                       <div
-                        v-if="(order.deviceList || []).filter((x) => !scheduledDeviceIdSet.has(x.id)).length === 0"
+                        v-if="(order.deviceList || []).length === 0"
                         class="empty-state"
                       >
                         <p>当前无待排程设备</p>
@@ -338,19 +337,19 @@ const handleGridDrop = (e: DragEvent) => {
 
       <div class="control-center">
         <div class="control-center-left">
-          <template v-if="selectedDeviceRows.length">
+          <template v-if="selectedOrderRows.length">
             <div class="selected-order">
               <Icon icon="mdi:check" class="selected-icon" />
-              <span class="selected-label">已选择测试产品: {{ selectedDeviceRows.length }} 个</span>
+              <span class="selected-label">已选择工单: {{ selectedOrderRows.length }} 个</span>
             </div>
             <span class="selected-divider">|</span>
-            <span class="selected-device" v-for="r in selectedDeviceRows" :key="r.order.id + '_' + r.deviceNumber">
-              {{ r.order.id }} · {{ r.deviceName }}
+            <span class="selected-device" v-for="r in selectedOrderRows" :key="r.id">
+              {{ r.id }} · {{ r.customer }}
             </span>
           </template>
-          <span v-else class="selected-placeholder">请在日历中点击选择要开始试验的测试产品</span>
+          <span v-else class="selected-placeholder">请在日历中点击选择要开始实验的工单</span>
         </div>
-        <button class="primary-btn" :disabled="selectedDeviceRows.length === 0" @click="emit('start-scheduled-test')">
+        <button class="primary-btn" :disabled="selectedOrderRows.length === 0" @click="emit('start-scheduled-test')">
           <Icon icon="mdi:play" class="start-icon" />开始实验
         </button>
       </div>

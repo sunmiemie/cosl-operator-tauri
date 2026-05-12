@@ -40,8 +40,8 @@ export function useSimulationWellSchedule() {
   const searchKeyword = ref('')
   const slotHeightPx = 44
   const isDragging = ref(false)
-  const draggedDeviceId = ref<string | null>(null)
-  const draggedDeviceMeta = ref<{ id: string; label: string; sn: string } | null>(null)
+  const draggedOrderId = ref<string | null>(null)
+  const draggedOrderMeta = ref<{ id: string; label: string } | null>(null)
 
   const workOrders = ref<WorkOrder[]>([])
 
@@ -77,31 +77,33 @@ export function useSimulationWellSchedule() {
         ? buildSavedDownholeDeviceIds(downholeRes.data.data?.list || [])
         : new Set<string>()
 
-    workOrders.value = (orderRes.data.data?.list || []).map((dto) => {
-      const orderId = dto.task_number
-      const devices = dto.devices || []
-      const remainingDevices = devices.filter(
-        (d) => !savedDownholeDeviceIds.has(`${orderId}::${normalizeText(d.device_number)}`)
-      )
-      return {
-        id: orderId,
-        dbId: dto.id,
-        customer: normalizeText(dto.customer_unit) || '—',
-        devices: remainingDevices.length,
-        status: String(dto.status_text || dto.status || ''),
-        createTime: toYmd(dto.created_at) || '',
-        planTime: toYmd(dto.plan_date) || '',
-        taskDesc: normalizeText(dto.task_desc) || '',
-        deviceList: remainingDevices.map((d) => ({
-          id: `${orderId}::${d.device_number}`,
-          name: normalizeText(d.device_name) || '—',
-          sn: normalizeText(d.device_number) || '',
-          code: normalizeText(d.device_number) || '',
-          template: normalizeText(d.device_number) || ''
-        })),
-        supportingTools: []
-      }
-    })
+    workOrders.value = (orderRes.data.data?.list || [])
+      .map((dto) => {
+        const orderId = dto.task_number
+        const devices = dto.devices || []
+        const remainingDevices = devices.filter(
+          (d) => !savedDownholeDeviceIds.has(`${orderId}::${normalizeText(d.device_number)}`)
+        )
+        return {
+          id: orderId,
+          dbId: dto.id,
+          customer: normalizeText(dto.customer_unit) || '—',
+          devices: remainingDevices.length,
+          status: String(dto.status_text || dto.status || ''),
+          createTime: toYmd(dto.created_at) || '',
+          planTime: toYmd(dto.plan_date) || '',
+          taskDesc: normalizeText(dto.task_desc) || '',
+          deviceList: remainingDevices.map((d) => ({
+            id: `${orderId}::${d.device_number}`,
+            name: normalizeText(d.device_name) || '—',
+            sn: normalizeText(d.device_number) || '',
+            code: normalizeText(d.device_number) || '',
+            template: normalizeText(d.device_number) || ''
+          })),
+          supportingTools: []
+        }
+      })
+      .filter((order) => order.devices > 0 && order.deviceList.length > 0)
   }
 
   const fetchOrderDetail = async (dbId: number): Promise<SimulatedWellOrderDTO | null> => {
@@ -199,6 +201,8 @@ export function useSimulationWellSchedule() {
   type ScheduledLayoutItem = {
     deviceId: string
     orderId: string
+    deviceName: string
+    deviceNumber: string
     dateStr: string
     startTimeKey: string
     startIdx: number
@@ -301,15 +305,18 @@ export function useSimulationWellSchedule() {
 
   const todayScheduledDevices = computed<DownholeDevice[]>(() => {
     const list: DownholeDevice[] = []
-    todayScheduledDeviceIds.value.forEach((deviceId) => {
-      const row = getDeviceRow(deviceId)
-      if (!row) return
-      list.push({
-        orderId: row.order.id,
-        customer: row.order.customer,
-        deviceName: row.deviceName,
-        sn: row.deviceNumber,
-        template: row.deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
+    todayScheduledOrderIds.value.forEach((orderId) => {
+      const order = getWorkOrderById(orderId)
+      if (!order) return
+      ;(order.deviceList || []).forEach((device) => {
+        const deviceNumber = normalizeText(device.code || device.sn)
+        list.push({
+          orderId: order.id,
+          customer: order.customer,
+          deviceName: device.name,
+          sn: deviceNumber,
+          template: device.template || deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
+        })
       })
     })
     return list
@@ -321,15 +328,18 @@ export function useSimulationWellSchedule() {
 
   const selectedStartDevices = computed<DownholeDevice[]>(() => {
     const list: DownholeDevice[] = []
-    selectedStartDeviceIds.value.forEach((deviceId) => {
-      const row = getDeviceRow(deviceId)
-      if (!row) return
-      list.push({
-        orderId: row.order.id,
-        customer: row.order.customer,
-        deviceName: row.deviceName,
-        sn: row.deviceNumber,
-        template: row.deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
+    selectedStartDeviceIds.value.forEach((orderId) => {
+      const order = getWorkOrderById(orderId)
+      if (!order) return
+      ;(order.deviceList || []).forEach((device) => {
+        const deviceNumber = normalizeText(device.code || device.sn)
+        list.push({
+          orderId: order.id,
+          customer: order.customer,
+          deviceName: device.name,
+          sn: deviceNumber,
+          template: device.template || deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
+        })
       })
     })
     return list
@@ -342,17 +352,7 @@ export function useSimulationWellSchedule() {
 
   const selectedStartOrders = computed<WorkOrder[]>(() => {
     const selected = new Set(selectedStartDeviceIds.value)
-    const out: WorkOrder[] = []
-    workOrders.value.forEach((order) => {
-      const filteredDevices = (order.deviceList || []).filter((d) => selected.has(d.id))
-      if (!filteredDevices.length) return
-      out.push({
-        ...order,
-        devices: filteredDevices.length,
-        deviceList: filteredDevices
-      })
-    })
-    return out
+    return workOrders.value.filter((order) => selected.has(order.id))
   })
 
   const getWorkOrderById = (id: string) => workOrders.value.find((o) => o.id === id)
@@ -371,17 +371,16 @@ export function useSimulationWellSchedule() {
   const getDeviceRow = (deviceId: string) => deviceIndex.value.get(deviceId) || null
 
   const unscheduledOrders = computed(() => {
-    const scheduledDeviceIds = new Set<string>([
+    const scheduledOrderIds = new Set<string>([
       ...Object.keys(scheduledEvents.value),
       ...Object.keys(scheduledEventsTentative.value)
     ])
     const kw = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) => {
-      const remaining = order.deviceList.filter((d) => !scheduledDeviceIds.has(d.id))
-      if (remaining.length === 0) return false
+      if (scheduledOrderIds.has(order.id)) return false
       if (!kw) return true
-      const deviceHay = remaining.map((d) => `${d.name} ${d.code || ''} ${d.sn || ''}`).join(' ')
+      const deviceHay = order.deviceList.map((d) => `${d.name} ${d.code || ''} ${d.sn || ''}`).join(' ')
       const hay = `${order.id} ${order.customer} ${order.planTime} ${order.taskDesc} ${deviceHay}`.toLowerCase()
       return hay.includes(kw)
     })
@@ -434,20 +433,20 @@ export function useSimulationWellSchedule() {
 
   function loadPresetSchedule() {}
 
-  function handleDeviceDragStart(e: DragEvent, device: { id: string; label: string; sn: string }) {
-    draggedDeviceId.value = device.id
-    draggedDeviceMeta.value = device
+  function handleDeviceDragStart(e: DragEvent, order: { id: string; label: string }) {
+    draggedOrderId.value = order.id
+    draggedOrderMeta.value = order
     isDragging.value = true
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('text/plain', device.id)
-      e.dataTransfer.setData('application/json', JSON.stringify(device))
+      e.dataTransfer.setData('text/plain', order.id)
+      e.dataTransfer.setData('application/json', JSON.stringify(order))
     }
   }
 
   function handleDragEnd() {
-    draggedDeviceId.value = null
-    draggedDeviceMeta.value = null
+    draggedOrderId.value = null
+    draggedOrderMeta.value = null
     isDragging.value = false
   }
 
@@ -459,64 +458,63 @@ export function useSimulationWellSchedule() {
   function handleDragLeave() {}
 
   function scheduleDevice(
-    deviceId: string,
+    orderId: string,
     dateStr: string,
     timeKey: string,
     isPast: boolean,
     isTentative: boolean,
-    meta?: { label?: string; sn?: string } | null
+    meta?: { label?: string } | null
   ) {
     if (isPast) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
-    if (scheduledEvents.value[deviceId] || scheduledEventsTentative.value[deviceId]) return
+    if (scheduledEvents.value[orderId] || scheduledEventsTentative.value[orderId]) return
 
-    const info = getDeviceRow(deviceId)
-    if (!info) return
+    const order = getWorkOrderById(orderId)
+    if (!order) return
 
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, timeSlots.value.length - 1 - startIdx)
     const nextEvent: ScheduledEvent = {
-      deviceId,
-      orderId: info.order.id,
-      deviceName: normalizeText(meta?.label) || info.deviceName,
-      deviceNumber: normalizeText(meta?.sn) || info.deviceNumber,
+      deviceId: orderId,
+      orderId: order.id,
+      deviceName: normalizeText(meta?.label) || order.id,
+      deviceNumber: String(order.devices || order.deviceList?.length || ''),
       dateStr,
       startTimeKey: timeKey,
       span: Math.min(1, maxSpan)
     }
 
     if (isTentative) {
-      scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [deviceId]: nextEvent }
+      scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [orderId]: nextEvent }
     } else {
-      scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: nextEvent }
+      scheduledEvents.value = { ...scheduledEvents.value, [orderId]: nextEvent }
     }
 
     if (isDragging.value) {
       isDragging.value = false
-      draggedDeviceId.value = null
+      draggedOrderId.value = null
     }
   }
 
   function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     e.preventDefault()
-    const deviceId = e.dataTransfer?.getData('text/plain') || draggedDeviceId.value
-    if (!deviceId) return
-    let meta = draggedDeviceMeta.value
+    const orderId = e.dataTransfer?.getData('text/plain') || draggedOrderId.value
+    if (!orderId) return
+    let meta = draggedOrderMeta.value
     const raw = e.dataTransfer?.getData('application/json')
     if (raw) {
       try {
         const parsed = JSON.parse(raw)
         meta = {
-          id: String(parsed?.id || deviceId),
-          label: String(parsed?.label || ''),
-          sn: String(parsed?.sn || '')
+          id: String(parsed?.id || orderId),
+          label: String(parsed?.label || '')
         }
       } catch {}
     }
     const isTentative = !!(e && (e.shiftKey || (e as DragEvent & { altKey?: boolean }).altKey))
-    scheduleDevice(deviceId, dateStr, timeKey, isPast, isTentative, meta)
+    scheduleDevice(orderId, dateStr, timeKey, isPast, isTentative, meta)
   }
 
   function handleUnschedule(cellKey: string, deviceId: string) {
@@ -545,14 +543,21 @@ export function useSimulationWellSchedule() {
     const consumed = new Set((deviceIds || []).filter(Boolean))
     if (consumed.size === 0) return
 
-    workOrders.value = workOrders.value.map((order) => {
-      const nextDeviceList = (order.deviceList || []).filter((d) => !consumed.has(d.id))
-      return {
-        ...order,
-        devices: nextDeviceList.length,
-        deviceList: nextDeviceList
-      }
+    const affectedOrderIds = new Set<string>()
+    workOrders.value.forEach((order) => {
+      if ((order.deviceList || []).some((d) => consumed.has(d.id))) affectedOrderIds.add(order.id)
     })
+
+    workOrders.value = workOrders.value
+      .map((order) => {
+        const nextDeviceList = (order.deviceList || []).filter((d) => !consumed.has(d.id))
+        return {
+          ...order,
+          devices: nextDeviceList.length,
+          deviceList: nextDeviceList
+        }
+      })
+      .filter((order) => order.devices > 0 && order.deviceList.length > 0)
 
     const nextScheduled = { ...scheduledEvents.value }
     const nextTentative = { ...scheduledEventsTentative.value }
@@ -560,9 +565,13 @@ export function useSimulationWellSchedule() {
       delete nextScheduled[id]
       delete nextTentative[id]
     })
+    affectedOrderIds.forEach((id) => {
+      delete nextScheduled[id]
+      delete nextTentative[id]
+    })
     scheduledEvents.value = nextScheduled
     scheduledEventsTentative.value = nextTentative
-    selectedScheduledDeviceIds.value = selectedScheduledDeviceIds.value.filter((id) => !consumed.has(id))
+    selectedScheduledDeviceIds.value = selectedScheduledDeviceIds.value.filter((id) => !consumed.has(id) && !affectedOrderIds.has(id))
   }
 
   const getEvent = (deviceId: string) => {
@@ -581,9 +590,15 @@ export function useSimulationWellSchedule() {
     const maxSpan = Math.max(1, timeSlots.value.length - 1 - startIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
-    const next = { deviceId, orderId: ev.orderId, dateStr: ev.dateStr, startTimeKey: ev.startTimeKey, span: nextSpan }
-    next.deviceName = ev.deviceName
-    next.deviceNumber = ev.deviceNumber
+    const next: ScheduledEvent = {
+      deviceId,
+      orderId: ev.orderId,
+      deviceName: ev.deviceName,
+      deviceNumber: ev.deviceNumber,
+      dateStr: ev.dateStr,
+      startTimeKey: ev.startTimeKey,
+      span: nextSpan
+    }
     if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [deviceId]: next }
     else scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: next }
   }

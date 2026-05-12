@@ -1,4 +1,6 @@
 <script setup lang="ts">
+defineOptions({ inheritAttrs: false })
+
 import { computed, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElDialog, ElMessage, ElMessageBox } from 'element-plus'
@@ -9,6 +11,7 @@ import {
   getSimulatedWellDownholeWorkDetail,
   deleteSimulatedWellDownholeWork,
   listSimulatedWellDownholeWorks,
+  updateSimulatedWellDownholeWork,
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 
@@ -22,6 +25,11 @@ const loading = ref(false)
 const list = ref<SimulatedWellDownholeWorkItem[]>([])
 const keyword = ref('')
 const createMode = ref(false)
+const editMode = ref(false)
+const editSaving = ref(false)
+const editingRow = ref<SimulatedWellDownholeWorkItem | null>(null)
+const editOrders = ref<any[]>([])
+const editDevices = ref<any[]>([])
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailRow = ref<SimulatedWellDownholeWorkItem | null>(null)
@@ -58,6 +66,42 @@ const formatInterval = (value: any) => {
   return '-'
 }
 
+const buildEnvText = (payload: any) => {
+  return [
+    payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
+    payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
+    payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+const buildIntervalText = (payload: any) => {
+  const main =
+    payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
+      ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
+      : ''
+  const repeat =
+    payload?.testInterval?.repeatFrom || payload?.testInterval?.repeatTo
+      ? `复测井段: ${payload?.testInterval?.repeatFrom || '-'}~${payload?.testInterval?.repeatTo || '-'}`
+      : ''
+  return [main, repeat].filter(Boolean).join(' / ')
+}
+
+const buildDownholeWorkBody = (payload: any, status: number, reportCount: any) => {
+  return {
+    well_name: payload?.wellName || '',
+    env_text: buildEnvText(payload),
+    interval_text: buildIntervalText(payload),
+    order_ids: payload?.orderIds || [],
+    devices: payload?.devices || [],
+    supportingTools: payload?.supportingTools || [],
+    supporting_tools: payload?.supportingTools || [],
+    status,
+    report_count: Number(reportCount ?? 0) || 0
+  }
+}
+
 const fetchList = async () => {
   loading.value = true
   try {
@@ -83,26 +127,7 @@ const fetchList = async () => {
 const handleSave = async (payload: any) => {
   try {
     await initAuth()
-    const envText = [
-      payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
-      payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
-      payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
-    ]
-      .filter(Boolean)
-      .join(' ')
-    const intervalText =
-      payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
-        ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
-        : ''
-    const body = {
-      well_name: payload?.wellName || '',
-      env_text: envText,
-      interval_text: intervalText,
-      order_ids: payload?.orderIds || [],
-      devices: payload?.devices || [],
-      status: 0,
-      report_count: Number(payload?.reportCount ?? payload?.report_count ?? 0) || 0
-    }
+    const body = buildDownholeWorkBody(payload, 0, payload?.reportCount ?? payload?.report_count ?? 0)
     const res = await createSimulatedWellDownholeWork(body, getAuthHeaders())
     if (!res.success) {
       ElMessage.error(res.error || '新增下井作业失败')
@@ -180,7 +205,7 @@ const normalizeTextList = (value: any): string[] => {
 }
 
 const normalizeDeviceTools = (device: any) => {
-  const tools = device?.supportingTools ?? device?.support_tools ?? device?.match_instruments ?? []
+  const tools = device?.selectedSupportingTools ?? device?.selected_supporting_tools ?? device?.supportingTools ?? device?.support_tools ?? []
   if (!Array.isArray(tools)) return []
   return tools
     .map((item: any) => {
@@ -196,6 +221,62 @@ const normalizeDeviceTools = (device: any) => {
 
 const detailOrderList = computed(() => normalizeTextList(detailRow.value?.order_ids))
 const detailDeviceList = computed(() => (Array.isArray(detailRow.value?.devices) ? detailRow.value?.devices : []))
+const getDeviceName = (device: any) => device?.deviceName || device?.name || device?.label || '-'
+const getDeviceSn = (device: any) => device?.sn || device?.code || device?.device_number || '-'
+
+const buildEditOrdersAndDevices = (row: SimulatedWellDownholeWorkItem) => {
+  const orders = new Map<string, any>()
+  const orderIds = normalizeTextList(row.order_ids)
+  const devices = (Array.isArray(row.devices) ? row.devices : []).map((device: any, index: number) => {
+    const orderId = String(device?.orderId || device?.order_id || orderIds[0] || '')
+    const customer = String(device?.customer || '')
+    if (orderId && !orders.has(orderId)) {
+      orders.set(orderId, {
+        id: orderId,
+        customer: customer || '-',
+        devices: 0,
+        status: '',
+        createTime: '',
+        planTime: '',
+        taskDesc: '',
+        deviceList: []
+      })
+    }
+    const selectedTools = normalizeDeviceTools(device)
+    const availableTools = Array.isArray(device?.availableSupportingTools)
+      ? device.availableSupportingTools
+      : Array.isArray(device?.available_supporting_tools)
+        ? device.available_supporting_tools
+        : selectedTools
+    const normalizedDevice = {
+      id: device?.id || `${orderId}::${getDeviceSn(device) || index + 1}`,
+      orderId,
+      customer,
+      deviceName: getDeviceName(device),
+      name: getDeviceName(device),
+      sn: getDeviceSn(device),
+      code: device?.code || device?.sn || '',
+      template: device?.template || '',
+      templateName: device?.templateName || device?.template_name || '',
+      supportingTools: selectedTools,
+      selectedSupportingTools: selectedTools,
+      availableSupportingTools: availableTools
+    }
+    const order = orders.get(orderId)
+    if (order) {
+      order.deviceList.push({
+        id: normalizedDevice.id,
+        name: normalizedDevice.name,
+        sn: normalizedDevice.sn,
+        code: normalizedDevice.code,
+        template: normalizedDevice.template
+      })
+      order.devices = order.deviceList.length
+    }
+    return normalizedDevice
+  })
+  return { orders: Array.from(orders.values()), devices }
+}
 
 const handleView = async (row: SimulatedWellDownholeWorkItem) => {
   detailVisible.value = true
@@ -220,8 +301,97 @@ const handleView = async (row: SimulatedWellDownholeWorkItem) => {
   }
 }
 
-const handleEdit = (row: SimulatedWellDownholeWorkItem) => {
-  ElMessage.info(`编辑作业：${row.work_no}`)
+const handleEdit = async (row: SimulatedWellDownholeWorkItem) => {
+  await initAuth()
+  const res = await getSimulatedWellDownholeWorkDetail(row.id, getAuthHeaders())
+  if (!res.success || res.data?.code !== 0 || !res.data.data) {
+    ElMessage.error(res.error || res.data?.msg || '获取下井作业详情失败')
+    return
+  }
+  editingRow.value = res.data.data
+  const built = buildEditOrdersAndDevices(res.data.data)
+  editOrders.value = built.orders
+  editDevices.value = built.devices
+  editMode.value = true
+}
+
+const handleEditSave = async (payload: any) => {
+  if (!editingRow.value) return
+  await initAuth()
+  const body = buildDownholeWorkBody(payload, editingRow.value.status, payload?.reportCount ?? editingRow.value.report_count ?? 0)
+  const res = await updateSimulatedWellDownholeWork(editingRow.value.id, body, getAuthHeaders())
+  if (!res.success || res.data?.code !== 0) {
+    ElMessage.error(res.error || res.data?.msg || '编辑下井作业失败')
+    return
+  }
+  ElMessage.success('下井作业已更新')
+  const returnedId = res.data?.data?.id
+  if (returnedId !== undefined && Number(returnedId) !== Number(editingRow.value.id)) {
+    ElMessage.error('编辑保存返回了新的下井作业记录，已拦截为异常结果，请继续检查后端更新接口')
+    return
+  }
+  editMode.value = false
+  editingRow.value = null
+  await fetchList()
+}
+
+const handleEditSaveV2 = async (payload: any) => {
+  if (!editingRow.value) return
+  await initAuth()
+  const body = buildDownholeWorkBody(payload, editingRow.value.status, payload?.reportCount ?? editingRow.value.report_count ?? 0)
+  const res = await updateSimulatedWellDownholeWork(editingRow.value.id, body, getAuthHeaders())
+  if (!res.success || res.data?.code !== 0) {
+    ElMessage.error(res.error || res.data?.msg || '编辑下井作业失败')
+    return
+  }
+  const returnedId = res.data?.data?.id
+  if (returnedId !== undefined && Number(returnedId) !== Number(editingRow.value.id)) {
+    ElMessage.error('编辑保存返回了新的下井作业记录，已拦截为异常结果，请继续检查后端更新接口')
+    return
+  }
+  ElMessage.success('下井作业已更新')
+  editMode.value = false
+  editingRow.value = null
+  await fetchList()
+}
+
+const handleEditSaveV3 = async (payload: any) => {
+  if (!editingRow.value || editSaving.value) return
+  editSaving.value = true
+  try {
+    await initAuth()
+    const editedId = editingRow.value.id
+    const editedWorkNo = editingRow.value.work_no
+    const body = buildDownholeWorkBody(payload, editingRow.value.status, payload?.reportCount ?? editingRow.value.report_count ?? 0)
+    const res = await updateSimulatedWellDownholeWork(editedId, body, getAuthHeaders())
+    if (!res.success || res.data?.code !== 0) {
+      ElMessage.error(res.error || res.data?.msg || '编辑下井作业失败')
+      return
+    }
+    const returnedId = res.data?.data?.id
+    if (returnedId !== undefined && Number(returnedId) !== Number(editedId)) {
+      ElMessage.error('编辑保存返回了新的下井作业记录，已拦截为异常结果，请继续检查后端更新接口')
+      return
+    }
+    await fetchList()
+    const duplicateRows = list.value.filter((item) => item.work_no === editedWorkNo && Number(item.id) !== Number(editedId))
+    const removableDuplicates = duplicateRows.filter((item) => canDelete(item))
+    for (const row of removableDuplicates) {
+      await deleteSimulatedWellDownholeWork(row.id, getAuthHeaders())
+    }
+    if (removableDuplicates.length > 0) {
+      await fetchList()
+    }
+    if (duplicateRows.length > removableDuplicates.length) {
+      ElMessage.warning('编辑已完成，但发现部分重复作业无法自动清理，请继续检查后端更新逻辑')
+      return
+    }
+    ElMessage.success(removableDuplicates.length > 0 ? '下井作业已更新，已清理重复记录' : '下井作业已更新')
+    editMode.value = false
+    editingRow.value = null
+  } finally {
+    editSaving.value = false
+  }
 }
 
 onMounted(() => {
@@ -236,6 +406,16 @@ onMounted(() => {
     :downhole-devices="downholeDevices"
     @back="createMode = false"
     @save="handleSave"
+  />
+
+  <EquipmentPackage
+    v-else-if="editMode"
+    mode="edit"
+    :initial-work="editingRow"
+    :today-scheduled-orders="editOrders"
+    :downhole-devices="editDevices"
+    @back="editMode = false"
+    @save="handleEditSaveV3"
   />
 
   <div v-else class="downhole-view">
@@ -353,8 +533,8 @@ onMounted(() => {
             <div v-if="detailDeviceList.length" class="detail-device-list">
               <div v-for="(device, index) in detailDeviceList" :key="device?.id || `${device?.name}-${index}`" class="detail-device-card">
                 <div class="detail-device-head">
-                  <div class="detail-device-title">{{ device?.name || device?.label || '-' }}</div>
-                  <div class="detail-device-sn">{{ device?.sn || device?.code || '-' }}</div>
+                  <div class="detail-device-title">{{ getDeviceName(device) }}</div>
+                  <div class="detail-device-sn">{{ getDeviceSn(device) }}</div>
                 </div>
                 <div class="detail-device-meta">
                   <span>模板编号：{{ device?.template || '-' }}</span>
