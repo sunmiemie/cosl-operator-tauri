@@ -107,6 +107,10 @@ const scheduledInstrumentIdSet = computed(() => {
   return set
 })
 
+const getPendingInstruments = (order: WorkOrder) => {
+  return order.items.filter((item) => !scheduledInstrumentIdSet.value.has(item.id) && props.isInstrumentPending(item.id))
+}
+
 const getScheduledStyle = (item: any) => {
   const totalWidth = gridInnerWidth.value || 0
   const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
@@ -206,7 +210,7 @@ const handleGridDrop = (e: DragEvent) => {
               </thead>
               <tbody>
                 <template v-for="order in unscheduledOrders" :key="order.id">
-                  <tr @click="order.expanded = !order.expanded">
+                  <tr class="work-order-row" :class="{ 'is-expanded': order.expanded }" @click="order.expanded = !order.expanded">
                     <td class="cell-applicant">{{ order.applicant }}</td>
                     <td class="cell-id">{{ order.no }}</td>
                     <td class="cell-device" :title="order.type">{{ order.type }}</td>
@@ -220,17 +224,32 @@ const handleGridDrop = (e: DragEvent) => {
                   </tr>
                   <tr v-if="order.expanded" :key="order.id + '-expanded'">
                     <td class="expanded-cell" colspan="5">
-                      <div class="instrument-list">
-                        <div
-                          v-for="item in order.items.filter((x) => !scheduledInstrumentIdSet.has(x.id) && isInstrumentPending(x.id))"
-                          :key="item.id"
-                          class="instrument-item"
-                          draggable="true"
-                          @dragstart="emit('instrument-drag-start', $event, item)"
-                          @dragend="emit('drag-end', $event)"
-                        >
-                          <span>{{ item.label }}</span>
-                          <span class="instrument-sn">{{ item.sn }}</span>
+                      <div class="instrument-panel">
+                        <div class="instrument-panel-head">
+                          <div>
+                            <div class="instrument-title">待排程仪器</div>
+                            <div class="instrument-subtitle">拖拽单台仪器到右侧日历完成排程</div>
+                          </div>
+                          <span class="instrument-count">{{ getPendingInstruments(order).length }} 台</span>
+                        </div>
+                        <div v-if="getPendingInstruments(order).length === 0" class="instrument-empty">
+                          当前工单暂无待排程仪器
+                        </div>
+                        <div v-else class="instrument-list">
+                          <div
+                            v-for="item in getPendingInstruments(order)"
+                            :key="item.id"
+                            class="instrument-item"
+                            draggable="true"
+                            @dragstart="emit('instrument-drag-start', $event, item)"
+                            @dragend="emit('drag-end', $event)"
+                          >
+                            <span class="instrument-name">
+                              <Icon icon="mdi:drag-vertical" class="instrument-drag-icon" />
+                              {{ item.label }}
+                            </span>
+                            <span class="instrument-sn">{{ item.sn }}</span>
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -381,4 +400,158 @@ const handleGridDrop = (e: DragEvent) => {
 .resize-handle-top:hover { background: linear-gradient(0deg, rgba(255,255,255,0), rgba(255,255,255,.28)); }
 .resize-handle { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; cursor: ns-resize; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.18)); }
 .resize-handle:hover { background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.28)); }
+
+.table-wrapper {
+  padding: 0;
+}
+
+.data-table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+.data-table thead {
+  top: 0;
+}
+
+.data-table th {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.work-order-row td {
+  position: relative;
+  padding: 12px 16px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background-color 0.15s ease;
+}
+
+.work-order-row td:first-child {
+  border-left: 3px solid transparent;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.work-order-row td:last-child {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.work-order-row:hover td,
+.work-order-row.is-expanded td {
+  background: var(--color-bg-hover);
+  box-shadow: none;
+}
+
+.work-order-row.is-expanded td:first-child,
+.work-order-row:hover td:first-child {
+  border-left-color: var(--color-accent-blue);
+}
+
+.cell-id {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cell-applicant,
+.cell-device {
+  font-weight: 400;
+}
+
+.expanded-cell {
+  padding: 0 16px 12px 19px !important;
+  background: var(--color-bg-primary) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
+}
+
+.instrument-panel {
+  margin: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.instrument-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.instrument-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.instrument-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.instrument-count {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+}
+
+.instrument-list {
+  gap: 8px;
+}
+
+.instrument-item {
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.instrument-item:hover {
+  border-color: var(--color-border);
+  background: var(--color-bg-hover);
+}
+
+.instrument-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 400;
+  color: var(--color-text-primary);
+}
+
+.instrument-drag-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: var(--color-text-tertiary);
+}
+
+.instrument-sn {
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+.instrument-empty {
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-text-tertiary);
+  text-align: left;
+  font-size: 12px;
+}
 </style>

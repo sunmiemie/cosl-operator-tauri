@@ -70,7 +70,8 @@ export type UpdateVibrationTableOrderBody = Partial<
 
 export async function updateVibrationTableOrder(
   orderId: number,
-  data: UpdateVibrationTableOrderBody
+  data: UpdateVibrationTableOrderBody,
+  headers?: Record<string, string>
 ): Promise<ApiResponse<VibrationTableOrderWriteResponse>> {
-  return http.put<VibrationTableOrderWriteResponse>(`/test/vibration-table/order/detail/${orderId}/`, data)
+  return http.put<VibrationTableOrderWriteResponse>(`/test/vibration-table/order/detail/${orderId}/`, data, headers)
 }

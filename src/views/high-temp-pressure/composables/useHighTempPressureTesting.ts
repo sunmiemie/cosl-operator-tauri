@@ -94,6 +94,7 @@ export function useHighTempPressureTesting() {
   let capturePollTimer: number | null = null
   let unlistenStream: UnlistenFn | null = null
   let latestFrameObjectUrl = ''
+  let lastSyncedRecordCount = 0
   let chartInst: echarts.ECharts | null = null
 
   function initChart() {
@@ -176,6 +177,7 @@ export function useHighTempPressureTesting() {
     captureProgressPct.value = 0
     captureCompleted.value = false
     captureOutputDir.value = ''
+    lastSyncedRecordCount = 0
     latestFrameUrl.value = ''
     revokeLatestFrameObjectUrl()
     exportedCaptureDir.value = ''
@@ -278,6 +280,7 @@ export function useHighTempPressureTesting() {
     const records = Array.isArray(result?.records) ? result.records : []
     captureRecordCount.value = records.length
     csvCount.value = records.length
+    lastSyncedRecordCount = records.length
     if (result?.latest_frame) await updateLatestFrame(String(result.latest_frame))
     if (records.length) applyVideoRecord(records[records.length - 1])
   }
@@ -293,6 +296,9 @@ export function useHighTempPressureTesting() {
     csvCount.value = captureRecordCount.value
     captureProgressPct.value = Number(status?.progress_pct || 0)
     if (status?.latest_frame) await updateLatestFrame(String(status.latest_frame))
+    if (captureRecordCount.value > 0 && captureRecordCount.value !== lastSyncedRecordCount) {
+      await syncCaptureResultFromOutputDir().catch(() => undefined)
+    }
 
     if (status?.complete) {
       stopCapturePolling()

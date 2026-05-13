@@ -220,6 +220,8 @@ async function startExperiment() {
 
   const selected = selectedScheduledOrders.value[0]
   if (!selected) return
+  const authOk = await initAuth()
+  const authHeaders = authOk ? getAuthHeaders() : undefined
   const scheduleInfo = getScheduleChangePayload(selected.id)
   if (scheduleInfo) {
     console.log(`[vibration schedule] ${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}`)
@@ -227,12 +229,10 @@ async function startExperiment() {
     console.log('[vibration schedule] no scheduled range')
   }
   if (scheduleInfo) {
-    const ok = await initAuth()
-    if (!ok) {
+    if (!authOk) {
       ElMessage.warning('未登录，已跳过第三方排期推送并继续开始实验')
     } else {
-      const headers = getAuthHeaders()
-      const pushPayload = await resolveVibrationSchedulePayload(selected, headers)
+      const pushPayload = await resolveVibrationSchedulePayload(selected, authHeaders || {})
       if (pushPayload.testType && pushPayload.testId && pushPayload.equipmentId) {
         console.log('[vibration schedule push]', pushPayload)
         const resp = await pushEngineerAssistantSchedules(
@@ -247,7 +247,7 @@ async function startExperiment() {
               },
             ],
           },
-          headers
+          authHeaders || {}
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           ElMessage.warning(`推送第三方排期失败，已继续开始实验${resp.error ? `：${resp.error}` : ''}`)
@@ -260,7 +260,7 @@ async function startExperiment() {
 
   orderStatusMutating.value = true
   try {
-    const resp = await updateVibrationTableOrder(selected.dbId!, { status: 2 })
+    const resp = await updateVibrationTableOrder(selected.dbId!, { status: 2 }, authHeaders)
     if (!resp.success || !resp.data || resp.data.code !== 0) {
       ElMessage.warning('工单状态更新失败，已继续进入实验流程')
     } else {
@@ -303,9 +303,11 @@ async function backToDashboard(finalStatus: number = 1) {
 
   const order = currentWorkOrderSnapshot.value
   if (order && order.dbId !== undefined) {
+    const authOk = await initAuth()
+    const authHeaders = authOk ? getAuthHeaders() : undefined
     orderStatusMutating.value = true
     try {
-      const resp = await updateVibrationTableOrder(order.dbId, { status: finalStatus })
+      const resp = await updateVibrationTableOrder(order.dbId, { status: finalStatus }, authHeaders)
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         const ok = confirm(`工单状态更新失败，是否仍返回主页？`)
         if (!ok) return
@@ -363,7 +365,7 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  backToDashboard(5) // 完成整个测试，状态置为正常(5)
+  backToDashboard(5) // 完成整个测试，状态置为已完成(5)
 }
 
 function toggleShutdownCheck(id: number) {

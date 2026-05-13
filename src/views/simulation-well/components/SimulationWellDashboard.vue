@@ -193,7 +193,7 @@ const handleGridDrop = (e: DragEvent) => {
               <template v-for="order in unscheduledOrders" :key="order.id">
                 <tr
                   class="order-row"
-                  :class="{ 'is-scheduled': scheduledOrderIdSet.has(order.id) }"
+                  :class="{ 'is-scheduled': scheduledOrderIdSet.has(order.id), 'is-expanded': isExpanded(order.id) }"
                   draggable="true"
                   @click="toggleExpanded(order.id)"
                   @dragstart="emit('device-drag-start', $event, { id: order.id, label: order.id })"
@@ -215,20 +215,26 @@ const handleGridDrop = (e: DragEvent) => {
                 </tr>
                 <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
                   <td class="expanded-cell" colspan="6">
-                    <div class="instrument-list">
-                      <div
-                        v-for="d in (order.deviceList || [])"
-                        :key="d.id"
-                        class="instrument-item"
-                      >
-                        <span>{{ d.name }}</span>
-                        <span class="instrument-sn">{{ d.code || d.sn }}</span>
+                    <div class="instrument-panel">
+                      <div class="instrument-panel-head">
+                        <div>
+                          <div class="instrument-title">设备明细</div>
+                          <div class="instrument-subtitle">该工单包含的待测试设备</div>
+                        </div>
+                        <span class="instrument-count">{{ (order.deviceList || []).length }} 台</span>
                       </div>
-                      <div
-                        v-if="(order.deviceList || []).length === 0"
-                        class="empty-state"
-                      >
-                        <p>当前无待排程设备</p>
+                      <div v-if="(order.deviceList || []).length === 0" class="instrument-empty">
+                        当前无待排程设备
+                      </div>
+                      <div v-else class="instrument-list">
+                        <div
+                          v-for="d in (order.deviceList || [])"
+                          :key="d.id"
+                          class="instrument-item"
+                        >
+                          <span class="instrument-name">{{ d.name }}</span>
+                          <span class="instrument-sn">{{ d.code || d.sn }}</span>
+                        </div>
                       </div>
                     </div>
                   </td>

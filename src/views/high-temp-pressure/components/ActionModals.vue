@@ -5,6 +5,7 @@ import type { HighTempPressureModal, ScheduledSelection } from '../types'
 defineProps<{
   activeModal: HighTempPressureModal
   currentSelected: ScheduledSelection | null
+  selectedScheduledOrders: ScheduledSelection[]
 }>()
 
 const emit = defineEmits<{
@@ -39,29 +40,42 @@ const emit = defineEmits<{
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><div class="card-title">工单信息</div></div>
+          <div class="card-header">
+            <div class="card-title">工单信息</div>
+            <span v-if="selectedScheduledOrders.length" class="selected-count">{{ selectedScheduledOrders.length }} 个</span>
+          </div>
           <div class="card-body">
-            <div v-if="currentSelected" class="info-grid">
-              <div class="info-item"><div class="info-key">委托单号</div><div class="info-val">{{ currentSelected.order.entrustNo }}</div></div>
-              <div class="info-item"><div class="info-key">工单编号</div><div class="info-val">{{ currentSelected.order.no }}</div></div>
-              <div class="info-item"><div class="info-key">申请人</div><div class="info-val">{{ currentSelected.order.applicant }}</div></div>
-              <div class="info-item"><div class="info-key">申请单位</div><div class="info-val">{{ currentSelected.order.applicantUnit }}</div></div>
-              <div class="info-item"><div class="info-key">申请日期</div><div class="info-val">{{ currentSelected.order.applyDate }}</div></div>
-              <div class="info-item"><div class="info-key">到检编号</div><div class="info-val">{{ currentSelected.order.receivingNo }}</div></div>
-              <div class="info-item"><div class="info-key">器皿类型</div><div class="info-val">{{ currentSelected.order.vesselType }}</div></div>
-              <div class="info-item"><div class="info-key">目标温度</div><div class="info-val" style="color:var(--red-bright)">{{ currentSelected.order.targetTemp }}</div></div>
-              <div class="info-item"><div class="info-key">目标压力</div><div class="info-val" style="color:var(--cyan)">{{ currentSelected.order.targetPressure }}</div></div>
-              <div class="info-item"><div class="info-key">保温保压</div><div class="info-val">{{ currentSelected.order.keepCondition }}</div></div>
-              <div class="info-item" style="grid-column: 1 / -1">
-                <div class="info-key">待测仪器列表</div>
-                <div class="info-val">
-                  <div v-for="i in (currentSelected.order.items || [])" :key="i.id" style="display:flex;justify-content:space-between;gap:8px;font-size:12px;">
-                    <span>{{ i.label }}</span>
-                    <span style="color:var(--text-secondary)">{{ i.sn }}</span>
+            <div v-if="selectedScheduledOrders.length" class="selected-order-list">
+              <div v-for="selection in selectedScheduledOrders" :key="selection.instrument.id" class="selected-order-card">
+                <div class="selected-order-head">
+                  <div>
+                    <div class="selected-order-no">{{ selection.order.no }}</div>
+                    <div class="selected-order-meta">{{ selection.order.entrustNo || '无委托单号' }} · {{ selection.order.applicant || '-' }}</div>
+                  </div>
+                  <span class="selected-instrument-sn">{{ selection.instrument.sn }}</span>
+                </div>
+                <div class="info-grid selected-order-grid">
+                  <div class="info-item"><div class="info-key">申请单位</div><div class="info-val">{{ selection.order.applicantUnit || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">申请日期</div><div class="info-val">{{ selection.order.applyDate || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">到检编号</div><div class="info-val">{{ selection.order.receivingNo || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">器皿类型</div><div class="info-val">{{ selection.order.vesselType || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">目标温度</div><div class="info-val" style="color:var(--red-bright)">{{ selection.order.targetTemp || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">目标压力</div><div class="info-val" style="color:var(--cyan)">{{ selection.order.targetPressure || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">保温保压</div><div class="info-val">{{ selection.order.keepCondition || '-' }}</div></div>
+                  <div class="info-item"><div class="info-key">本次仪器</div><div class="info-val">{{ selection.instrument.label }} / {{ selection.instrument.sn }}</div></div>
+                  <div class="info-item" style="grid-column: 1 / -1">
+                    <div class="info-key">工单待测仪器</div>
+                    <div class="info-val instrument-lines">
+                      <div v-for="i in (selection.order.items || [])" :key="i.id">
+                        <span>{{ i.label }}</span>
+                        <span>{{ i.sn }}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
+            <div v-else-if="currentSelected" class="text-muted">已选择 {{ currentSelected.order.no }}，但选中列表为空，请返回日历重新选择。</div>
             <div v-else class="text-muted">未选择排程仪器</div>
           </div>
         </div>
@@ -78,7 +92,12 @@ const emit = defineEmits<{
         <span>确认测试已完成？</span>
       </div>
       <div class="modal-body">
-        <p class="text-muted">系统将会停止数据记录并生成报告。</p>
+        <div class="alert alert-info">
+          系统将会：<br />
+          · 停止数据记录<br />
+          · 生成测试数据曲线<br />
+          · 进入测试报告填写与文件生成流程
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" @click="emit('close')">取消</button>
@@ -103,3 +122,89 @@ const emit = defineEmits<{
 </template>
 
 <style scoped src="./high-temp-pressure.shared.css"></style>
+<style scoped>
+.selected-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.selected-order-list {
+  max-height: 430px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.selected-order-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-primary);
+  overflow: hidden;
+}
+
+.selected-order-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+
+.selected-order-no {
+  color: var(--color-accent-blue);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.selected-order-meta {
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.selected-instrument-sn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(88, 166, 255, 0.12);
+  color: var(--color-accent-blue);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.selected-order-grid {
+  padding: 10px 12px;
+}
+
+.instrument-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.instrument-lines > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.instrument-lines span:last-child {
+  color: var(--color-text-secondary);
+}
+
+.alert-info {
+  background: rgba(88, 166, 255, 0.1);
+  border-color: rgba(88, 166, 255, 0.2);
+  color: var(--color-text-secondary);
+  line-height: 1.7;
+}
+</style>

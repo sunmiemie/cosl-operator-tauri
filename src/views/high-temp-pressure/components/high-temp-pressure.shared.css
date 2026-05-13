@@ -1022,7 +1022,7 @@
 .card-body { padding: 10px 14px; }
 .text-muted { font-size: 12px; color: var(--color-text-secondary); }
 .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:500; background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
-.badge-green { background: rgba(46,125,50,0.15); color: #34d399; }
+.badge-green { background: rgba(88, 166, 255, 0.14); color: var(--color-accent-blue); }
 .badge-danger { background: rgba(244,67,54,0.12); color: #ef4444; }
 
 .ocr-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
@@ -1055,11 +1055,18 @@
 .btn { padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 13px; transition: all 0.2s; }
 .btn-primary { background: var(--color-accent-blue); color: #fff; }
 .btn-outline { border-color: var(--color-border); background: transparent; color: var(--color-text-primary); }
-.btn-success { background: var(--green); color: #fff; }
+.btn-success { background: var(--color-accent-blue); color: #fff; }
 .btn-danger { background: var(--red); color: #fff; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn-lg { padding: 10px 20px; font-size: 15px; }
 .btn-sm { padding: 4px 8px; font-size: 12px; }
+.btn-primary:hover:not(:disabled),
+.btn-success:hover:not(:disabled) {
+  background: var(--color-accent-blue-hover, #409eff);
+}
+.btn-outline:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
 
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 120; padding: 16px; backdrop-filter: blur(4px); }
 .modal { background: var(--color-bg-secondary); border-radius: 16px; width: 520px; max-width: 92vw; overflow: hidden; box-shadow: 0 20px 40px -12px rgba(0,0,0,0.3); border: 1px solid var(--color-border); }

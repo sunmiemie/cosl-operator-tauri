@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import DashboardPanel from './components/DashboardPanel.vue'
@@ -14,11 +14,13 @@ import { useHighTempPressureTesting } from './composables/useHighTempPressureTes
 import { useAuth } from '@/composables/useAuth'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { finishHighTempPressureOrder, startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
+import type { ScheduledSelection } from './types'
 
 const schedule = useHighTempPressureSchedule()
 const startupCheck = useHighTempPressureStartupCheck()
 const testing = useHighTempPressureTesting()
 const { initAuth, getAuthHeaders } = useAuth()
+const completedSelections = ref<ScheduledSelection[]>([])
 
 function handleStartupCheckComplete() {
   startupCheck.showStartupCheck.value = false
@@ -40,9 +42,14 @@ async function handleStartScheduledTest() {
     ElMessage.warning('未找到已选中的仪器')
     return
   }
-  const scheduleInfo = schedule.getScheduleChangePayload(current.instrument.id)
-  console.log('[high-temp-pressure schedule]', scheduleInfo ? `${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}` : '', scheduleInfo)
-  if (scheduleInfo) {
+  const selectedScheduleInfos = schedule.selectedScheduledOrders.value
+    .map((selection) => ({
+      selection,
+      scheduleInfo: schedule.getScheduleChangePayload(selection.instrument.id),
+    }))
+    .filter((item) => item.scheduleInfo)
+  console.log('[high-temp-pressure schedule]', selectedScheduleInfos)
+  if (selectedScheduleInfos.length) {
     const ok = await initAuth()
     if (!ok) {
       const cont = confirm('未登录，无法推送第三方排期，是否仍继续开始实验？')
@@ -51,13 +58,15 @@ async function handleStartScheduledTest() {
       const headers = getAuthHeaders()
       const testType = (await resolveEngineerAssistantTestTypeId('高温高压井', headers)) || ''
       if (testType) {
-        const equipmentId = String(current.instrument.id)
-        const testId = String(current.order.dbId ?? current.order.id)
         const resp = await pushEngineerAssistantSchedules(
           {
-            schedulesInfo: [
-              { testId, testType, equipmentId, startTime: scheduleInfo.startAtHour, endTime: scheduleInfo.endAtHour },
-            ],
+            schedulesInfo: selectedScheduleInfos.map(({ selection, scheduleInfo }) => ({
+              testId: String(selection.order.dbId ?? selection.order.id),
+              testType,
+              equipmentId: String(selection.instrument.id),
+              startTime: scheduleInfo!.startAtHour,
+              endTime: scheduleInfo!.endAtHour,
+            })),
           },
           headers
         )
@@ -75,34 +84,39 @@ async function handleStartScheduledTest() {
 }
 
 async function handleConfirmStart() {
-  const current = schedule.currentSelected.value
-  if (!current) {
+  const selections = schedule.selectedScheduledOrders.value
+  if (!selections.length) {
     ElMessage.error('未找到已选中的仪器')
     return
   }
-  const dbId = current.order.dbId
-  if (typeof dbId !== 'number' && !schedule.isOrderStarted(current.order.id)) {
+  completedSelections.value = []
+  const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
+  const missingDbOrder = uniqueOrders.find((order) => typeof order.dbId !== 'number' && !schedule.isOrderStarted(order.id))
+  if (missingDbOrder) {
     ElMessage.error('未找到工单ID')
     return
   }
 
-  if (schedule.isOrderStarted(current.order.id) || current.order.statusCode === 2) {
-    schedule.markOrderStarted(current.order.id)
+  const pendingOrders = uniqueOrders.filter((order) => !schedule.isOrderStarted(order.id) && order.statusCode !== 2)
+  if (!pendingOrders.length) {
+    uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
     testing.confirmStart()
     return
   }
 
   try {
     await initAuth()
-    if (typeof dbId !== 'number') return
-    const res = await startHighTempPressureOrder(dbId, getAuthHeaders())
-    if (res.success && res.data?.code === 0) {
-      schedule.markOrderStarted(current.order.id)
-      await schedule.refreshWorkOrders()
-      testing.confirmStart()
-      return
+    for (const order of pendingOrders) {
+      if (typeof order.dbId !== 'number') return
+      const res = await startHighTempPressureOrder(order.dbId, getAuthHeaders())
+      if (!res.success || res.data?.code !== 0) {
+        ElMessage.error(res.data?.msg || res.error || `工单 ${order.no} 开始测试失败`)
+        return
+      }
+      schedule.markOrderStarted(order.id)
     }
-    ElMessage.error(res.data?.msg || res.error || '开始测试失败')
+    await schedule.refreshWorkOrders()
+    testing.confirmStart()
   } catch (e) {
     ElMessage.error('开始测试失败')
   }
@@ -110,6 +124,7 @@ async function handleConfirmStart() {
 
 async function handleConfirmEnd() {
   const current = schedule.currentSelected.value
+  completedSelections.value = schedule.selectedScheduledOrders.value.slice()
   const dbId = current?.order?.dbId
   if (!current) {
     ElMessage.error('未找到已选中的仪器')
@@ -154,6 +169,14 @@ function handleConfirmStop() {
   testing.stopTest()
   schedule.cancelScheduledInstrument(current?.instrument.id)
   ElMessage.info('已中止本次测试，视频采集状态已重置')
+}
+
+async function handleShutdownComplete() {
+  completedSelections.value = []
+  schedule.clearSelectedSchedule()
+  testing.resetTestSession()
+  testing.switchPanel('dashboard')
+  await schedule.refreshWorkOrders()
 }
 
 onMounted(async () => {
@@ -258,12 +281,20 @@ onMounted(async () => {
         @open-end-modal="testing.showModal('end-test')"
       />
 
-      <ReportPanel v-if="testing.currentPanel.value === 'report'" />
+      <ReportPanel
+        v-if="testing.currentPanel.value === 'report'"
+        :current-selected="schedule.currentSelected.value"
+        :selected-scheduled-orders="completedSelections.length ? completedSelections : schedule.selectedScheduledOrders.value"
+        :csv-count="testing.csvCount.value"
+        :exported-capture-dir="testing.exportedCaptureDir.value"
+        @shutdown-complete="handleShutdownComplete"
+      />
     </div>
 
     <ActionModals
       :active-modal="testing.activeModal.value"
       :current-selected="schedule.currentSelected.value"
+      :selected-scheduled-orders="schedule.selectedScheduledOrders.value"
       @close="testing.closeModal"
       @confirm-start="handleConfirmStart"
       @confirm-end="handleConfirmEnd"

@@ -92,6 +92,30 @@ const emit = defineEmits<{
           </div>
         </div>
       </div>
+      <div v-if="videoMeasurements.length" class="live-measurement-panel">
+        <div class="live-measurement-head">
+          <div>
+            <div class="live-measurement-title">实时识别数据</div>
+            <div class="live-measurement-subtitle">随视频采样实时刷新，测试未结束也可查看具体字段</div>
+          </div>
+          <span>{{ videoMeasurements.length }} 项</span>
+        </div>
+        <div class="live-measurement-grid">
+          <div v-for="measurement in videoMeasurements" :key="measurement.id" class="live-measurement-item">
+            <div class="live-measurement-name">{{ measurement.name }}</div>
+            <div class="live-measurement-value" :style="{ color: measurement.color }">
+              {{ measurement.raw }}<span v-if="measurement.raw !== '--' && measurement.unit" class="channel-unit">{{ measurement.unit }}</span>
+            </div>
+            <div class="live-measurement-confidence" v-if="measurement.confidence !== null">
+              置信度 {{ Math.round(measurement.confidence * 100) }}%
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-else class="live-measurement-empty">
+        <Icon icon="mdi:database-search-outline" />
+        <span>等待视频识别结果，采样开始后将在这里实时显示具体数据。</span>
+      </div>
       <div v-if="exportedCaptureDir" class="export-path">已保存：{{ exportedCaptureDir }}</div>
     </div>
 
@@ -141,22 +165,6 @@ const emit = defineEmits<{
       </div>
     </div>
 
-    <div class="channel-grid" v-if="videoMeasurements.length">
-      <div v-for="measurement in videoMeasurements" :key="measurement.id" class="channel-card">
-        <div class="channel-name">{{ measurement.name }}</div>
-        <div class="channel-value" :style="{ color: measurement.color }">
-          {{ measurement.raw }}<span v-if="measurement.raw !== '--' && measurement.unit" class="channel-unit">{{ measurement.unit }}</span>
-        </div>
-        <div class="channel-confidence" v-if="measurement.confidence !== null">
-          置信度 {{ Math.round(measurement.confidence * 100) }}%
-        </div>
-      </div>
-    </div>
-    <div v-else class="channel-empty">
-      <Icon icon="mdi:database-search-outline" />
-      <span>等待视频识别结果，字段卡片将按脚本输出动态生成。</span>
-    </div>
-
     <div class="test-controls">
       <button class="control-action control-action-pause" v-if="testRunning" @click="emit('pause')">
         <span class="control-icon"><Icon icon="mdi:pause" /></span>
@@ -196,8 +204,8 @@ const emit = defineEmits<{
   --capture-ink: #1f2937;
   --capture-muted: #64748b;
   --capture-line: rgba(148, 163, 184, 0.32);
-  --capture-amber: #d97706;
-  --capture-green: #0f9f74;
+  --capture-amber: #2563eb;
+  --capture-green: #2563eb;
   --capture-red: #dc2626;
 }
 
@@ -244,7 +252,7 @@ const emit = defineEmits<{
 .select-video-btn {
   border: 0;
   border-radius: 14px;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4));
   color: #fff;
   cursor: pointer;
   display: inline-flex;
@@ -255,14 +263,14 @@ const emit = defineEmits<{
   font-weight: 800;
   min-width: 180px;
   padding: 11px 18px;
-  box-shadow: 0 12px 24px rgba(217, 119, 6, 0.24);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.24);
   transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
 }
 
 .select-video-btn:hover {
   filter: saturate(1.05);
   transform: translateY(-1px);
-  box-shadow: 0 16px 30px rgba(217, 119, 6, 0.28);
+  box-shadow: 0 16px 30px rgba(37, 99, 235, 0.28);
 }
 
 .capture-progress-track {
@@ -277,7 +285,7 @@ const emit = defineEmits<{
   height: 100%;
   min-width: 8px;
   border-radius: inherit;
-  background: linear-gradient(90deg, #f59e0b, #22c55e);
+  background: linear-gradient(90deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4));
   transition: width 0.28s ease;
 }
 
@@ -420,7 +428,7 @@ const emit = defineEmits<{
 .export-path {
   margin-top: 10px;
   font-size: 12px;
-  color: var(--green-bright);
+  color: var(--color-accent-blue);
   word-break: break-all;
 }
 
@@ -489,30 +497,65 @@ const emit = defineEmits<{
 }
 
 .control-action-end {
-  border-color: rgba(16, 185, 129, 0.28);
+  border-color: rgba(37, 99, 235, 0.28);
 }
 
 .control-action-end .control-icon {
   color: var(--capture-green);
-  background: rgba(16, 185, 129, 0.13);
+  background: rgba(37, 99, 235, 0.13);
 }
 
-.channel-grid {
+.live-measurement-panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--capture-line);
+}
+
+.live-measurement-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.live-measurement-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--capture-ink);
+}
+
+.live-measurement-subtitle {
+  margin-top: 3px;
+  color: var(--capture-muted);
+  font-size: 12px;
+}
+
+.live-measurement-head span {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--capture-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.live-measurement-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
-  margin-top: 14px;
 }
 
-.channel-card {
+.live-measurement-item {
   border: 1px solid var(--color-border);
   border-radius: 10px;
-  background: var(--color-bg-secondary);
+  background: rgba(255, 255, 255, 0.72);
   padding: 10px 12px;
   min-width: 0;
 }
 
-.channel-name {
+.live-measurement-name {
   color: var(--color-text-secondary);
   font-size: 11px;
   white-space: nowrap;
@@ -520,11 +563,17 @@ const emit = defineEmits<{
   text-overflow: ellipsis;
 }
 
-.channel-value {
+.live-measurement-value {
   margin-top: 5px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 15px;
   font-weight: 700;
+}
+
+.live-measurement-confidence {
+  margin-top: 4px;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
 }
 
 .channel-unit {
@@ -533,8 +582,21 @@ const emit = defineEmits<{
   font-size: 11px;
 }
 
+.live-measurement-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--capture-line);
+  border-radius: 12px;
+  color: var(--capture-muted);
+  font-size: 12px;
+}
+
 @media (max-width: 1100px) {
   .video-capture-grid,
+  .live-measurement-grid,
   .test-controls {
     grid-template-columns: 1fr;
   }

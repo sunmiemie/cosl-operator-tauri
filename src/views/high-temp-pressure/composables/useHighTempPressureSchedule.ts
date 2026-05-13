@@ -105,13 +105,6 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   }
 }
 
-function cloneWorkOrder(order: WorkOrder): WorkOrder {
-  return {
-    ...order,
-    items: order.items.map(item => ({ ...item })),
-  }
-}
-
 export function useHighTempPressureSchedule() {
   const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
@@ -121,7 +114,6 @@ export function useHighTempPressureSchedule() {
   const slotHeightPx = 44
   const completedInstrumentIds = ref<Record<string, true>>({})
   const startedOrderIds = ref<Record<string, true>>({})
-  const retainedOrders = ref<Record<string, WorkOrder>>({})
 
   type ScheduledEvent = {
     instrumentId: string
@@ -142,7 +134,6 @@ export function useHighTempPressureSchedule() {
         JSON.stringify({
           completedInstrumentIds: completedInstrumentIds.value,
           startedOrderIds: startedOrderIds.value,
-          retainedOrders: retainedOrders.value,
         })
       )
     } catch {
@@ -157,57 +148,16 @@ export function useHighTempPressureSchedule() {
       const parsed = JSON.parse(raw) as {
         completedInstrumentIds?: Record<string, true>
         startedOrderIds?: Record<string, true>
-        retainedOrders?: Record<string, WorkOrder>
       }
       completedInstrumentIds.value = parsed.completedInstrumentIds || {}
       startedOrderIds.value = parsed.startedOrderIds || {}
-      retainedOrders.value = parsed.retainedOrders || {}
     } catch {
       completedInstrumentIds.value = {}
       startedOrderIds.value = {}
-      retainedOrders.value = {}
     }
   }
 
   hydrateProgressState()
-
-  const syncRetainedOrder = (order: WorkOrder | undefined) => {
-    if (!order) return
-    retainedOrders.value = {
-      ...retainedOrders.value,
-      [order.id]: cloneWorkOrder(order),
-    }
-  }
-
-  const getRetainedOrder = (orderId: string) => retainedOrders.value[orderId]
-
-  const mergeOrderWithRetained = (order: WorkOrder, retainedOrder?: WorkOrder) => {
-    if (!retainedOrder || !shouldKeepOrderLocally(retainedOrder)) return order
-
-    const itemMap = new Map<string, InstrumentItem>()
-    retainedOrder.items.forEach((item) => {
-      if (!completedInstrumentIds.value[item.id]) {
-        itemMap.set(item.id, { ...item })
-      }
-    })
-    order.items.forEach((item) => {
-      if (!completedInstrumentIds.value[item.id] && !itemMap.has(item.id)) {
-        itemMap.set(item.id, { ...item })
-      }
-    })
-
-    return {
-      ...order,
-      expanded: retainedOrder.expanded || order.expanded,
-      items: Array.from(itemMap.values()),
-    }
-  }
-
-  const shouldKeepOrderLocally = (order: WorkOrder | undefined) => {
-    if (!order) return false
-    if (!startedOrderIds.value[order.id]) return false
-    return order.items.some((item) => !completedInstrumentIds.value[item.id])
-  }
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
@@ -246,13 +196,21 @@ export function useHighTempPressureSchedule() {
         if (page > 50) break
       }
 
-      const mergedOrders = all.map(order => mergeOrderWithRetained(order, getRetainedOrder(order.id)))
-      const seenOrderIds = new Set(mergedOrders.map(order => order.id))
-      const retainedList = Object.values(retainedOrders.value)
-        .filter(order => !seenOrderIds.has(order.id) && shouldKeepOrderLocally(order))
-        .map(order => cloneWorkOrder(order))
+      const validOrderIds = new Set(all.map(order => order.id))
+      const nextStartedOrderIds = Object.fromEntries(
+        Object.entries(startedOrderIds.value).filter(([orderId]) => validOrderIds.has(orderId))
+      ) as Record<string, true>
+      const nextCompletedInstrumentIds = Object.fromEntries(
+        Object.entries(completedInstrumentIds.value).filter(([instrumentId]) =>
+          all.some(order => order.items.some(item => item.id === instrumentId))
+        )
+      ) as Record<string, true>
 
-      workOrders.value = [...mergedOrders, ...retainedList]
+      startedOrderIds.value = nextStartedOrderIds
+      completedInstrumentIds.value = nextCompletedInstrumentIds
+
+      workOrders.value = all
+      persistProgressState()
     } catch (error) {
       workOrdersError.value = error instanceof Error ? error.message : '加载高温高压井工单失败'
     } finally {
@@ -745,10 +703,6 @@ export function useHighTempPressureSchedule() {
   const markOrderStarted = (orderId: string) => {
     if (!orderId) return
     startedOrderIds.value = { ...startedOrderIds.value, [orderId]: true }
-    const order = getOrderById(orderId)
-    if (order) {
-      syncRetainedOrder(order)
-    }
     persistProgressState()
   }
 
@@ -757,29 +711,6 @@ export function useHighTempPressureSchedule() {
   const markInstrumentCompleted = (instrumentId: string) => {
     if (!instrumentId) return
     completedInstrumentIds.value = { ...completedInstrumentIds.value, [instrumentId]: true }
-    const currentOrder = getOrderByInstrumentId(instrumentId)
-    const retainedOrder = currentOrder ? getRetainedOrder(currentOrder.id) : undefined
-    const sourceOrder = retainedOrder || currentOrder
-    if (sourceOrder) {
-      const remainingItems = sourceOrder.items
-        .filter(item => item.id !== instrumentId)
-        .filter(item => !completedInstrumentIds.value[item.id])
-        .map(item => ({ ...item }))
-
-      if (remainingItems.length > 0) {
-        retainedOrders.value = {
-          ...retainedOrders.value,
-          [sourceOrder.id]: {
-            ...cloneWorkOrder(sourceOrder),
-            items: remainingItems,
-          },
-        }
-      } else {
-        const nextRetained = { ...retainedOrders.value }
-        delete nextRetained[sourceOrder.id]
-        retainedOrders.value = nextRetained
-      }
-    }
     handleUnschedule('', instrumentId)
     persistProgressState()
   }
@@ -805,10 +736,6 @@ export function useHighTempPressureSchedule() {
     const nextStarted = { ...startedOrderIds.value }
     delete nextStarted[orderId]
     startedOrderIds.value = nextStarted
-
-    const nextRetained = { ...retainedOrders.value }
-    delete nextRetained[orderId]
-    retainedOrders.value = nextRetained
     persistProgressState()
   }
 
