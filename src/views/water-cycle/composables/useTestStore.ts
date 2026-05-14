@@ -1,5 +1,6 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { OcrRegion } from '@/types/ocr'
+import type { WaterCycleOrder } from '@/services/water-cycle-api'
 
 /**
  * ==========================================
@@ -21,11 +22,19 @@ export const COLLECTION_CHANNELS = [
   { id: 'freq', name: '变频器频率', unit: 'Hz', color: '#d946ef' },
 ]
 
-// 视图路由状态: dashboard(排程看板) -> testing(监控与配置) -> data_collection(数据采集)
-export const currentView = ref('dashboard') 
+export type WaterCycleView = 'dashboard' | 'testing' | 'data_collection' | 'report_preview'
+
+export type MeasurementRecord = {
+  timestamp: number
+  timeLabel: string
+  values: Record<string, number | null>
+}
+
+// 视图路由状态: dashboard(排程看板) -> testing(监控确认) -> data_collection(数据采集) -> report_preview(报告预览)
+export const currentView = ref<WaterCycleView>('dashboard')
 
 // 当前选中的待测试工单信息
-export const selectedOrder = ref<any>(null)
+export const selectedOrder = ref<WaterCycleOrder | null>(null)
 
 // OCR 框选区域配置 (Key为通道ID, Value为ROI坐标信息)
 export const roiRegions = ref<Record<string, OcrRegion>>({})
@@ -42,6 +51,17 @@ export const logs = ref<{ time: string; msg: string }[]>([])
 // 采集状态控制
 export const isPaused = ref(false)
 export const collectionTime = ref(0) // 已采集时长(秒)
+export const testStartedAt = ref<number | null>(null)
+export const testEndedAt = ref<number | null>(null)
+export const reportSavedAt = ref<number | null>(null)
+export const measurementHistory = ref<MeasurementRecord[]>([])
+export const currentReportNo = ref('')
+
+export const configuredRoiCount = computed(() => Object.keys(roiRegions.value).length)
+export const latestMeasurement = computed<Record<string, number | null>>(() => {
+  const latest = measurementHistory.value[measurementHistory.value.length - 1]
+  return latest?.values || {}
+})
 
 /**
  * 从 OCR 返回的字符串中提取有效数字
@@ -65,6 +85,62 @@ export function getConfidenceLevel(channelId: string): 'high' | 'medium' | 'low'
   return 'low'
 }
 
+export function formatDuration(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds))
+  const minutes = Math.floor(safeSeconds / 60)
+  const seconds = safeSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+export function formatDurationText(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const seconds = safeSeconds % 60
+
+  if (hours > 0) return `${hours}时${minutes}分${seconds}秒`
+  return `${minutes}分${seconds}秒`
+}
+
+export function startTestSession() {
+  if (!testStartedAt.value) testStartedAt.value = Date.now()
+  testEndedAt.value = null
+  reportSavedAt.value = null
+  currentReportNo.value = ''
+}
+
+export function finishTestSession() {
+  if (!testEndedAt.value) testEndedAt.value = Date.now()
+}
+
+export function createReportNo() {
+  const orderNo = selectedOrder.value?.taskNumber || 'WC'
+  const time = new Date()
+  const stamp = `${time.getFullYear()}${String(time.getMonth() + 1).padStart(2, '0')}${String(time.getDate()).padStart(2, '0')}${String(time.getHours()).padStart(2, '0')}${String(time.getMinutes()).padStart(2, '0')}`
+  currentReportNo.value = `RPT-${orderNo}-${stamp}`
+  return currentReportNo.value
+}
+
+export function markReportSaved() {
+  reportSavedAt.value = Date.now()
+  if (!currentReportNo.value) createReportNo()
+}
+
+export function pushMeasurementRecord(timeLabel: string) {
+  const values = COLLECTION_CHANNELS.reduce<Record<string, number | null>>((acc, channel) => {
+    acc[channel.id] = realTimeData.value[channel.id] ?? null
+    return acc
+  }, {})
+
+  const next = measurementHistory.value.concat({
+    timestamp: Date.now(),
+    timeLabel,
+    values,
+  })
+
+  measurementHistory.value = next.slice(-300)
+}
+
 /**
  * 结束测试时重置所有状态，避免污染下一次测试
  */
@@ -75,5 +151,11 @@ export function resetTestState() {
   logs.value = []
   isPaused.value = false
   collectionTime.value = 0
+  testStartedAt.value = null
+  testEndedAt.value = null
+  reportSavedAt.value = null
+  measurementHistory.value = []
+  currentReportNo.value = ''
   selectedOrder.value = null
+  currentView.value = 'dashboard'
 }

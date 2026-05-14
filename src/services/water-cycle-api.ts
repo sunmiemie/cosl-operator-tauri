@@ -120,7 +120,8 @@ export type UpdateWaterCycleOrderBody = Partial<
 
 export async function updateWaterCycleOrder(
   orderId: number,
-  data: UpdateWaterCycleOrderBody
+  data: UpdateWaterCycleOrderBody,
+  headers?: Record<string, string>
 ): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
-  return http.put<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/detail/${orderId}/`, data)
+  return http.put<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/detail/${orderId}/`, data, headers)
 }

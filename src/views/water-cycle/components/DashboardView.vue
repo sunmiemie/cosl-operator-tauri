@@ -177,7 +177,8 @@ async function onStartupComplete() {
   const order = selectedOrder.value
   const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
   if (orderId !== undefined) {
-    const resp = await updateWaterCycleOrder(orderId, { status: 2 })
+    await initAuth()
+    const resp = await updateWaterCycleOrder(orderId, { status: 2 }, getAuthHeaders())
     if (!resp.success || !resp.data || resp.data.code !== 0) {
       const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
       if (!ok) return

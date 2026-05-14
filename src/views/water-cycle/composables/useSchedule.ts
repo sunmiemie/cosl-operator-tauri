@@ -170,13 +170,6 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     return hh
   }
 
-  const timeKeyToLabel = (timeKey: string) => {
-    const hh = timeKey.slice(0, 2)
-    const mm = timeKey.slice(2, 4)
-    if (!/^\d{2}$/.test(hh) || !/^\d{2}$/.test(mm)) return ''
-    return `${hh}:${mm}`
-  }
-
   const getEndTimeKey = (startTimeKey: string, span: number) => {
     const startIdx = timeKeyToIndex.value[startTimeKey]
     if (startIdx === undefined) return ''

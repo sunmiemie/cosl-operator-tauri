@@ -2,20 +2,25 @@
 import { Icon } from '@iconify/vue'
 import { ref } from 'vue'
 
+import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
 import { updateWaterCycleOrder } from '@/services/water-cycle-api'
 
-import { currentView, resetTestState } from './composables/useTestStore'
+import { currentView, markReportSaved, resetTestState } from './composables/useTestStore'
 import { selectedOrder } from './composables/useTestStore'
 
 import DashboardView from './components/DashboardView.vue'
 import TestingView from './components/TestingView.vue'
 import DataCollectionView from './components/DataCollectionView.vue'
+import ReportPreviewView from './components/ReportPreviewView.vue'
+import ShutdownCheckModal from './components/ShutdownCheckModal.vue'
 
 const camera = useCamera()
 const ocr = useOcr()
+const { initAuth, getAuthHeaders } = useAuth()
 const orderStatusMutating = ref(false)
+const showShutdownCheck = ref(false)
 
 async function handleBack() {
   if (orderStatusMutating.value) return
@@ -28,7 +33,8 @@ async function handleBack() {
   if (orderId !== undefined) {
     orderStatusMutating.value = true
     try {
-      const resp = await updateWaterCycleOrder(orderId, { status: 1 })
+      await initAuth()
+      const resp = await updateWaterCycleOrder(orderId, { status: 1 }, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         const ok = confirm('工单状态更新失败，是否仍取消返回？')
         if (!ok) return
@@ -39,7 +45,6 @@ async function handleBack() {
   }
 
   resetTestState()
-  currentView.value = 'dashboard'
 }
 
 function handleConfirmSync() {
@@ -50,19 +55,34 @@ async function handleFinish() {
   try {
     await camera.stopCamera()
   } catch {}
+  currentView.value = 'report_preview'
+}
+
+function handleBackToCollection() {
+  currentView.value = 'data_collection'
+}
+
+function handleSaveReport() {
+  markReportSaved()
+  showShutdownCheck.value = true
+}
+
+async function handleShutdownComplete() {
+  showShutdownCheck.value = false
 
   const order = selectedOrder.value
   const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
   if (orderId !== undefined) {
-    const resp = await updateWaterCycleOrder(orderId, { status: 5 })
+    await initAuth()
+    const resp = await updateWaterCycleOrder(orderId, { status: 3 }, getAuthHeaders())
     if (!resp.success || !resp.data || resp.data.code !== 0) {
-      const ok = confirm('工单状态更新失败，是否仍结束测试？')
+      const ok = confirm('工单状态更新失败，是否仍完成测试流程？')
       if (!ok) return
     }
   }
 
+  alert('测试已完成，报告已保存。')
   resetTestState()
-  currentView.value = 'dashboard'
 }
 </script>
 
@@ -91,6 +111,18 @@ async function handleFinish() {
       :camera="camera" 
       :ocr="ocr" 
       @finish="handleFinish" 
+    />
+
+    <ReportPreviewView
+      v-else-if="currentView === 'report_preview'"
+      @back="handleBackToCollection"
+      @save="handleSaveReport"
+    />
+
+    <ShutdownCheckModal
+      v-if="showShutdownCheck"
+      @cancel="showShutdownCheck = false"
+      @complete="handleShutdownComplete"
     />
   </div>
 </template>

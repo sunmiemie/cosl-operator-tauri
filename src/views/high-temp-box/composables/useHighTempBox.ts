@@ -595,7 +595,8 @@ export function useHighTempBox() {
 
     orderStatusMutating.value = true
     try {
-      const resp = await updateHighTempBoxOrder(selected.dbId, { status: 2 })
+      await initAuth()
+      const resp = await updateHighTempBoxOrder(selected.dbId, { status: 2 }, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
         if (!ok) return
@@ -618,7 +619,8 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await updateHighTempBoxOrder(orderId, { status: 1 })
+        await initAuth()
+        const resp = await updateHighTempBoxOrder(orderId, { status: 1 }, getAuthHeaders())
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           const ok = confirm('工单状态更新失败，是否仍取消返回？')
           if (!ok) return

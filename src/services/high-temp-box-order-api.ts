@@ -112,7 +112,8 @@ export type UpdateHighTempBoxOrderBody = Partial<
 
 export async function updateHighTempBoxOrder(
   orderId: number,
-  data: UpdateHighTempBoxOrderBody
+  data: UpdateHighTempBoxOrderBody,
+  headers?: Record<string, string>
 ): Promise<ApiResponse<HighTempBoxOrderWriteResponse>> {
-  return http.put<HighTempBoxOrderWriteResponse>(`/test/high-temp-box/order/detail/${orderId}/`, data)
+  return http.put<HighTempBoxOrderWriteResponse>(`/test/high-temp-box/order/detail/${orderId}/`, data, headers)
 }
