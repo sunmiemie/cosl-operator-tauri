@@ -30,7 +30,7 @@ interface TempHistoryPoint {
 }
 
 export function useHighTempBox() {
-  const { initAuth, getAuthHeaders } = useAuth()
+  const { initAuth, getAuthHeaders, userInfo } = useAuth()
   const STARTUP_GUIDE_STEPS = [
     { badge: '第一步', text: '接通冷水机电源，旋转"启动开关"至启动位置，确认指示灯亮起。', warning: null, images: ['/guide/step1.jpg'] },
     { badge: '第二步', text: '打开液压控制箱，检查并按下绿色的"ON"启动按钮。', warning: null, images: ['/guide/step2.jpg'] },
@@ -46,8 +46,35 @@ export function useHighTempBox() {
     { badge: '第十二步', text: '点击界面上的"运行"按钮。此时按钮状态将切换为"停止"，设备正式开始工作。', warning: null, images: ['/guide/step12.jpg'] }
   ]
 
+  const SHUTDOWN_CHECK_ITEMS = [
+    '打开液压开关（液压按钮 OFF）',
+    '关闭控制箱电源（控制箱开关 OFF）',
+    '关闭外循环冷水机（反向扭动启动开关）',
+  ] as const
+
+  type HighTempBoxStep = 'pre-check' | 'startup-guide' | 'monitoring' | 'shutdown' | 'report'
+
+  type HighTempBoxReportSnapshot = {
+    reportNo: string
+    taskNumber: string
+    tester: string
+    testDate: string
+    completedAt: string
+    targetTemp: number
+    finalTemp: number | null
+    durationText: string
+    history: TempHistoryPoint[]
+    summary: {
+      minTemp: number | null
+      maxTemp: number | null
+      avgTemp: number | null
+      sampleCount: number
+      stabilityText: string
+    }
+  }
+
   const currentView = ref<'dashboard' | 'test'>('dashboard')
-  const currentStep = ref<'pre-check' | 'startup-guide' | 'monitoring' | 'shutdown'>('pre-check')
+  const currentStep = ref<HighTempBoxStep>('pre-check')
 
   const searchKeyword = ref('')
 
@@ -110,6 +137,8 @@ export function useHighTempBox() {
   }
 
   const currentWorkOrder = ref<WorkOrder | null>(null)
+  const shutdownCheckData = ref<Record<number, boolean>>({})
+  const reportSnapshot = ref<HighTempBoxReportSnapshot | null>(null)
   const preCheckItems = ref([
     { id: 1, text: '电源电压、环境温度及相对湿度符合使用条件', checked: false },
     { id: 2, text: '温箱箱体、控制箱、冷却系统电源连接安全可靠', checked: false },
@@ -214,6 +243,31 @@ export function useHighTempBox() {
   })
 
   const isPreCheckComplete = computed(() => preCheckItems.value.every(i => i.checked))
+  const shutdownCompletedCount = computed(() =>
+    SHUTDOWN_CHECK_ITEMS.filter((_, index) => shutdownCheckData.value[index]).length
+  )
+  const isShutdownComplete = computed(() => shutdownCompletedCount.value === SHUTDOWN_CHECK_ITEMS.length)
+  const shutdownProgress = computed(() =>
+    SHUTDOWN_CHECK_ITEMS.length ? (shutdownCompletedCount.value / SHUTDOWN_CHECK_ITEMS.length) * 100 : 0
+  )
+  const testerName = computed(() => userInfo.value?.nickName || userInfo.value?.username || currentWorkOrder.value?.applicant || '系统操作员')
+  const shutdownStatusCards = computed(() => [
+    {
+      label: '系统状态',
+      value: isShutdownComplete.value ? '已关机' : '关机中',
+      tone: isShutdownComplete.value ? 'success' : 'running',
+    },
+    {
+      label: '数据采集',
+      value: reportSnapshot.value ? '已完成' : '进行中',
+      tone: reportSnapshot.value ? 'success' : 'running',
+    },
+    {
+      label: '测试报告',
+      value: isShutdownComplete.value ? '已生成' : '待生成',
+      tone: isShutdownComplete.value ? 'success' : 'idle',
+    },
+  ])
 
   function getMonday(d: Date) {
     const dt = new Date(d)
@@ -609,6 +663,9 @@ export function useHighTempBox() {
 
     currentWorkOrder.value = selected
     preCheckItems.value.forEach(i => (i.checked = false))
+    shutdownCheckData.value = {}
+    reportSnapshot.value = null
+    isRunning.value = true
     currentView.value = 'test'
     currentStep.value = 'pre-check'
   }
@@ -635,8 +692,13 @@ export function useHighTempBox() {
   }
 
   function backToDashboard() {
+    currentStep.value = 'pre-check'
     currentView.value = 'dashboard'
     currentWorkOrder.value = null
+    guideStepIndex.value = 0
+    shutdownCheckData.value = {}
+    reportSnapshot.value = null
+    isRunning.value = true
   }
 
   function togglePreCheck(id: number) {
@@ -663,18 +725,118 @@ export function useHighTempBox() {
     }
   }
 
-  function stopTest() {
-    if (confirm('测试将中止并清空数据，确认吗？')) {
-      stopMonitoring()
-      backToDashboard()
-    }
-  }
-
   function formatRunTime(seconds: number): string {
     const h = String(Math.floor(seconds / 3600)).padStart(2, '0')
     const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')
     const s = String(seconds % 60).padStart(2, '0')
     return `${h}:${m}:${s}`
+  }
+
+  function formatDateTime(date = new Date()) {
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    const hh = String(date.getHours()).padStart(2, '0')
+    const mm = String(date.getMinutes()).padStart(2, '0')
+    const ss = String(date.getSeconds()).padStart(2, '0')
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`
+  }
+
+  function buildReportNo(taskNumber?: string) {
+    const now = new Date()
+    const dateCode = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    const taskSuffix = (taskNumber || currentWorkOrder.value?.taskNumber || '000').replace(/\W/g, '').slice(-4) || '0000'
+    return `HTB-${dateCode}-${taskSuffix}`
+  }
+
+  function toFixedOrNull(value: number | null, digits = 1) {
+    return value === null || Number.isNaN(value) ? null : Number(value.toFixed(digits))
+  }
+
+  function buildReportSnapshot(): HighTempBoxReportSnapshot | null {
+    const order = currentWorkOrder.value
+    if (!order) return null
+    const history = tempHistory.value.map((item) => ({ ...item }))
+    const temps = history.map((item) => item.temp).filter((item) => Number.isFinite(item))
+    const minTemp = temps.length ? Math.min(...temps) : null
+    const maxTemp = temps.length ? Math.max(...temps) : null
+    const avgTemp = temps.length ? temps.reduce((sum, item) => sum + item, 0) / temps.length : null
+    const finalTemp = ocrCurrentTemp.value ?? (temps.length ? temps[temps.length - 1] : null)
+    const targetTemp = Number(displaySetTemp.value || order.targetTemp || 0)
+    const diff = finalTemp === null ? null : Math.abs(finalTemp - targetTemp)
+    const stabilityText =
+      diff === null ? '未采集到有效温度数据' : diff <= 3 ? '温控稳定' : diff <= 8 ? '温度接近目标值' : '温度偏差较大'
+
+    return {
+      reportNo: buildReportNo(order.taskNumber),
+      taskNumber: order.taskNumber,
+      tester: testerName.value,
+      testDate: order.testDate,
+      completedAt: formatDateTime(),
+      targetTemp,
+      finalTemp: toFixedOrNull(finalTemp),
+      durationText: displayRunTime.value,
+      history,
+      summary: {
+        minTemp: toFixedOrNull(minTemp),
+        maxTemp: toFixedOrNull(maxTemp),
+        avgTemp: toFixedOrNull(avgTemp),
+        sampleCount: history.length,
+        stabilityText,
+      },
+    }
+  }
+
+  function completeTest() {
+    if (!confirm('确认测试结束？将进入关机检查并生成测试报告。')) return
+    reportSnapshot.value = buildReportSnapshot()
+    shutdownCheckData.value = {}
+    currentStep.value = 'shutdown'
+  }
+
+  async function stopTest() {
+    if (!confirm('测试将中止并清空数据，确认吗？')) return
+    await cancelExperiment()
+  }
+
+  function setShutdownCheck(index: number) {
+    if (shutdownCheckData.value[index]) return
+    const prevIndex = index - 1
+    if (prevIndex >= 0 && !shutdownCheckData.value[prevIndex]) return
+    shutdownCheckData.value = {
+      ...shutdownCheckData.value,
+      [index]: true,
+    }
+  }
+
+  function viewReport() {
+    if (!isShutdownComplete.value || !reportSnapshot.value) return
+    currentStep.value = 'report'
+  }
+
+  function backToShutdown() {
+    currentStep.value = 'shutdown'
+  }
+
+  async function finishCompletedFlow() {
+    const order = currentWorkOrder.value
+    const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
+    if (orderId !== undefined) {
+      orderStatusMutating.value = true
+      try {
+        await initAuth()
+        const resp = await updateHighTempBoxOrder(orderId, { status: 3 }, getAuthHeaders())
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          const ok = confirm('工单状态更新失败，是否仍完成测试流程？')
+          if (!ok) return
+        } else {
+          void refreshWorkOrders()
+        }
+      } finally {
+        orderStatusMutating.value = false
+      }
+    }
+    backToDashboard()
   }
 
   const displayRunTime = computed(() => {
@@ -1108,6 +1270,13 @@ export function useHighTempBox() {
     refreshWorkOrders,
     orderStatusMutating,
     currentWorkOrder,
+    SHUTDOWN_CHECK_ITEMS,
+    shutdownCheckData,
+    shutdownCompletedCount,
+    shutdownProgress,
+    isShutdownComplete,
+    shutdownStatusCards,
+    reportSnapshot,
     preCheckItems,
     guideStepIndex,
     currentTemp,
@@ -1159,7 +1328,12 @@ export function useHighTempBox() {
     completePreCheck,
     nextGuideStep,
     prevGuideStep,
+    completeTest,
     stopTest,
+    setShutdownCheck,
+    viewReport,
+    backToShutdown,
+    finishCompletedFlow,
     displayRunTime,
     displaySetTemp,
     displayCurrentTemp,

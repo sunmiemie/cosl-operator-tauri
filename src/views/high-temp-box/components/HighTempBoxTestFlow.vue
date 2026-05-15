@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { HighTempBoxContext } from '../composables/useHighTempBox'
 
@@ -7,6 +8,13 @@ const {
   currentStep,
   currentWorkOrder,
   backToDashboard,
+  SHUTDOWN_CHECK_ITEMS,
+  shutdownCheckData,
+  shutdownCompletedCount,
+  shutdownProgress,
+  isShutdownComplete,
+  shutdownStatusCards,
+  reportSnapshot,
   preCheckItems,
   togglePreCheck,
   isPreCheckComplete,
@@ -15,6 +23,7 @@ const {
   guideStepIndex,
   prevGuideStep,
   nextGuideStep,
+  completeTest,
   showCameraSelect,
   camera,
   selectAndStartCamera,
@@ -39,19 +48,31 @@ const {
   isRunning,
   togglePause,
   stopTest,
+  setShutdownCheck,
+  viewReport,
+  backToShutdown,
+  finishCompletedFlow,
   cancelExperiment,
   orderStatusMutating,
 } = props.ctx
+
+const pageTitle = computed(() => {
+  if (currentStep.value === 'pre-check') return '开机前安全检查'
+  if (currentStep.value === 'startup-guide') return '高温箱启动指南'
+  if (currentStep.value === 'shutdown') return '关机流程'
+  if (currentStep.value === 'report') return '测试报告'
+  return '测试监控中'
+})
 </script>
 
 <template>
   <div class="test-view">
     <div class="test-header">
       <div class="header-left">
-        <h2>{{ currentStep === 'pre-check' ? '开机前安全检查' : currentStep === 'startup-guide' ? '高温箱启动指南' : '测试监控中' }}</h2>
+        <h2>{{ pageTitle }}</h2>
         <div class="order-tag">工单: {{ currentWorkOrder?.id }}</div>
       </div>
-      <button class="back-btn" :disabled="orderStatusMutating" @click="cancelExperiment">
+      <button v-if="currentStep === 'pre-check' || currentStep === 'startup-guide' || currentStep === 'monitoring'" class="back-btn" :disabled="orderStatusMutating" @click="cancelExperiment">
         <Icon icon="mdi:arrow-left" /> 返回主页
       </button>
     </div>
@@ -220,13 +241,139 @@ const {
           </div>
         </div>
 
-        <div class="action-bar">
+        <div class="action-bar monitor-actions">
           <button v-if="!isOcrConfigMode" class="secondary-btn" @click="enterRoiConfig"><Icon icon="mdi:crop" />配置识别区域</button>
           <div class="action-spacer"></div>
           <button class="secondary-btn warning" @click="togglePause">
             <Icon :icon="isRunning ? 'mdi:pause' : 'mdi:play'" />{{ isRunning ? '暂停测试' : '继续测试' }}
           </button>
           <button class="secondary-btn danger" @click="stopTest"><Icon icon="mdi:stop" />中止测试</button>
+          <button class="primary-btn finish-btn" @click="completeTest"><Icon icon="mdi:check-circle-outline" />测试结束</button>
+        </div>
+      </div>
+
+      <div v-else-if="currentStep === 'shutdown'" class="shutdown-panel">
+        <div class="shutdown-alert" :class="isShutdownComplete ? 'is-success' : 'is-warning'">
+          <strong>{{ isShutdownComplete ? '关机完成' : '请逐项完成关机操作' }}</strong>
+          <span>{{ isShutdownComplete ? '所有关机检查项已确认，可查看测试报告或返回主界面。' : '确认每一项关机步骤后，方可查看测试报告。' }}</span>
+        </div>
+
+        <div class="shutdown-progress-card">
+          <div class="progress-row">
+            <span>关机检查进度</span>
+            <strong>{{ shutdownCompletedCount }}/{{ SHUTDOWN_CHECK_ITEMS.length }}</strong>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" :style="{ width: `${shutdownProgress}%` }"></div>
+          </div>
+        </div>
+
+        <div class="shutdown-check-list">
+          <div
+            v-for="(item, index) in SHUTDOWN_CHECK_ITEMS"
+            :key="item"
+            class="shutdown-check-item"
+            :class="{
+              'is-done': shutdownCheckData[index],
+              'is-active': !shutdownCheckData[index] && (index === 0 || shutdownCheckData[index - 1])
+            }"
+          >
+            <div class="shutdown-check-main">
+              <div class="shutdown-check-number">{{ index + 1 }}</div>
+              <div class="shutdown-check-content">{{ item }}</div>
+            </div>
+            <button
+              v-if="!shutdownCheckData[index]"
+              class="shutdown-check-btn"
+              :disabled="index > 0 && !shutdownCheckData[index - 1]"
+              @click="setShutdownCheck(index)"
+            >
+              确认已完成
+            </button>
+            <div v-else class="shutdown-check-done">
+              <Icon icon="mdi:check-circle" /> 已确认
+            </div>
+          </div>
+        </div>
+
+        <div class="shutdown-status-grid">
+          <div v-for="card in shutdownStatusCards" :key="card.label" class="shutdown-status-card">
+            <div class="status-item-label">{{ card.label }}</div>
+            <div class="status-item-value" :class="`is-${card.tone}`">{{ card.value }}</div>
+          </div>
+        </div>
+
+        <div class="action-bar shutdown-actions">
+          <button class="secondary-btn" :disabled="!isShutdownComplete" @click="viewReport">
+            <Icon icon="mdi:file-document-outline" /> 查看测试报告
+          </button>
+          <div class="action-spacer"></div>
+          <button class="primary-btn finish-btn" :disabled="!isShutdownComplete || orderStatusMutating" @click="finishCompletedFlow">
+            <Icon icon="mdi:home-export-outline" /> 返回主界面
+          </button>
+        </div>
+      </div>
+
+      <div v-else-if="currentStep === 'report'" class="report-panel">
+        <div class="report-toolbar">
+          <div class="report-badge">
+            <Icon icon="mdi:file-chart-outline" />
+            <span>测试报告预览</span>
+          </div>
+          <div class="report-no">{{ reportSnapshot?.reportNo }}</div>
+        </div>
+
+        <div class="report-grid">
+          <div class="report-card">
+            <div class="section-title">基础信息</div>
+            <div class="info-grid">
+              <div class="info-item"><span>任务单号</span><strong>{{ reportSnapshot?.taskNumber || currentWorkOrder?.taskNumber }}</strong></div>
+              <div class="info-item"><span>设备名称</span><strong>{{ currentWorkOrder?.deviceName }}</strong></div>
+              <div class="info-item"><span>测试人员</span><strong>{{ reportSnapshot?.tester }}</strong></div>
+              <div class="info-item"><span>测试日期</span><strong>{{ reportSnapshot?.testDate || currentWorkOrder?.testDate }}</strong></div>
+              <div class="info-item"><span>完成时间</span><strong>{{ reportSnapshot?.completedAt }}</strong></div>
+              <div class="info-item"><span>运行时长</span><strong>{{ reportSnapshot?.durationText }}</strong></div>
+            </div>
+          </div>
+
+          <div class="report-card">
+            <div class="section-title">温度概览</div>
+            <div class="summary-grid">
+              <div class="summary-item"><span>目标温度</span><strong>{{ reportSnapshot?.targetTemp ?? '--' }}°C</strong></div>
+              <div class="summary-item"><span>最终温度</span><strong>{{ reportSnapshot?.finalTemp ?? '--' }}<template v-if="reportSnapshot?.finalTemp !== null">°C</template></strong></div>
+              <div class="summary-item"><span>最低温度</span><strong>{{ reportSnapshot?.summary.minTemp ?? '--' }}<template v-if="reportSnapshot?.summary.minTemp !== null">°C</template></strong></div>
+              <div class="summary-item"><span>最高温度</span><strong>{{ reportSnapshot?.summary.maxTemp ?? '--' }}<template v-if="reportSnapshot?.summary.maxTemp !== null">°C</template></strong></div>
+              <div class="summary-item"><span>平均温度</span><strong>{{ reportSnapshot?.summary.avgTemp ?? '--' }}<template v-if="reportSnapshot?.summary.avgTemp !== null">°C</template></strong></div>
+              <div class="summary-item"><span>采样点数</span><strong>{{ reportSnapshot?.summary.sampleCount ?? 0 }}</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="report-card report-result-card">
+          <div class="section-title">测试结论</div>
+          <div class="result-banner">
+            <div class="result-title">{{ reportSnapshot?.summary.stabilityText || '暂无结论' }}</div>
+            <div class="result-desc">当前流程已完成测试采集与关机检查，工单返回后将流转至待审核。</div>
+          </div>
+        </div>
+
+        <div class="report-card">
+          <div class="section-title">采样轨迹</div>
+          <div class="history-list">
+            <div v-if="!(reportSnapshot?.history.length)" class="history-empty">本次测试未采集到有效温度数据。</div>
+            <div v-for="point in reportSnapshot?.history.slice(-12) || []" :key="`${point.time}-${point.temp}`" class="history-item">
+              <span>{{ point.time }}</span>
+              <strong>{{ point.temp }}°C</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <button class="secondary-btn" @click="backToShutdown"><Icon icon="mdi:arrow-left" />返回关机流程</button>
+          <div class="action-spacer"></div>
+          <button class="primary-btn finish-btn" :disabled="orderStatusMutating" @click="finishCompletedFlow">
+            <Icon icon="mdi:check" />完成并返回主界面
+          </button>
         </div>
       </div>
     </div>
@@ -308,8 +455,62 @@ const {
 .camera-option{display:flex;align-items:center;gap:10px;padding:12px 16px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-bg-primary);color:var(--color-text-primary);font-size:14px;cursor:pointer}
 .action-bar{display:flex;align-items:center;gap:16px}
 .action-spacer{flex:1}
-.secondary-btn{display:flex;align-items:center;gap:6px;padding:10px 20px;border:1px solid var(--color-border);background:transparent;border-radius:10px;cursor:pointer;color:var(--color-text-secondary);font-size:14px;font-weight:600;transition:all .2s}
-.secondary-btn.warning{color:var(--color-warning);border-color:var(--color-warning)}
-.secondary-btn.danger{color:var(--color-error);border-color:var(--color-error)}
-.primary-btn.small{padding:6px 14px;font-size:13px;border-radius:8px}
+.monitor-actions{padding-top:6px;flex-wrap:wrap}
+.secondary-btn,.primary-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 22px;border-radius:14px;cursor:pointer;font-size:15px;font-weight:700;line-height:1;transition:all .2s ease;white-space:nowrap}
+.secondary-btn .iconify,.primary-btn .iconify{font-size:18px}
+.secondary-btn{border:1px solid var(--color-border);background:var(--color-bg-primary);color:var(--color-text-secondary);box-shadow:0 6px 18px rgba(15,23,42,.04)}
+.secondary-btn:hover:not(:disabled),.primary-btn:hover:not(:disabled){transform:translateY(-1px)}
+.secondary-btn:hover:not(:disabled){background:var(--color-bg-tertiary);border-color:rgba(148,163,184,.45)}
+.secondary-btn.warning{color:#d97706;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+.secondary-btn.warning:hover:not(:disabled){background:rgba(245,158,11,.12)}
+.secondary-btn.danger{color:#dc2626;border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.06)}
+.secondary-btn.danger:hover:not(:disabled){background:rgba(239,68,68,.1)}
+.secondary-btn:disabled,.primary-btn:disabled,.shutdown-check-btn:disabled{opacity:.5;cursor:not-allowed}
+.primary-btn{border:none;background:linear-gradient(135deg, var(--color-accent-blue), #2563eb);color:#fff;box-shadow:0 12px 24px rgba(59,130,246,.22)}
+.primary-btn.small{min-height:36px;padding:0 14px;font-size:13px;border-radius:10px}
+.finish-btn{min-width:136px;background:linear-gradient(135deg, #22c55e, #16a34a);box-shadow:0 12px 24px rgba(34,197,94,.2)}
+.shutdown-panel,.report-panel{width:100%;display:flex;flex-direction:column;gap:16px}
+.shutdown-alert{display:flex;flex-direction:column;gap:6px;padding:16px 18px;border-radius:12px;border:1px solid var(--color-border);background:var(--color-bg-tertiary);color:var(--color-text-secondary)}
+.shutdown-alert strong{font-size:16px;color:var(--color-text-primary)}
+.shutdown-alert.is-warning{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.08)}
+.shutdown-alert.is-success{border-color:rgba(34,197,94,.25);background:rgba(34,197,94,.08)}
+.shutdown-progress-card,.report-card{background:var(--color-bg-primary);border:1px solid var(--color-border);border-radius:12px;padding:18px}
+.progress-row{display:flex;align-items:center;justify-content:space-between;font-size:14px;color:var(--color-text-secondary);margin-bottom:10px}
+.progress-track{height:10px;border-radius:999px;background:var(--color-bg-tertiary);overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg, var(--color-accent-blue), var(--color-success,#16a34a));border-radius:999px;transition:width .2s ease}
+.shutdown-check-list{display:flex;flex-direction:column;gap:12px}
+.shutdown-check-item{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;border-radius:12px;border:1px solid var(--color-border);background:var(--color-bg-primary);transition:all .2s}
+.shutdown-check-item.is-active{border-color:rgba(59,130,246,.35);box-shadow:0 0 0 3px rgba(59,130,246,.08)}
+.shutdown-check-item.is-done{border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.06)}
+.shutdown-check-main{display:flex;align-items:center;gap:14px;min-width:0}
+.shutdown-check-number{width:28px;height:28px;border-radius:999px;display:flex;align-items:center;justify-content:center;background:var(--color-bg-tertiary);color:var(--color-text-secondary);font-weight:700;flex-shrink:0}
+.shutdown-check-item.is-done .shutdown-check-number{background:var(--color-success,#16a34a);color:#fff}
+.shutdown-check-content{font-size:15px;color:var(--color-text-primary);line-height:1.6}
+.shutdown-check-btn{padding:10px 16px;border:none;border-radius:10px;background:var(--color-accent-blue);color:#fff;font-size:14px;font-weight:600;cursor:pointer;flex-shrink:0}
+.shutdown-check-done{display:flex;align-items:center;gap:6px;color:var(--color-success,#16a34a);font-size:14px;font-weight:600;flex-shrink:0}
+.shutdown-status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.shutdown-status-card{padding:18px;border-radius:12px;border:1px solid var(--color-border);background:var(--color-bg-primary)}
+.status-item-label{font-size:13px;color:var(--color-text-secondary)}
+.status-item-value{margin-top:10px;font-size:22px;font-weight:700;color:var(--color-text-primary)}
+.status-item-value.is-success{color:var(--color-success,#16a34a)}
+.status-item-value.is-running{color:var(--color-accent-blue)}
+.status-item-value.is-idle{color:var(--color-text-tertiary)}
+.report-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.report-badge{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(59,130,246,.1);color:var(--color-accent-blue);font-size:13px;font-weight:600}
+.report-no{font-size:13px;color:var(--color-text-secondary)}
+.report-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.section-title{font-size:15px;font-weight:700;color:var(--color-text-primary);margin-bottom:14px}
+.info-grid,.summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.info-item,.summary-item{padding:14px;border-radius:10px;background:var(--color-bg-tertiary);display:flex;flex-direction:column;gap:6px}
+.info-item span,.summary-item span{font-size:12px;color:var(--color-text-secondary)}
+.info-item strong,.summary-item strong{font-size:15px;color:var(--color-text-primary);word-break:break-all}
+.report-result-card{background:linear-gradient(135deg, rgba(59,130,246,.06), rgba(34,197,94,.06))}
+.result-banner{display:flex;flex-direction:column;gap:8px;padding:16px;border-radius:12px;background:var(--color-bg-tertiary)}
+.result-title{font-size:20px;font-weight:700;color:var(--color-text-primary)}
+.result-desc{font-size:13px;color:var(--color-text-secondary);line-height:1.6}
+.history-list{display:flex;flex-direction:column;gap:10px;max-height:280px;overflow:auto}
+.history-item{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-radius:10px;background:var(--color-bg-tertiary);font-size:13px;color:var(--color-text-secondary)}
+.history-item strong{color:var(--color-text-primary)}
+.history-empty{padding:40px 12px;text-align:center;color:var(--color-text-tertiary);font-size:13px}
+@media (max-width: 1280px){.monitor-grid,.monitor-main,.report-grid,.shutdown-status-grid,.info-grid,.summary-grid{grid-template-columns:1fr}.monitor-grid,.monitor-main{display:grid}.video-container,.chart-container{flex:auto}.shutdown-check-item{flex-direction:column;align-items:flex-start}.shutdown-check-btn,.shutdown-check-done{width:100%;justify-content:center}.monitor-actions .action-spacer{display:none}.monitor-actions{gap:12px}.monitor-actions .secondary-btn,.monitor-actions .primary-btn{flex:1 1 calc(50% - 6px)}}
 </style>
