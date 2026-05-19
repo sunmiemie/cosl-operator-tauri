@@ -28,6 +28,7 @@ export type HassMqttTelemetryUpdate =
   | { kind: 'unknown' }
 
 function finiteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null
   const numberValue = Number(value)
   return Number.isFinite(numberValue) ? numberValue : null
 }
