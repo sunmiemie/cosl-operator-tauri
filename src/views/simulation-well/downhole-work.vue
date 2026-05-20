@@ -15,7 +15,7 @@ import {
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 
-const props = defineProps<{
+defineProps<{
   todayScheduledOrders: any[]
   downholeDevices: any[]
 }>()
@@ -313,46 +313,6 @@ const handleEdit = async (row: SimulatedWellDownholeWorkItem) => {
   editOrders.value = built.orders
   editDevices.value = built.devices
   editMode.value = true
-}
-
-const handleEditSave = async (payload: any) => {
-  if (!editingRow.value) return
-  await initAuth()
-  const body = buildDownholeWorkBody(payload, editingRow.value.status, payload?.reportCount ?? editingRow.value.report_count ?? 0)
-  const res = await updateSimulatedWellDownholeWork(editingRow.value.id, body, getAuthHeaders())
-  if (!res.success || res.data?.code !== 0) {
-    ElMessage.error(res.error || res.data?.msg || '编辑下井作业失败')
-    return
-  }
-  ElMessage.success('下井作业已更新')
-  const returnedId = res.data?.data?.id
-  if (returnedId !== undefined && Number(returnedId) !== Number(editingRow.value.id)) {
-    ElMessage.error('编辑保存返回了新的下井作业记录，已拦截为异常结果，请继续检查后端更新接口')
-    return
-  }
-  editMode.value = false
-  editingRow.value = null
-  await fetchList()
-}
-
-const handleEditSaveV2 = async (payload: any) => {
-  if (!editingRow.value) return
-  await initAuth()
-  const body = buildDownholeWorkBody(payload, editingRow.value.status, payload?.reportCount ?? editingRow.value.report_count ?? 0)
-  const res = await updateSimulatedWellDownholeWork(editingRow.value.id, body, getAuthHeaders())
-  if (!res.success || res.data?.code !== 0) {
-    ElMessage.error(res.error || res.data?.msg || '编辑下井作业失败')
-    return
-  }
-  const returnedId = res.data?.data?.id
-  if (returnedId !== undefined && Number(returnedId) !== Number(editingRow.value.id)) {
-    ElMessage.error('编辑保存返回了新的下井作业记录，已拦截为异常结果，请继续检查后端更新接口')
-    return
-  }
-  ElMessage.success('下井作业已更新')
-  editMode.value = false
-  editingRow.value = null
-  await fetchList()
 }
 
 const handleEditSaveV3 = async (payload: any) => {

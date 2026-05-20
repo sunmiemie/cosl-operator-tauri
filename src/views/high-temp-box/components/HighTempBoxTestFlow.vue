@@ -7,7 +7,6 @@ const props = defineProps<{ ctx: HighTempBoxContext }>()
 const {
   currentStep,
   currentWorkOrder,
-  backToDashboard,
   SHUTDOWN_CHECK_ITEMS,
   shutdownCheckData,
   shutdownCompletedCount,
@@ -257,7 +256,7 @@ const reportChart = computed(() => {
 
           <div class="guide-progress">
             <div
-              v-for="(step, idx) in STARTUP_GUIDE_STEPS"
+              v-for="(_step, idx) in STARTUP_GUIDE_STEPS"
               :key="idx"
               class="progress-dot"
               :class="{ active: idx === guideStepIndex, done: idx < guideStepIndex }"

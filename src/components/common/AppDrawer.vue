@@ -8,10 +8,6 @@
 import { computed, watch, onMounted, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 
-// 布局常量（与 AppHeader/AppFooter 保持一致）
-const HEADER_HEIGHT = 36
-const FOOTER_HEIGHT = 28
-
 interface Props {
   modelValue: boolean
   title?: string

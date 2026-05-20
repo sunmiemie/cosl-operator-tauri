@@ -103,7 +103,7 @@ export interface TargetItem {
  * 生成目标项的唯一 key
  */
 function generateTargetKey(item: Omit<TargetItem, 'key' | 'stepName' | 'stepDesc' | 'referenceUrl' | 'pass'>): string {
-  const parts = [item.type, item.position]
+  const parts: string[] = [item.type, item.position]
   if (item.areaId !== undefined) parts.push(`a${item.areaId}`)
   if (item.areaPosition) parts.push(item.areaPosition)
   if (item.detailId !== undefined) parts.push(`d${item.detailId}`)

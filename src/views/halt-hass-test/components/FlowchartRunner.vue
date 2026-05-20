@@ -3,7 +3,7 @@
  * 流程图运行组件
  * 展示流程图运行状态和节点结果
  */
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
 import type { NodeRunResult } from '../types'
@@ -50,7 +50,8 @@ const hasError = computed(() => failedCount.value > 0)
 function getNodeStatus(nodeId: string): 'pending' | 'running' | 'success' | 'error' {
   if (props.currentNodeId === nodeId) return 'running'
   const result = props.nodeResults.find(r => r.nodeId === nodeId)
-  return result?.status ?? 'pending'
+  if (!result || result.status === 'skipped') return 'pending'
+  return result.status
 }
 
 // 获取节点名称

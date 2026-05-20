@@ -11,7 +11,7 @@
  * - 支持从缺陷库/疑问库快速添加描述
  * - 支持将当前描述保存到库
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessageBox } from 'element-plus'
 import ImgEditor from '@/views/process-visual/components/ImgEditor.vue'
@@ -242,26 +242,6 @@ function closeEditor() {
 function resetPopovers() {
   errorExpandedIndex.value = null
   questionExpandedIndex.value = null
-}
-
-// 切换缺陷弹窗
-function toggleErrorPopover(index: number) {
-  if (errorExpandedIndex.value === index) {
-    errorExpandedIndex.value = null
-  } else {
-    errorExpandedIndex.value = index
-    questionExpandedIndex.value = null
-  }
-}
-
-// 切换疑问弹窗
-function toggleQuestionPopover(index: number) {
-  if (questionExpandedIndex.value === index) {
-    questionExpandedIndex.value = null
-  } else {
-    questionExpandedIndex.value = index
-    errorExpandedIndex.value = null
-  }
 }
 
 // 获取步骤状态样式类

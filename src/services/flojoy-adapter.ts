@@ -11,8 +11,43 @@ import type {
   BlockIO,
   ParamDefinition,
   PipDependency,
+  BlockParameterValue,
 } from '@/views/process-halt-hass/types'
 import type { BlockMetadataItem } from '@/services/flojoy-api'
+
+function toBlockParameterValue(value: unknown): BlockParameterValue {
+  return value as BlockParameterValue
+}
+
+function toOptionValues(options: unknown[] | undefined): (string | number)[] | undefined {
+  return Array.isArray(options)
+    ? options.filter((value): value is string | number => typeof value === 'string' || typeof value === 'number')
+    : undefined
+}
+
+function normalizeBlockData(node: Node<BlockData>): BlockData {
+  const data = (node.data ?? {}) as Partial<BlockData>
+  return {
+    id: data.id || node.id,
+    label: data.label || node.id,
+    type: data.type || 'default',
+    func: data.func || data.blockKey || node.id,
+    path: data.path || data.blockKey || '',
+    ctrls: data.ctrls || {},
+    initCtrls: data.initCtrls,
+    inputs: data.inputs,
+    outputs: data.outputs,
+    pip_dependencies: data.pip_dependencies,
+    running: data.running,
+    failed: data.failed,
+    invalid: data.invalid,
+    blockKey: data.blockKey,
+    category: data.category,
+    status: data.status,
+    params: data.params,
+    result: data.result,
+  }
+}
 
 /**
  * 将 Block 元数据转换为 CtrlData
@@ -111,30 +146,7 @@ export function vueFlowNodesToStudioNodes(
   nodes: Node<BlockData>[]
 ): Node<BlockData>[] {
   return nodes.map((node) => {
-    const data = node.data
-
-    // 确保关键字段存在
-    const studioData: BlockData = {
-      id: data.id || node.id,
-      label: data.label || node.id,
-      type: data.type || 'default',
-      func: data.func || data.blockKey || node.id,
-      path: data.path || data.blockKey || '',
-      ctrls: data.ctrls || {},
-      initCtrls: data.initCtrls,
-      inputs: data.inputs,
-      outputs: data.outputs,
-      pip_dependencies: data.pip_dependencies,
-      running: data.running,
-      failed: data.failed,
-      invalid: data.invalid,
-      // 保留兼容字段
-      blockKey: data.blockKey,
-      category: data.category,
-      status: data.status,
-      params: data.params,
-      result: data.result,
-    }
+    const studioData = normalizeBlockData(node)
 
     return {
       ...node,
@@ -215,6 +227,7 @@ export function createNodeFromDrop(
         name: input.name || 'default',
         id: input.id || input.name || 'default',
         type: input.type || 'Any',
+        desc: null,
         multiple: input.multiple ?? false,
       })
     )
@@ -225,6 +238,7 @@ export function createNodeFromDrop(
         name: output.name || 'default',
         id: output.id || output.name || 'default',
         type: output.type || 'Any',
+        desc: null,
       })
     )
 
@@ -274,14 +288,15 @@ export function updateNodeRunStatus(
 ): Node<BlockData>[] {
   return nodes.map((node) => {
     if (node.id === nodeId) {
+      const data = normalizeBlockData(node)
       return {
         ...node,
         data: {
-          ...node.data,
+          ...data,
           running: status === 'running',
           failed: status === 'error',
           status,
-          result: result !== undefined ? result : node.data.result,
+          result: result !== undefined ? result : data.result,
         },
       }
     }
@@ -299,7 +314,7 @@ export function resetAllNodeStatus(
   return nodes.map((node) => ({
     ...node,
     data: {
-      ...node.data,
+      ...normalizeBlockData(node),
       running: false,
       failed: false,
       status: 'pending',
@@ -550,8 +565,8 @@ export function serializeToStudioFormat(
         path: data?.path || '',
       },
       position: node.position,
-      width: node.width,
-      height: node.height,
+      width: typeof node.width === 'number' ? node.width : undefined,
+      height: typeof node.height === 'number' ? node.height : undefined,
     }
   })
   
@@ -601,11 +616,11 @@ export function deserializeFromStudioFormat(data: StudioFlowchartJson): {
         ctrls[key] = {
           functionName: ctrl.functionName,
           param: ctrl.param,
-          value: ctrl.value,
+          value: toBlockParameterValue(ctrl.value),
           type: ctrl.type,
-          default: ctrl.default,
-          options: ctrl.options as unknown[],
-          desc: ctrl.desc ?? undefined,
+          default: toBlockParameterValue(ctrl.default),
+          options: toOptionValues(ctrl.options),
+          desc: ctrl.desc ?? null,
         }
       }
     }
@@ -617,11 +632,11 @@ export function deserializeFromStudioFormat(data: StudioFlowchartJson): {
         initCtrls[key] = {
           functionName: ctrl.functionName,
           param: ctrl.param,
-          value: ctrl.value,
+          value: toBlockParameterValue(ctrl.value),
           type: ctrl.type,
-          default: ctrl.default,
-          options: ctrl.options as unknown[],
-          desc: ctrl.desc ?? undefined,
+          default: toBlockParameterValue(ctrl.default),
+          options: toOptionValues(ctrl.options),
+          desc: ctrl.desc ?? null,
         }
       }
     }
@@ -631,7 +646,7 @@ export function deserializeFromStudioFormat(data: StudioFlowchartJson): {
       name: input.name,
       id: input.id,
       type: input.type,
-      desc: input.desc ?? undefined,
+      desc: input.desc ?? null,
       multiple: input.multiple,
     }))
     
@@ -640,7 +655,7 @@ export function deserializeFromStudioFormat(data: StudioFlowchartJson): {
       name: output.name,
       id: output.id,
       type: output.type,
-      desc: output.desc ?? undefined,
+      desc: output.desc ?? null,
     }))
     
     // 直接使用 Studio 原始类型（不做转换）

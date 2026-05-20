@@ -216,7 +216,6 @@ async function takePhoto() {
   const img = new Image()
   img.onload = () => {
     // 确定要裁剪的图像源
-    let sourceWidth = img.width
     let sourceHeight = img.height
     let sourceCanvas: HTMLCanvasElement | HTMLImageElement = img
     
@@ -224,7 +223,6 @@ async function takePhoto() {
     if (isXrayCropEnabled.value && xrayCropArea.value) {
       const croppedCanvas = applyXrayCrop(img, xrayCropArea.value)
       sourceCanvas = croppedCanvas
-      sourceWidth = croppedCanvas.width
       sourceHeight = croppedCanvas.height
     }
     

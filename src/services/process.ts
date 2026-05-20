@@ -226,6 +226,7 @@ export interface TempOrderData {
       rightPass: number
       leftUrl: string
       rightUrl: string
+      note?: string[]
     }
     twoD?: string
     twoDBak?: string
@@ -266,14 +267,6 @@ export interface QuestionData {
   dev_testunit_id?: number
   question_json: unknown[]
   created_at?: string
-}
-
-// 下载响应 (原程序格式)
-interface DownloadResponse<T> {
-  code?: number
-  result?: string
-  data?: T
-  msg?: string
 }
 
 // 进度回调类型

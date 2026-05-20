@@ -4,7 +4,7 @@
  * Interactive parameter control panel using widgets
  */
 import { ref, computed, onMounted } from 'vue'
-import { VueFlow, useVueFlow, type Node } from '@vue-flow/core'
+import { VueFlow, useVueFlow, type Node, type NodeTypesObject } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
@@ -33,7 +33,7 @@ const { widgetCount, clearAll } = useControl()
 const { nodes, addNodes, removeNodes, project, fitView } = useVueFlow()
 
 // Build node types from widget registry
-const nodeTypes = computed(() => {
+const nodeTypes = computed<NodeTypesObject>(() => {
   const types: Record<string, ReturnType<typeof getWidgetComponent>> = {}
 
   // Add widget types
@@ -52,7 +52,7 @@ const nodeTypes = computed(() => {
     }
   }
 
-  return types
+  return types as unknown as NodeTypesObject
 })
 
 // State

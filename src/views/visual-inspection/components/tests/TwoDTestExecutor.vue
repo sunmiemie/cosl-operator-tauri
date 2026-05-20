@@ -201,7 +201,7 @@ function drawFrame() {
 }
 
 // 绘制裁剪线
-function drawCropLines(ctx: CanvasRenderingContext2D, width: number, height: number) {
+function drawCropLines(ctx: CanvasRenderingContext2D, _width: number, height: number) {
   ctx.strokeStyle = 'red'
   ctx.lineWidth = 3
   ctx.beginPath()
@@ -685,13 +685,13 @@ onUnmounted(async () => {
 
 function loadTempData() {
   const tempJson = props.tempData?.json
-  if (!tempJson?.eyes) return
+  if (!tempJson) return
   
-  if (tempJson.eyes.twoD) {
-    frontFinalImage.value = tempJson.eyes.twoD
+  if (tempJson.twoD) {
+    frontFinalImage.value = tempJson.twoD
   }
-  if (tempJson.eyes.twoDBak) {
-    backFinalImage.value = tempJson.eyes.twoDBak
+  if (tempJson.twoDBak) {
+    backFinalImage.value = tempJson.twoDBak
   }
 }
 

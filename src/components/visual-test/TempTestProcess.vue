@@ -11,7 +11,7 @@
  * - 支持从缺陷库/疑问库快速添加描述
  * - 支持将当前描述保存到库
  */
-import { ref, computed, Teleport } from 'vue'
+import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessageBox } from 'element-plus'
 import ImgEditor from '@/views/process-visual/components/ImgEditor.vue'

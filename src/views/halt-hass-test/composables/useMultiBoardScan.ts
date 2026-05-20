@@ -2,7 +2,7 @@
  * 多板扫码逻辑
  * 处理 HALT-HASS 测试中的多块电路板扫码流程
  */
-import { ref, computed, readonly } from 'vue'
+import { ref, computed } from 'vue'
 import type { HaltHassOrder, ScannedBoard } from '@/views/halt-hass-test/types'
 import {
   getOrderBySerial,
@@ -227,11 +227,11 @@ export function useMultiBoardScan() {
 
   return {
     // 状态（只读）
-    phase: readonly(phase),
-    currentOrder: readonly(currentOrder),
-    scannedBoards: readonly(scannedBoards),
-    lastScanError: readonly(lastScanError),
-    isProcessing: readonly(isProcessing),
+    phase,
+    currentOrder,
+    scannedBoards,
+    lastScanError,
+    isProcessing,
 
     // 计算属性
     requiredBoardCount,

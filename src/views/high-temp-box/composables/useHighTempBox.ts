@@ -22,6 +22,7 @@ export interface WorkOrder {
   remark: string
   status: number
   statusText?: string
+  priority?: 'high' | 'normal' | 'low'
 }
 
 interface TempHistoryPoint {
@@ -77,6 +78,7 @@ export function useHighTempBox() {
   const currentStep = ref<HighTempBoxStep>('pre-check')
 
   const searchKeyword = ref('')
+  const activeFilter = ref<'all' | 'high' | 'pending' | 'paused'>('all')
 
   const calBase = ref(getMonday(new Date()))
   const selectedScheduledOrder = ref<string | null>(null)
@@ -194,6 +196,10 @@ export function useHighTempBox() {
         if (!matchId && !matchApplicant && !matchDevice) return false
       }
 
+      if (activeFilter.value === 'high' && order.priority !== 'high') return false
+      if (activeFilter.value === 'pending' && order.status !== 1) return false
+      if (activeFilter.value === 'paused' && order.statusText !== '暂停') return false
+
       return true
     })
   })
@@ -226,7 +232,8 @@ export function useHighTempBox() {
   const weekLabel = computed(() => {
     const start = currentWeekDays.value[0]
     const end = currentWeekDays.value[6]
-    //return `${start.month}月${start.dayNum}日 ～ ${end.month}月${end.dayNum}日`
+    if (!start || !end) return ''
+    return `${start.month}月${start.dayNum}日 ～ ${end.month}月${end.dayNum}日`
   })
 
   const timeSlots = computed(() => {
@@ -341,6 +348,14 @@ export function useHighTempBox() {
     return map
   })
 
+  const scheduledTasks = computed<Record<string, ScheduledEvent>>(() => {
+    const map: Record<string, ScheduledEvent> = {}
+    Object.values(scheduledEvents.value).forEach((ev) => {
+      map[getCellKey(ev.dateStr, ev.startTimeKey)] = ev
+    })
+    return map
+  })
+
   type ScheduledLayoutItem = {
     orderId: string
     dateStr: string
@@ -448,6 +463,12 @@ export function useHighTempBox() {
     const next = { ...scheduledEvents.value }
     delete next[orderId]
     scheduledEvents.value = next
+  }
+
+  function removeSchedule(cellKey: string) {
+    const ev = scheduledTasks.value[cellKey]
+    if (!ev) return
+    handleUnschedule(cellKey, ev.orderId)
   }
 
   function selectScheduledTask(orderId: string) {
@@ -1253,12 +1274,14 @@ export function useHighTempBox() {
     currentView,
     currentStep,
     searchKeyword,
+    activeFilter,
     calBase,
     selectedScheduledOrder,
     draggedOrderId,
     isDragging,
     slotHeightPx,
     scheduledOrders,
+    scheduledTasks,
     scheduledLayoutItems,
     maxLaneCount,
     workOrders,
@@ -1305,6 +1328,7 @@ export function useHighTempBox() {
     getOrderById,
     loadPresetSchedule,
     handleUnschedule,
+    removeSchedule,
     selectScheduledTask,
     handleDragStart,
     handleDragEnd,

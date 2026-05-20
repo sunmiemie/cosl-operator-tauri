@@ -12,7 +12,7 @@
  * 
  * 布局: 摄像头 55% / 测试面板 45%
  */
-import { ref, computed, onMounted, onUnmounted, reactive, Teleport } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -1844,7 +1844,7 @@ function addNote() {
               </button>
             </div>
             <div class="quick-nav-content">
-              <template v-for="(side, sideIdx) in quickTreeData" :key="sideIdx">
+              <template v-for="side in quickTreeData" :key="side.label">
                 <div class="nav-group">
                   <div class="nav-group-title">{{ side.label }}</div>
                   <template v-for="(item, itemIdx) in side.children" :key="itemIdx">

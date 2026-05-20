@@ -105,9 +105,9 @@ const getDropTarget = (e: DragEvent) => {
   if (xInDays < 0) return null
 
   const dayIndex = Math.min(6, Math.max(0, Math.floor(xInDays / dayColW)))
-  const slotIndex = Math.min(timeSlots.length - 1, Math.max(0, Math.floor(y / slotHeightPx)))
-  const day = currentWeekDays[dayIndex]
-  const slot = timeSlots[slotIndex]
+  const slotIndex = Math.min(timeSlots.value.length - 1, Math.max(0, Math.floor(y / slotHeightPx)))
+  const day = currentWeekDays.value[dayIndex]
+  const slot = timeSlots.value[slotIndex]
   if (!day || !slot) return null
   return { dateStr: day.dateStr, timeKey: slot.key, isPast: day.isPast }
 }

@@ -62,7 +62,7 @@ function goToStep(index: number): void {
     <!-- 步骤导航 -->
     <div class="step-nav">
       <div
-        v-for="(step, index) in steps"
+        v-for="(_step, index) in steps"
         :key="index"
         class="step-dot"
         :class="{

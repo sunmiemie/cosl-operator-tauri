@@ -2,7 +2,7 @@
  * HALT-HASS 测试流程管理
  * 管理完整的测试流程阶段和状态
  */
-import { ref, computed, readonly, watch } from 'vue'
+import { ref, computed } from 'vue'
 import type {
   PagePhase,
   TestMode,
@@ -433,20 +433,20 @@ export function useHaltHassTest() {
 
   return {
     // 状态（只读）
-    phase: readonly(phase),
-    testMode: readonly(testMode),
-    currentOrder: readonly(currentOrder),
-    processJson: readonly(processJson),
-    deviceStatus: readonly(deviceStatus),
-    installStep: readonly(installStep),
-    isFlowchartRunning: readonly(isFlowchartRunning),
-    flowchartStartTime: readonly(flowchartStartTime),
-    flowchartEndTime: readonly(flowchartEndTime),
-    nodeResults: readonly(nodeResults),
-    completedNodes: readonly(completedNodes),
-    currentNodeId: readonly(currentNodeId),
-    isLoading: readonly(isLoading),
-    errorMessage: readonly(errorMessage),
+    phase,
+    testMode,
+    currentOrder,
+    processJson,
+    deviceStatus,
+    installStep,
+    isFlowchartRunning,
+    flowchartStartTime,
+    flowchartEndTime,
+    nodeResults,
+    completedNodes,
+    currentNodeId,
+    isLoading,
+    errorMessage,
 
     // 计算属性
     isDeviceReady,

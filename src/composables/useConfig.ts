@@ -12,8 +12,8 @@ const CONFIG_FILE = 'settings.json'
 
 // X-Ray 裁剪区域配置接口
 export interface XrayCropArea {
-  w: [number, number]  // 水平裁剪范围 [左边界, 右边界]
-  h: [number, number]  // 垂直裁剪范围 [下边界, 上边界]
+  w: readonly [number, number]  // 水平裁剪范围 [左边界, 右边界]
+  h: readonly [number, number]  // 垂直裁剪范围 [下边界, 上边界]
   enabled: boolean     // 是否启用裁剪
 }
 

@@ -1,9 +1,8 @@
 /**
  * Block execution result types
  */
-import type { OverridePlotData, PlotlyFigure } from './plotly'
+import type { PlotlyFigure } from './plotly'
 import type { DataContainer } from './data-container'
-import type { Layout } from 'plotly.js-dist-min'
 
 /**
  * Block execution result
