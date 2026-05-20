@@ -157,7 +157,7 @@ const emit = defineEmits<{
               <div class="info-item"><div class="info-key">目标温度</div><div class="info-val" style="color:var(--red-bright)">{{ currentSelected.order.targetTemp }}</div></div>
               <div class="info-item"><div class="info-key">目标压力</div><div class="info-val" style="color:var(--cyan)">{{ currentSelected.order.targetPressure }}</div></div>
               <div class="info-item"><div class="info-key">保温保压</div><div class="info-val">{{ currentSelected.order.keepCondition }}</div></div>
-              <div class="info-item"><div class="info-key">仪器</div><div class="info-val">{{ (currentSelected.order.items || []).map(i => i.sn).join(' / ') }}</div></div>
+              <div class="info-item"><div class="info-key">本次仪器</div><div class="info-val">{{ currentSelected.instrument.label }} / {{ currentSelected.instrument.sn }}</div></div>
             </div>
             <div v-else class="text-muted">未选择排程仪器</div>
           </div>

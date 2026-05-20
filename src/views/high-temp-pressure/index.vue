@@ -21,7 +21,7 @@ const startupCheck = useHighTempPressureStartupCheck()
 const testing = useHighTempPressureTesting()
 const { initAuth, getAuthHeaders } = useAuth()
 const completedSelections = ref<ScheduledSelection[]>([])
-const activeTestSelections = ref<ScheduledSelection[]>([])
+const activeTestSelection = ref<ScheduledSelection | null>(null)
 
 function handleStartupCheckComplete() {
   startupCheck.showStartupCheck.value = false
@@ -99,12 +99,13 @@ async function handleStartScheduledTest() {
 }
 
 async function handleConfirmStart() {
-  const selections = schedule.selectedScheduledOrders.value
-  if (!selections.length) {
+  const activeSelection = schedule.currentSelected.value
+  if (!activeSelection) {
     ElMessage.error('未找到已选中的仪器')
     return
   }
   completedSelections.value = []
+  const selections = [activeSelection]
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
   const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
   const missingDbOrder = ordersNeedingStart.find((order) => typeof order.dbId !== 'number')
@@ -115,7 +116,7 @@ async function handleConfirmStart() {
 
   if (!ordersNeedingStart.length) {
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
-    activeTestSelections.value = selections.slice()
+    activeTestSelection.value = activeSelection
     testing.confirmStart()
     return
   }
@@ -132,7 +133,7 @@ async function handleConfirmStart() {
       schedule.markOrderStarted(order.id)
     }
     await schedule.refreshWorkOrders()
-    activeTestSelections.value = selections.slice()
+    activeTestSelection.value = activeSelection
     testing.confirmStart()
   } catch (e) {
     ElMessage.error('开始测试失败')
@@ -140,15 +141,8 @@ async function handleConfirmStart() {
 }
 
 async function handleConfirmEnd() {
-  const selections = activeTestSelections.value.length
-    ? activeTestSelections.value
-    : schedule.selectedScheduledOrders.value.length
-      ? schedule.selectedScheduledOrders.value
-    : schedule.currentSelected.value
-      ? [schedule.currentSelected.value]
-      : []
-  const selectedByInstrument = new Map(selections.map((selection) => [selection.instrument.id, selection]))
-  const currentSelections = Array.from(selectedByInstrument.values())
+  const activeSelection = activeTestSelection.value || schedule.currentSelected.value
+  const currentSelections = activeSelection ? [activeSelection] : []
   completedSelections.value = currentSelections.slice()
 
   if (!currentSelections.length) {
@@ -224,13 +218,14 @@ async function handleConfirmEnd() {
 function handleConfirmStop() {
   const current = schedule.currentSelected.value
   testing.stopTest()
+  activeTestSelection.value = null
   schedule.cancelScheduledInstrument(current?.instrument.id)
   ElMessage.info('已中止本次测试，视频采集状态已重置')
 }
 
 async function handleShutdownComplete() {
   completedSelections.value = []
-  activeTestSelections.value = []
+  activeTestSelection.value = null
   schedule.clearSelectedSchedule()
   testing.resetTestSession()
   testing.switchPanel('dashboard')
