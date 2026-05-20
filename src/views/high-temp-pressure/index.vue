@@ -12,7 +12,7 @@ import { useHighTempPressureSchedule } from './composables/useHighTempPressureSc
 import { useHighTempPressureStartupCheck } from './composables/useHighTempPressureStartupCheck'
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
 import { useAuth } from '@/composables/useAuth'
-import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
+import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestType } from '@/services'
 import { finishHighTempPressureOrder, startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
 import type { ScheduledSelection } from './types'
 
@@ -56,8 +56,13 @@ async function handleStartScheduledTest() {
       if (!cont) return
     } else {
       const headers = getAuthHeaders()
-      const testType = (await resolveEngineerAssistantTestTypeId('高温高压井', headers)) || ''
+      const testTypeResult = await resolveEngineerAssistantTestType('高温高压井', headers)
+      const testType = testTypeResult.typeId || ''
       if (testType) {
+        if (testTypeResult.source === 'fallback') {
+          const reason = testTypeResult.error ? `：${testTypeResult.error}` : ''
+          ElMessage.warning(`未从接口匹配到高温高压井测试类型，已使用默认 testType=${testType}${reason}`)
+        }
         const resp = await pushEngineerAssistantSchedules(
           {
             schedulesInfo: selectedScheduleInfos.map(({ selection, scheduleInfo }) => ({
@@ -75,7 +80,16 @@ async function handleStartScheduledTest() {
           if (!cont) return
         }
       } else {
-        const cont = confirm('未匹配到第三方测试类型（高温高压井），是否仍继续开始实验？')
+        const availableTypes = testTypeResult.candidates
+          .map((item) => item.typeName || item.name)
+          .filter(Boolean)
+          .slice(0, 6)
+          .join('、')
+        const detailLines = [
+          testTypeResult.error ? `原因：${testTypeResult.error}` : '',
+          availableTypes ? `当前返回类型：${availableTypes}` : '',
+        ].filter(Boolean)
+        const cont = confirm(`未匹配到第三方测试类型（高温高压井）${detailLines.length ? `\n${detailLines.join('\n')}` : ''}\n是否仍继续开始实验？`)
         if (!cont) return
       }
     }
