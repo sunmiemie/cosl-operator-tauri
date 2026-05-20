@@ -27,6 +27,7 @@ defineProps<{
   formattedDuration: string
   isRunning: boolean
   isPaused: boolean
+  isFinalizing: boolean
   liveFileName: string
   liveAx: string
   liveAy: string
@@ -103,7 +104,7 @@ function handleUploadDrop(event: DragEvent) {
 </script>
 
 <template>
-  <div>
+  <div class="vibration-flow">
     <div class="stepbar">
       <span
         v-for="s in stepList"
@@ -125,7 +126,9 @@ function handleUploadDrop(event: DragEvent) {
                 <label v-for="item in devCheckItems" :key="item.id" class="check-item" :class="{ 'is-checked': item.answer === 'yes' }">
                   <div class="checkbox-wrapper">
                     <input type="checkbox" :checked="item.answer === 'yes'" @change="emit('set-dev-check-answer', item.id, ($event.target as HTMLInputElement).checked ? 'yes' : 'no')" />
-                    <div class="custom-checkbox"></div>
+                    <div class="custom-checkbox">
+                      <Icon v-if="item.answer === 'yes'" icon="mdi:check" />
+                    </div>
                   </div>
                   <span class="check-text">{{ item.text }}</span>
                 </label>
@@ -374,7 +377,7 @@ function handleUploadDrop(event: DragEvent) {
               <h3 class="card-title">视频图像采集预览</h3>
               <div class="chart-legend"><span class="cyan">{{ captureStatusText }}</span></div>
             </div>
-            <div class="chart-body">
+            <div class="chart-body capture-preview-body">
               <img v-if="latestCaptureUrl" :src="latestCaptureUrl" class="capture-preview-image" alt="图像采集预览" />
               <div v-else-if="videoReady && backendProcessingRequired" class="capture-empty-state">
                 <Icon icon="mdi:cog-transfer-outline" class="upload-empty-icon" />
@@ -437,13 +440,14 @@ function handleUploadDrop(event: DragEvent) {
         </div>
 
         <div class="test-controls">
-          <button class="test-btn start" v-if="!sessionStarted" :disabled="!videoReady" @click="emit('start-vib-test')">开始图像采集</button>
-          <button class="test-btn pause" v-else-if="isRunning" @click="emit('pause-vib-test')">暂停采集</button>
-          <button class="test-btn pause" v-else-if="isPaused" @click="emit('resume-vib-test')">继续采集</button>
-          <button class="test-btn pause" v-else @click="emit('resume-vib-test')">{{ analysisCompleted ? '重新采集' : '开始图像采集' }}</button>
-          <button class="test-btn stop" @click="emit('open-abort-warning')">⏹ 测试中止</button>
-          <button class="test-btn end" :disabled="!vibDataCount" @click="emit('end-vib-test')">{{ testMode === 'pre' ? '预试验结束' : '测试结束' }}</button>
-          <button class="test-btn end" v-if="testMode === 'pre'" @click="emit('convert-to-formal')">转入正式工单</button>
+          <button class="test-btn start" v-if="!sessionStarted" :disabled="!videoReady || isFinalizing" @click="emit('start-vib-test')">开始图像采集</button>
+          <button class="test-btn pause" v-else-if="isRunning" :disabled="isFinalizing" @click="emit('pause-vib-test')">暂停采集</button>
+          <button class="test-btn pause" v-else-if="isPaused" :disabled="isFinalizing" @click="emit('resume-vib-test')">继续采集</button>
+          <button class="test-btn pause" v-else :disabled="isFinalizing" @click="emit('resume-vib-test')">{{ analysisCompleted ? '重新采集' : '开始图像采集' }}</button>
+          <button class="test-btn stop" :disabled="isFinalizing" @click="emit('open-abort-warning')">⏹ 测试中止</button>
+          <button class="test-btn secondary" v-if="sessionStarted && !isRunning" :disabled="isFinalizing" @click="emit('select-video')">重新上传视频</button>
+          <button class="test-btn end" :disabled="!vibDataCount || isFinalizing" @click="emit('end-vib-test')">{{ isFinalizing ? '正在处理...' : testMode === 'pre' ? '预试验结束' : '测试结束' }}</button>
+          <button class="test-btn end" v-if="testMode === 'pre'" :disabled="isFinalizing" @click="emit('convert-to-formal')">转入正式工单</button>
         </div>
       </div>
 

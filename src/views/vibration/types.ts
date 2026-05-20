@@ -3,6 +3,10 @@ export type Stage = 'dashboard' | 'devcheck' | 'start' | 'calibration' | 'testin
 export interface WorkOrder {
   id: string
   dbId?: number
+  status?: number
+  statusText?: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
   deviceNumber?: string
   type: string
   applicant: string

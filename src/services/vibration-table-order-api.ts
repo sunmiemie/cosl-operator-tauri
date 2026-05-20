@@ -14,6 +14,8 @@ export type VibrationTableOrderDTO = {
   remark: string
   status: number
   status_text?: string
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -94,6 +96,33 @@ export async function changeVibrationTableOrderStatus(
   return http.post<VibrationTableOrderStatusMutationResponse>(
     `/test/vibration-table/order/status/${orderId}/`,
     { status },
+    headers
+  )
+}
+
+export type VibrationTableOrderScheduleBody = {
+  scheduled_start_at: string
+  scheduled_end_at: string
+}
+
+export async function saveVibrationTableOrderSchedule(
+  orderId: number,
+  data: VibrationTableOrderScheduleBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<VibrationTableOrderWriteResponse>> {
+  return http.post<VibrationTableOrderWriteResponse>(
+    `/test/vibration-table/order/schedule/${orderId}/`,
+    data,
+    headers
+  )
+}
+
+export async function clearVibrationTableOrderSchedule(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<VibrationTableOrderWriteResponse>> {
+  return http.delete<VibrationTableOrderWriteResponse>(
+    `/test/vibration-table/order/schedule/${orderId}/`,
     headers
   )
 }

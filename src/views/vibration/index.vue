@@ -93,8 +93,8 @@ const testing = useVibrationTesting({
     report.setExportDir(exportDir)
     report.startFileGen()
   },
-  onFinishToDashboard: () => {
-    backToDashboard(5)
+  onFinishToDashboard: (finalStatus = 5) => {
+    backToDashboard(finalStatus)
   },
 })
 
@@ -170,20 +170,22 @@ async function startExperiment() {
     }
   }
 
-  orderStatusMutating.value = true
-  try {
-    const resp = await changeVibrationTableOrderStatus(selected.dbId!, 2, authHeaders)
-    if (!resp.success || !resp.data || resp.data.code !== 0) {
-      ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+  if (selected.status !== 2) {
+    orderStatusMutating.value = true
+    try {
+      const resp = await changeVibrationTableOrderStatus(selected.dbId!, 2, authHeaders)
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+        return
+      } else {
+        void refreshWorkOrders()
+      }
+    } catch {
+      ElMessage.error('工单状态更新异常，请稍后重试')
       return
-    } else {
-      void refreshWorkOrders()
+    } finally {
+      orderStatusMutating.value = false
     }
-  } catch {
-    ElMessage.error('工单状态更新异常，请稍后重试')
-    return
-  } finally {
-    orderStatusMutating.value = false
   }
 
   currentWorkOrderId.value = selected.id
@@ -364,6 +366,7 @@ function toggleShutdownCheck(id: number) {
         :formatted-duration="testing.formattedDuration.value"
         :is-running="testing.isRunning.value"
         :is-paused="testing.isPaused.value"
+        :is-finalizing="testing.isFinalizing.value"
         :live-file-name="testing.liveFileName.value"
         :live-ax="testing.liveAx.value"
         :live-ay="testing.liveAy.value"

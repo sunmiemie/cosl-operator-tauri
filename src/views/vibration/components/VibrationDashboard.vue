@@ -193,7 +193,7 @@ const getScheduledStyle = (item: any) => {
                 <td class="cell-param">{{ order.level }} / {{ order.duration }}分</td>
                 <td class="cell-type">
                   <span class="type-tag formal">
-                    {{ order.type }}
+                    {{ order.type }} · {{ order.statusText || order.status || '待领取' }}
                   </span>
                 </td>
               </tr>

@@ -29,10 +29,17 @@ impl Default for VibrationVideoState {
 }
 
 fn create_hidden_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd
+    {
+        let mut cmd = Command::new(program);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(program)
+    }
 }
 
 fn ensure_exists(path: &str, label: &str) -> Result<(), String> {
@@ -48,7 +55,8 @@ fn ensure_exists(path: &str, label: &str) -> Result<(), String> {
 fn resolve_python_program(python_path: Option<String>) -> Result<String, String> {
     let candidate = python_path.unwrap_or_default().trim().to_string();
     if !candidate.is_empty() {
-        let looks_like_path = candidate.contains('\\') || candidate.contains('/') || candidate.contains(':');
+        let looks_like_path =
+            candidate.contains('\\') || candidate.contains('/') || candidate.contains(':');
         if looks_like_path {
             ensure_exists(&candidate, "Python解释器路径")?;
         }
@@ -57,8 +65,14 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
 
     if let Ok(current_dir) = std::env::current_dir() {
         let candidates = [
+            current_dir.join(".venv-video").join("bin").join("python"),
+            current_dir.join("..").join(".venv-video").join("bin").join("python"),
+            current_dir.join(".venv-video").join("Scripts").join("python.exe"),
+            current_dir.join("..").join(".venv-video").join("Scripts").join("python.exe"),
             current_dir.join(".venv").join("Scripts").join("python.exe"),
             current_dir.join("..").join(".venv").join("Scripts").join("python.exe"),
+            current_dir.join(".venv").join("bin").join("python"),
+            current_dir.join("..").join(".venv").join("bin").join("python"),
         ];
         for path in candidates {
             if path.exists() {
@@ -67,7 +81,11 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
         }
     }
 
-    Ok("python".to_string())
+    Ok(if cfg!(target_os = "windows") {
+        "python".to_string()
+    } else {
+        "python3".to_string()
+    })
 }
 
 fn resolve_vibration_script_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -150,9 +168,21 @@ fn absolutize_record_screenshot(payload: &mut serde_json::Value, output_dir: &Pa
 }
 
 fn read_payload_files(output_dir: &Path) -> Result<serde_json::Value, String> {
-    let json_path = output_dir.join("top_readings_0.5s.json");
-    let summary_path = output_dir.join("experiment_summary.json");
-    let csv_path = output_dir.join("experiment_data.csv");
+    let payload_dir = if output_dir.join("top_readings_0.5s.json").exists() {
+        output_dir.to_path_buf()
+    } else {
+        output_dir
+            .parent()
+            .filter(|parent| {
+                output_dir.file_name().and_then(|name| name.to_str()) == Some("chart_screenshots")
+                    && parent.join("top_readings_0.5s.json").exists()
+            })
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| output_dir.to_path_buf())
+    };
+    let json_path = payload_dir.join("top_readings_0.5s.json");
+    let summary_path = payload_dir.join("experiment_summary.json");
+    let csv_path = payload_dir.join("experiment_data.csv");
 
     let payload_text = fs::read_to_string(&json_path)
         .map_err(|e| format!("读取采样JSON失败: {}", e))?;
@@ -173,7 +203,7 @@ fn read_payload_files(output_dir: &Path) -> Result<serde_json::Value, String> {
             let absolute = if Path::new(screenshot).is_absolute() {
                 PathBuf::from(screenshot)
             } else {
-                output_dir.join(screenshot)
+                payload_dir.join(screenshot)
             };
             if let Some(obj) = record.as_object_mut() {
                 obj.insert(
@@ -185,7 +215,7 @@ fn read_payload_files(output_dir: &Path) -> Result<serde_json::Value, String> {
     }
 
     Ok(serde_json::json!({
-        "output_dir": output_dir.to_string_lossy(),
+        "output_dir": payload_dir.to_string_lossy(),
         "json_path": json_path.to_string_lossy(),
         "summary_path": summary_path.to_string_lossy(),
         "csv_path": csv_path.to_string_lossy(),

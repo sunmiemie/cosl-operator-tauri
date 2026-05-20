@@ -11,7 +11,7 @@ interface UseVibrationTestingOptions {
   getCurrentWorkOrder: () => WorkOrder | null
   getTestMode: () => 'formal' | 'pre'
   onFinishToReport: (exportDir: string) => void
-  onFinishToDashboard: () => void
+  onFinishToDashboard: (finalStatus?: number) => void
 }
 
 export function useVibrationTesting(options: UseVibrationTestingOptions) {
@@ -20,6 +20,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
   const vibDataCount = ref(0)
   const isRunning = ref(false)
   const isPaused = ref(false)
+  const isFinalizing = ref(false)
   const sessionStarted = ref(false)
   const analysisCompleted = ref(false)
 
@@ -192,6 +193,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     const result = await invoke<any>('get_vibration_capture_result', {
       outputDir: captureOutputDir.value,
     })
+    captureOutputDir.value = String(result?.output_dir || captureOutputDir.value)
     const records = Array.isArray(result?.records) ? result.records.map(mapPythonRecord) : []
     captureRecords.value = records
     vibDataCount.value = records.length
@@ -284,7 +286,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
 
     if (eventType === 'complete') {
       analysisSummary.value = mapPythonSummary(payload?.summary || {})
-      captureOutputDir.value = String(payload?.screenshot_dir || payload?.output_dir || '')
+      captureOutputDir.value = String(payload?.output_dir || payload?.screenshot_dir || '')
       if (analysisSummary.value.durationSeconds) {
         videoDurationSeconds.value = analysisSummary.value.durationSeconds
       }
@@ -404,13 +406,19 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
         startCapturePolling()
         void pollCaptureStatus().catch(() => undefined)
       } catch (error) {
-        captureStatusText.value = error instanceof Error ? error.message : '视频采集失败'
+        captureStatusText.value = formatInvokeError(error, '视频采集失败')
         sessionStarted.value = false
         isRunning.value = false
         stopCapturePolling()
         ElMessage.error(captureStatusText.value)
       }
     })()
+  }
+
+  function formatInvokeError(error: unknown, fallback: string) {
+    if (error instanceof Error && error.message) return error.message
+    if (typeof error === 'string' && error.trim()) return error
+    return fallback
   }
 
   function pauseVibTest() {
@@ -425,7 +433,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
       captureStatusText.value = `图像采集已暂停，当前已采集 ${vibDataCount.value} 张`
     }).catch((error) => {
       isPaused.value = false
-      captureStatusText.value = error instanceof Error ? error.message : '暂停图像采集失败'
+      captureStatusText.value = formatInvokeError(error, '暂停图像采集失败')
       ElMessage.error(captureStatusText.value)
     })
   }
@@ -459,30 +467,60 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
       } catch (error) {
         isRunning.value = false
         isPaused.value = true
-        captureStatusText.value = error instanceof Error ? error.message : '恢复图像采集失败'
+        captureStatusText.value = formatInvokeError(error, '恢复图像采集失败')
         ElMessage.error(captureStatusText.value)
       }
     })()
   }
 
   function endVibTest() {
+    if (isFinalizing.value) return
     void (async () => {
+      const wasRunning = isRunning.value
+      const wasPaused = isPaused.value
+      const wasCompleted = analysisCompleted.value
+      isFinalizing.value = true
       isRunning.value = false
-      isPaused.value = false
       stopCapturePolling()
-      await invoke('stop_vibration_video_stream', { outputDir: captureOutputDir.value || null }).catch(() => undefined)
-      await syncCaptureResultFromOutputDir()
-      analysisSummary.value = buildSummary(captureRecords.value)
+      try {
+        if (wasRunning && captureOutputDir.value) {
+          await invoke('pause_vibration_video_stream', { outputDir: captureOutputDir.value }).catch(() => undefined)
+        } else if (wasRunning) {
+          await invoke('stop_vibration_video_stream', { outputDir: null }).catch(() => undefined)
+        }
+        if (captureOutputDir.value) {
+          await syncCaptureResultFromOutputDir()
+        }
+        analysisSummary.value = buildSummary(captureRecords.value)
+      } catch (error) {
+        isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
+        captureStatusText.value = formatInvokeError(error, '读取采集结果失败，可继续采集或重新选择视频')
+        ElMessage.error(captureStatusText.value)
+        isFinalizing.value = false
+        return
+      }
 
-      const selectedDir = await open({
-        title: '选择测试结束后的保存目录',
-        directory: true,
-        multiple: false,
-        defaultPath: exportOutputDir.value || undefined,
-      })
+      let selectedDir: string | string[] | null = null
+      try {
+        selectedDir = await open({
+          title: '选择测试结束后的保存目录',
+          directory: true,
+          multiple: false,
+          defaultPath: exportOutputDir.value || undefined,
+        })
+      } catch (error) {
+        isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
+        captureStatusText.value = formatInvokeError(error, '打开保存目录选择器失败，可继续采集或稍后重试')
+        ElMessage.error(captureStatusText.value)
+        isFinalizing.value = false
+        return
+      }
       if (!selectedDir || typeof selectedDir !== 'string') {
-        captureStatusText.value = '已取消选择保存目录，仍停留在测试页面'
-        isPaused.value = true
+        isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
+        captureStatusText.value = wasRunning || wasPaused || !wasCompleted
+          ? '已取消选择保存目录，可继续采集、重新上传视频，或再次点击结束重新选择保存目录'
+          : '已取消选择保存目录，可再次点击结束重新选择保存目录，或重新采集'
+        isFinalizing.value = false
         return
       }
 
@@ -497,9 +535,11 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
         ElMessage.success(`测试结果已保存到 ${exportOutputDir.value}`)
         options.onFinishToReport(exportOutputDir.value)
       } catch (error) {
-        isPaused.value = true
-        captureStatusText.value = error instanceof Error ? error.message : '导出测试结果失败'
+        isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
+        captureStatusText.value = formatInvokeError(error, '导出测试结果失败')
         ElMessage.error(captureStatusText.value)
+      } finally {
+        isFinalizing.value = false
       }
     })()
   }
@@ -512,7 +552,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     void invoke('stop_vibration_video_stream', { outputDir: captureOutputDir.value || null }).catch(() => undefined)
     const exportDir = String(exportOutputDir.value || '').trim()
     if (options.getTestMode() === 'pre' || !exportDir) {
-      options.onFinishToDashboard()
+      options.onFinishToDashboard(1)
       return
     }
     options.onFinishToReport(exportDir)
@@ -580,6 +620,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     vibDataCount,
     isRunning,
     isPaused,
+    isFinalizing,
     liveLevel,
     liveFreq,
     liveAx,
