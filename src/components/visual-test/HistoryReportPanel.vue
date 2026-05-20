@@ -7,7 +7,7 @@ import { Icon } from '@iconify/vue'
 import type { TestReport } from '@/services/report'
 
 // Props
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   reports: TestReport[]
   loading?: boolean
   expanded?: boolean

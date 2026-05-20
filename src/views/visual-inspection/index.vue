@@ -172,12 +172,6 @@ const showToast = ref(false)
 
 const showDeviceOverlay = computed(() => phase.value === 'detect')
 
-const filteredWaitingList = computed(() => {
-  return waitingList.value.filter(item => 
-    item.process_type && allowedTestTypes.includes(item.process_type)
-  )
-})
-
 // 扫描提示
 const scanHintText = computed(() => {
   if (currentSN.value) return currentSN.value
@@ -502,8 +496,9 @@ async function downloadTempOrder(unitId: number, type: 0 | 1) {
       tempReportJson.value = downloadResult.data
       
       // 检查数据结构
-      if (downloadResult.data.data?.json?.tempTest) {
-        console.log('[Visual] 找到 data.json.tempTest, 长度:', downloadResult.data.data.json.tempTest.length)
+      const nestedJson = (downloadResult.data.data as { json?: { tempTest?: unknown[] } } | undefined)?.json
+      if (nestedJson?.tempTest) {
+        console.log('[Visual] 找到 data.json.tempTest, 长度:', nestedJson.tempTest.length)
       } else if (downloadResult.data.json?.tempTest) {
         console.log('[Visual] 找到 json.tempTest, 长度:', downloadResult.data.json?.tempTest?.length)
       } else {
@@ -692,20 +687,6 @@ async function handleTestComplete() {
   }
 }
 
-/**
- * 继续下一个测试（有多个工单时）
- * 参考原程序 ScanBoard.vue:715-729 handleEyesTestContinue
- */
-function handleTestContinue() {
-  if (nextTestUnit.value) {
-    needContinue.value = false
-    countdownSeconds.value = 10
-    startCountdown(nextTestUnit.value)
-  } else {
-    handleTestComplete()
-  }
-}
-
 // 直接退出测试（不保存进度）
 async function exitTest() {
   await handleTestComplete()
@@ -774,16 +755,6 @@ function getTypeIcon(type?: string): string {
     case '2D留存': return 'mdi:camera'
     case '弓曲度测试': return 'mdi:chart-bell-curve'
     default: return 'mdi:clipboard-text'
-  }
-}
-
-function getModeText(): string {
-  switch (testMode.value) {
-    case 'normal': return isDevTest.value ? '临时工单测试' : '正式工单测试'
-    case 'continue': return '继续测试'
-    case 'feedback': return '反馈测试（待重做）'
-    case 'question': return '疑问测试'
-    default: return '测试'
   }
 }
 

@@ -56,6 +56,26 @@ const MEASUREMENT_COLORS = [
   '#60a5fa',
 ]
 
+const LEGACY_MEASUREMENT_MARKERS = new Set([
+  'vessel_250_unlabeled_yellow_value',
+  'vessel_480_stacked_value_25',
+])
+
+const LEGACY_MEASUREMENT_ALIASES: Record<string, string> = {
+  vessel_250_unlabeled_yellow_value: 'vessel_250_pressure',
+  vessel_480_upper_water_temp: 'vessel_250_lower_water_temp',
+  vessel_480_stacked_value_25: 'vessel_480_upper_water_temp',
+}
+
+const MEASUREMENT_METADATA: Record<string, { part: string; data: string }> = {
+  vessel_250_upper_water_temp: { part: '250试验容器', data: '上部水温' },
+  vessel_250_lower_water_temp: { part: '250试验容器', data: '下部水温' },
+  vessel_250_pressure: { part: '250试验容器', data: '压力' },
+  vessel_480_upper_water_temp: { part: '480试验容器', data: '上部水温' },
+  vessel_480_lower_water_temp: { part: '480试验容器', data: '下部水温' },
+  cylinder_pressure: { part: '筒内', data: '压力' },
+}
+
 const SAMPLE_INTERVAL_SECONDS = 0.5
 const MAX_POINTS = 120
 
@@ -168,6 +188,15 @@ export function useHighTempPressureTesting() {
     return part || data || fallback
   }
 
+  function hasLegacyMeasurementSchema(measurements: VideoMeasurementPayload[]) {
+    return measurements.some(item => LEGACY_MEASUREMENT_MARKERS.has(String(item?.id || '')))
+  }
+
+  function normalizeMeasurementId(id: string, legacySchema: boolean) {
+    if (!legacySchema) return id
+    return LEGACY_MEASUREMENT_ALIASES[id] || id
+  }
+
   function resetCaptureState() {
     state.chartData.t1 = []
     state.chartData.t2 = []
@@ -231,14 +260,17 @@ export function useHighTempPressureTesting() {
     const measurements: VideoMeasurementPayload[] = Array.isArray(record.measurements)
       ? record.measurements
       : []
-    const values: Record<string, number> = {}
+    const legacySchema = hasLegacyMeasurementSchema(measurements)
+    const values: Partial<Record<string, number>> = {}
     const nextMeasurements: HighTempPressureVideoMeasurement[] = []
 
-    measurements.forEach((item, index) => {
-      const id = String(item?.id || '')
+    measurements.forEach((item) => {
+      const rawId = String(item?.id || '')
+      const id = normalizeMeasurementId(rawId, legacySchema)
       if (!id) return
-      const part = String(item?.part || '').trim()
-      const data = String(item?.data || '').trim()
+      const metadata = MEASUREMENT_METADATA[id]
+      const part = metadata?.part || String(item?.part || '').trim()
+      const data = metadata?.data || String(item?.data || '').trim()
       const rawValue = item?.raw
       const value = item?.value
       const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -249,7 +281,7 @@ export function useHighTempPressureTesting() {
         value: numericValue,
         unit: inferMeasurementUnit(data),
         confidence: typeof item?.confidence === 'number' ? item.confidence : null,
-        color: MEASUREMENT_COLORS[index % MEASUREMENT_COLORS.length],
+        color: MEASUREMENT_COLORS[nextMeasurements.length % MEASUREMENT_COLORS.length],
       })
       if (numericValue === null) return
       values[id] = numericValue
@@ -261,8 +293,8 @@ export function useHighTempPressureTesting() {
     videoMeasurements.value = nextMeasurements
 
     const upperWaterTemp = values.vessel_250_upper_water_temp ?? values.vessel_480_upper_water_temp
-    const lowerWaterTemp = values.vessel_480_lower_water_temp ?? values.vessel_480_upper_water_temp
-    const pressure = values.cylinder_pressure ?? values.high_pressure_pump_outlet_pressure
+    const lowerWaterTemp = values.vessel_250_lower_water_temp ?? values.vessel_480_lower_water_temp
+    const pressure = values.vessel_250_pressure ?? values.cylinder_pressure ?? values.high_pressure_pump_outlet_pressure
     if (
       upperWaterTemp !== undefined ||
       lowerWaterTemp !== undefined ||

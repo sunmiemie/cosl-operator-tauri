@@ -183,7 +183,7 @@ const {
           <span v-else class="selected-placeholder">请在日历中选择一个已排程的工单</span>
         </div>
 
-        <button class="primary-btn" :disabled="!selectedScheduledOrderInfo" @click="startExperiment">
+        <button class="primary-btn" :disabled="!selectedScheduledOrderInfo" @click="() => startExperiment()">
           <Icon icon="mdi:play" class="start-icon" />
           开始实验
         </button>

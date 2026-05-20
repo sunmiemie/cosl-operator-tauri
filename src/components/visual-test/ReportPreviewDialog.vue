@@ -8,7 +8,7 @@
  * 
  * 参考原程序 ReportPreviewDialog.vue
  */
-import { ref, computed, watch, Teleport } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ReportData } from '@/services/report'
 

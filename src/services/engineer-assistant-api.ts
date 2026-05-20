@@ -31,6 +31,14 @@ export type EngineerAssistantTestType = {
   raw?: unknown
 }
 
+export type ResolveEngineerAssistantTestTypeResult = {
+  typeId: string | null
+  matchedName?: string
+  source: 'remote' | 'fallback' | 'none'
+  error?: string
+  candidates: EngineerAssistantTestType[]
+}
+
 export type EngineerAssistantTestStatus = {
   value: string
   label: string
@@ -69,16 +77,82 @@ export async function getEngineerAssistantTestTypes(
   return http.get<GetEngineerAssistantTestTypesResponse>('/external/assistant/test-types/', headers)
 }
 
+const HIGH_TEMP_PRESSURE_TYPE_FALLBACK = {
+  typeId: '3',
+  typeName: '高温高压井测试',
+}
+
+function normalizeTestTypeText(value?: string | number | null): string {
+  return String(value ?? '').toLowerCase().replace(/[\s\-_/&＆]/g, '')
+}
+
+function getTestTypeAliases(keyword: string): string[] {
+  const aliases = [keyword]
+  if (keyword.includes('高温高压')) {
+    aliases.push('高温高压井', '高温高压井测试', '高温高压')
+  }
+  return Array.from(new Set(aliases.map(normalizeTestTypeText).filter(Boolean)))
+}
+
+function findTestTypeByKeyword(list: EngineerAssistantTestType[], keyword: string): EngineerAssistantTestType | undefined {
+  const aliases = getTestTypeAliases(keyword)
+  return list.find((item) => {
+    const values = [item.typeName, item.name, item.typeId, item.number, item.id].map(normalizeTestTypeText).filter(Boolean)
+    return values.some((value) => aliases.some((alias) => value.includes(alias) || alias.includes(value)))
+  })
+}
+
+function resolveTestTypeFallback(keyword: string, error?: string): ResolveEngineerAssistantTestTypeResult {
+  if (getTestTypeAliases(keyword).includes(normalizeTestTypeText('高温高压井'))) {
+    return {
+      typeId: HIGH_TEMP_PRESSURE_TYPE_FALLBACK.typeId,
+      matchedName: HIGH_TEMP_PRESSURE_TYPE_FALLBACK.typeName,
+      source: 'fallback',
+      error,
+      candidates: [],
+    }
+  }
+  return {
+    typeId: null,
+    source: 'none',
+    error,
+    candidates: [],
+  }
+}
+
+export async function resolveEngineerAssistantTestType(
+  keyword: string,
+  headers?: Record<string, string>
+): Promise<ResolveEngineerAssistantTestTypeResult> {
+  const resp = await getEngineerAssistantTestTypes(headers)
+  if (!resp.success) return resolveTestTypeFallback(keyword, resp.error || '获取第三方测试类型失败')
+  if (!resp.data) return resolveTestTypeFallback(keyword, '第三方测试类型接口无响应数据')
+  if (resp.data.code !== 0) return resolveTestTypeFallback(keyword, resp.data.msg || '第三方测试类型接口返回失败')
+
+  const list = resp.data.data?.list || []
+  const found = findTestTypeByKeyword(list, keyword)
+  if (found?.typeId) {
+    return {
+      typeId: found.typeId,
+      matchedName: found.typeName || found.name,
+      source: 'remote',
+      candidates: list,
+    }
+  }
+
+  const fallback = resolveTestTypeFallback(keyword, '第三方测试类型列表未包含匹配项')
+  return {
+    ...fallback,
+    candidates: list,
+  }
+}
+
 export async function resolveEngineerAssistantTestTypeId(
   keyword: string,
   headers?: Record<string, string>
 ): Promise<string | null> {
-  const resp = await getEngineerAssistantTestTypes(headers)
-  if (!resp.success || !resp.data) return null
-  if (resp.data.code !== 0) return null
-  const list = resp.data.data?.list || []
-  const found = list.find((x) => (x.typeName || '').includes(keyword) || (x.name || '').includes(keyword))
-  return found?.typeId || null
+  const result = await resolveEngineerAssistantTestType(keyword, headers)
+  return result.typeId
 }
 
 export async function getEngineerAssistantTestStatuses(

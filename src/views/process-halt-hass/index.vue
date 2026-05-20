@@ -3,7 +3,7 @@
  * HALT-HASS 工艺编辑页面
  * 使用 Vue Flow 实现流程图编辑
  */
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 

@@ -438,7 +438,7 @@ async function ensureTemplateCatalog() {
   templateDetails.value = detailResults
     .map((result) => (result.status === 'fulfilled' ? result.value : null))
     .filter((res): res is NonNullable<typeof res> => !!res && res.success && res.data?.code === 0)
-    .map((res) => res.data.data)
+    .map((res) => res.data!.data)
 }
 
 const fallbackTemplateDetails = computed<SimulatedWellReportTemplateDetail[]>(() =>

@@ -9,7 +9,6 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   OcrRegion,
   OcrFrameResult,
-  OcrRegionResult,
   OcrResultEventPayload,
   OcrStreamOptions,
 } from '@/types/ocr'

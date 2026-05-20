@@ -2,7 +2,7 @@
  * Control panel state management composable
  * Handles widget values and synchronization with block parameters
  */
-import { ref, computed, readonly, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { BlockParameterValue } from '@/types'
 
 // Store for widget values keyed by blockId:paramName

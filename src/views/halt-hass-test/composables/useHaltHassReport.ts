@@ -2,7 +2,7 @@
  * HALT-HASS 测试报告管理
  * 处理报告生成和上传
  */
-import { ref, computed, readonly } from 'vue'
+import { ref, computed } from 'vue'
 import type {
   HaltHassOrder,
   HaltHassReportJson,
@@ -231,13 +231,13 @@ export function useHaltHassReport() {
 
   return {
     // 状态（只读）
-    reportJson: readonly(reportJson),
-    testResult: readonly(testResult),
-    remark: readonly(remark),
-    isUploading: readonly(isUploading),
-    uploadProgress: readonly(uploadProgress),
-    uploadError: readonly(uploadError),
-    uploadedReportId: readonly(uploadedReportId),
+    reportJson,
+    testResult,
+    remark,
+    isUploading,
+    uploadProgress,
+    uploadError,
+    uploadedReportId,
 
     // 计算属性
     hasReport,

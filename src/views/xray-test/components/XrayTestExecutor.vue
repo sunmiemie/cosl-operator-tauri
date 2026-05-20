@@ -12,7 +12,7 @@
  * 
  * 布局: 摄像头 55% / 测试面板 45%
  */
-import { ref, computed, onMounted, onUnmounted, reactive, Teleport, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -1158,9 +1158,15 @@ function generateReport() {
     picList: picsToPicList(processJson.value.total.pic),
     picNote: processJson.value.total.picNote || []
   }
-  if (totalLists.errorList.length > 0) totalReport.errorList = totalLists.errorList
-  if (totalLists.questionList.length > 0) totalReport.questionList = totalLists.questionList
-  if (totalLists.warnList.length > 0) totalReport.warnList = totalLists.warnList
+  if (totalLists.errorList.length > 0) {
+    totalReport.errorList = totalLists.errorList
+  }
+  if (totalLists.questionList.length > 0) {
+    totalReport.questionList = totalLists.questionList
+  }
+  if (totalLists.warnList.length > 0) {
+    totalReport.warnList = totalLists.warnList
+  }
   
   // 使用 as any 避免复杂类型检查 - 生成的报告格式与原程序一致
   (reportJson.value.json as any).xray = {
@@ -1860,7 +1866,7 @@ function addNote() {
               </button>
             </div>
             <div class="quick-nav-content">
-              <template v-for="(side, sideIdx) in quickTreeData" :key="sideIdx">
+              <template v-for="side in quickTreeData" :key="side.label">
                 <div class="nav-group">
                   <div class="nav-group-title">{{ side.label }}</div>
                   <template v-for="(item, itemIdx) in side.children" :key="itemIdx">

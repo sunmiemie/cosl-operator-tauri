@@ -8,7 +8,7 @@
  * 
  * 参考原程序 PlaneTest.vue
  */
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -76,7 +76,7 @@ const measureDistance = ref(0)
 
 // 工艺数据
 const processSize = computed(() => {
-  return props.processData?.json?.eyes?.plane?.size || '未知'
+  return props.processData?.json?.plane?.size || '未知'
 })
 
 // 测试结果
@@ -497,13 +497,13 @@ onUnmounted(async () => {
 // 加载临时数据
 function loadTempData() {
   const tempJson = props.tempData?.json
-  if (!tempJson?.eyes?.plane) return
+  if (!tempJson?.plane) return
   
-  const plane = tempJson.eyes.plane
+  const plane = tempJson.plane
   if (plane.leftUrl) leftUrl.value = plane.leftUrl
   if (plane.rightUrl) rightUrl.value = plane.rightUrl
-  if (plane.leftPass) leftPass.value = plane.leftPass
-  if (plane.rightPass) rightPass.value = plane.rightPass
+  if (plane.leftPass === 1 || plane.leftPass === 2) leftPass.value = plane.leftPass
+  if (plane.rightPass === 1 || plane.rightPass === 2) rightPass.value = plane.rightPass
   if (plane.note) noteList.value = plane.note
 }
 

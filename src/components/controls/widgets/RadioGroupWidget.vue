@@ -5,7 +5,6 @@
  */
 import { computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
-import type { WidgetProps } from '@/types'
 import { useWidgetValue } from '@/composables/useControl'
 
 interface RadioGroupWidgetData {

@@ -7,12 +7,11 @@
  * - 右侧显示条目列表
  * - 点击条目后选中并返回
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import {
   useIssueLibrary,
   type IssueLibraryType,
-  type DirectoryTreeNode,
   type IssueItem,
 } from '@/composables/useIssueLibrary'
 

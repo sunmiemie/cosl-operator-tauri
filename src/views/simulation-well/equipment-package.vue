@@ -266,7 +266,7 @@ async function loadTemplateLibrary() {
     templateDetails.value = detailResults
       .map((result) => (result.status === 'fulfilled' ? result.value : null))
       .filter((res): res is NonNullable<typeof res> => !!res && res.success && res.data?.code === 0)
-      .map((res) => res.data.data)
+      .map((res) => res.data!.data)
 
     if (!templateDetails.value.length) {
       templateLoadMessage.value = '后台模板详情为空，已使用本地模板信息匹配。'

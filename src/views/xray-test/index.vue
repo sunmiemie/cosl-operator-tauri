@@ -132,10 +132,6 @@ const boundPositionCount = computed(() => {
   return positionList.value.filter(p => p.status === 2 || p.status === 3).length
 })
 
-const testedCount = computed(() => {
-  return positionList.value.filter(p => p.status === 3).length
-})
-
 // ==================== 设备检测 ====================
 
 async function checkDevices() {

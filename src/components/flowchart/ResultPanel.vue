@@ -6,9 +6,9 @@
 import { ref, computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import { PlotlyChart } from '@/components/plotly'
+import type { PlotlyTheme } from '@/components/plotly/plotlyTheme'
 import type {
   BlockResult,
-  PlotlyTheme,
 } from '@/types'
 import {
   hasPlotlyFigure,

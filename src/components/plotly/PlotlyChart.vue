@@ -5,8 +5,8 @@
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import Plotly from 'plotly.js-dist-min'
-import type { Layout, Config, Data } from 'plotly.js-dist-min'
-import type { OverridePlotData, PlotlyFigure } from '@/types'
+import type { Layout, Config, Data, PlotlyHTMLElement } from 'plotly.js-dist-min'
+import type { OverridePlotData } from '@/types'
 import { createPlotLayout, createThumbnailLayout, mergeLayouts, MATRIX_SIZE } from './plotlyLayout'
 import { formatPlotlyData, isMatrixData, is3DPlot } from './formatPlotlyData'
 import type { PlotlyTheme } from './plotlyTheme'
@@ -83,12 +83,12 @@ async function initChart() {
       computedConfig.value
     )
 
-    // Attach event listeners
-    chartRef.value.on('plotly_click', (data: unknown) => emit('click', data))
-    chartRef.value.on('plotly_hover', (data: unknown) => emit('hover', data))
-    chartRef.value.on('plotly_unhover', (data: unknown) => emit('unhover', data))
-    chartRef.value.on('plotly_selected', (data: unknown) => emit('selected', data))
-    chartRef.value.on('plotly_relayout', (data: unknown) => emit('relayout', data))
+    const chartEl = chartRef.value as PlotlyHTMLElement
+    chartEl.on('plotly_click', (data: unknown) => emit('click', data))
+    chartEl.on('plotly_hover', (data: unknown) => emit('hover', data))
+    chartEl.on('plotly_unhover', (data: unknown) => emit('unhover', data))
+    chartEl.on('plotly_selected', (data: unknown) => emit('selected', data))
+    chartEl.on('plotly_relayout', (data: unknown) => emit('relayout', data))
 
     isInitialized.value = true
   } catch (error) {

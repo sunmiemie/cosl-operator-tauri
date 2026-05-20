@@ -4,12 +4,12 @@
  * 基于 Vue Flow 实现流程图编辑功能
  * 包含节点编辑面板
  */
-import { ref, computed, watch, onMounted, onUnmounted, markRaw } from 'vue'
-import { VueFlow, useVueFlow, Position, MarkerType } from '@vue-flow/core'
+import { ref, computed, watch, onMounted, markRaw } from 'vue'
+import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import type { Node, Edge, Connection } from '@vue-flow/core'
+import type { Node, Edge, Connection, NodeTypesObject } from '@vue-flow/core'
 import { v4 as uuidv4 } from 'uuid'
 
 // 导入自定义节点
@@ -116,7 +116,7 @@ const nodeTypes = {
   scipy: markRaw(ScipyNode),
   debugging: markRaw(DebuggingNode),
   text: markRaw(TextNode),
-}
+} as unknown as NodeTypesObject
 
 // 规范化节点类型的辅助函数 - 确保未注册的类型使用 default 替代
 function normalizeNodeTypes(inputNodes: Node[]): Node[] {
@@ -143,8 +143,6 @@ const {
   removeNodes, 
   removeEdges,
   onConnect,
-  onNodesChange,
-  onEdgesChange,
   onNodeClick,
   onNodeDoubleClick,
   fitView,

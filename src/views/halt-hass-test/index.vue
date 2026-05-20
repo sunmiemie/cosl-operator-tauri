@@ -28,7 +28,7 @@ import { prepareRunFlowchartArgs } from '@/services/flojoy-adapter'
 import { v4 as uuidv4 } from 'uuid'
 
 // 导入类型
-import type { PagePhase, NodeRunResult } from './types'
+import type { PagePhase } from './types'
 import type { BlockData } from '@/views/process-halt-hass/types'
 import type { Node } from '@vue-flow/core'
 
@@ -38,7 +38,6 @@ const { enterEditMode, exitEditMode } = useLayout()
 // 测试流程管理
 const {
   phase,
-  testMode,
   currentOrder,
   processJson,
   deviceStatus,
@@ -48,12 +47,9 @@ const {
   nodeResults,
   completedNodes,
   currentNodeId,
-  isLoading,
   errorMessage,
   isDeviceReady,
-  totalInstallSteps,
   setPhase,
-  nextPhase,
   updateDeviceStatus,
   onDeviceCheckPass,
   setOrder,
@@ -72,11 +68,8 @@ const {
 
 // 多板扫码
 const {
-  phase: scanPhase,
   scannedBoards,
   lastScanError,
-  isProcessing: isScanProcessing,
-  requiredBoardCount,
   isComplete: isScanComplete,
   handleScan,
   removeScannedBoard,
@@ -122,7 +115,6 @@ const {
   disconnect: disconnectSocket,
   isConnected: socketConnected,
   serverStatus,
-  blockResults,
   runningBlock,
   failedBlocks,
   clearNodeStatuses,

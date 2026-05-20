@@ -3,13 +3,13 @@
  * 流程图查看器
  * 只读模式的流程图显示，用于运行时监控
  */
-import { ref, computed, watch, onMounted, markRaw } from 'vue'
+import { computed, watch, onMounted, markRaw } from 'vue'
 import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
 import { v4 as uuidv4 } from 'uuid'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import type { Node, Edge } from '@vue-flow/core'
+import type { Node, Edge, NodeTypesObject } from '@vue-flow/core'
 
 // 导入自定义节点
 import DefaultNode from './nodes/DefaultNode.vue'
@@ -56,7 +56,7 @@ const nodeTypes = {
   data: markRaw(DataNode),
   hardware: markRaw(HardwareNode),
   visualization: markRaw(VisualizationNode),
-}
+} as unknown as NodeTypesObject
 
 // 生成唯一 ID
 const flowId = `flowchart-viewer-${uuidv4().slice(0, 8)}`
@@ -64,7 +64,6 @@ const flowId = `flowchart-viewer-${uuidv4().slice(0, 8)}`
 // Vue Flow 实例
 const { 
   nodes: flowNodes, 
-  edges: flowEdges, 
   setNodes,
   setEdges,
   addNodes,

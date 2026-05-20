@@ -31,6 +31,9 @@ export interface TestReport {
   serial?: string       // 历史报告列表返回
   report_time?: string  // 历史报告列表返回
   report_result?: number | string  // 历史报告列表返回
+  report_id?: number | string       // 兼容旧接口字段
+  reportTime?: string               // 兼容旧接口字段
+  result?: number | string          // 兼容旧接口字段
   type?: string
   date?: string
   mode?: number

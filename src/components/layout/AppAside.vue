@@ -96,7 +96,7 @@ const filteredMenuGroups = computed(() => {
     .map(group => ({
       ...group,
       // 过滤掉被隐藏的子菜单项
-      children: group.children.filter(item => !hidden.includes(item.path))
+      children: group.children.filter(item => !hidden.includes(String(item.to)))
     }))
     // 过滤掉没有子菜单的组
     .filter(group => group.children.length > 0)
@@ -259,8 +259,8 @@ async function handleOpenSettings() {
           <div class="collapsed-submenu-divider"></div>
           <router-link 
             v-for="item in group.children" 
-            :key="item.path" 
-            :to="item.path" 
+            :key="String(item.to)" 
+            :to="item.to" 
             class="collapsed-menu-item"
             :class="{ active: isItemActive(item) }"
             :title="item.label"

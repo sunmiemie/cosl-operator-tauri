@@ -6,7 +6,6 @@
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
 import type { Node } from '@vue-flow/core'
 import type { BlockData, CtrlData, BlockParameterValue } from '@/views/process-halt-hass/types'
 import { useBlockManifest } from '@/composables/useBlockManifest'

@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import type { Component } from 'vue'
 import type { NodeProps as VueFlowNodeProps } from '@vue-flow/core'
-import { getZodEnumFromObjectKeys, type ValuesOf } from './util'
+import type { ValuesOf } from './util'
 
 // ========== Python Types ==========
 
