@@ -93,6 +93,16 @@ export type HighTempBoxOrderWriteResponse = {
   data?: HighTempBoxOrderDTO
 }
 
+export type HighTempBoxOrderStatusMutationResponse = {
+  code: number
+  msg?: string
+  data?: {
+    order_id: number
+    before_status: number
+    after_status: number
+  }
+}
+
 export type UpdateHighTempBoxOrderBody = Partial<
   Pick<
     HighTempBoxOrderDTO,
@@ -116,4 +126,16 @@ export async function updateHighTempBoxOrder(
   headers?: Record<string, string>
 ): Promise<ApiResponse<HighTempBoxOrderWriteResponse>> {
   return http.put<HighTempBoxOrderWriteResponse>(`/test/high-temp-box/order/detail/${orderId}/`, data, headers)
+}
+
+export async function changeHighTempBoxOrderStatus(
+  orderId: number,
+  status: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HighTempBoxOrderStatusMutationResponse>> {
+  return http.post<HighTempBoxOrderStatusMutationResponse>(
+    `/test/high-temp-box/order/status/${orderId}/`,
+    { status },
+    headers
+  )
 }

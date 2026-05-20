@@ -91,14 +91,14 @@ async function handleConfirmStart() {
   }
   completedSelections.value = []
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
-  const missingDbOrder = uniqueOrders.find((order) => typeof order.dbId !== 'number' && !schedule.isOrderStarted(order.id))
+  const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
+  const missingDbOrder = ordersNeedingStart.find((order) => typeof order.dbId !== 'number')
   if (missingDbOrder) {
     ElMessage.error('未找到工单ID')
     return
   }
 
-  const pendingOrders = uniqueOrders.filter((order) => !schedule.isOrderStarted(order.id) && order.statusCode !== 2)
-  if (!pendingOrders.length) {
+  if (!ordersNeedingStart.length) {
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
     testing.confirmStart()
     return
@@ -106,7 +106,7 @@ async function handleConfirmStart() {
 
   try {
     await initAuth()
-    for (const order of pendingOrders) {
+    for (const order of ordersNeedingStart) {
       if (typeof order.dbId !== 'number') return
       const res = await startHighTempPressureOrder(order.dbId, getAuthHeaders())
       if (!res.success || res.data?.code !== 0) {

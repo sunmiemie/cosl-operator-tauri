@@ -6,7 +6,7 @@ import { useOcr } from '@/composables/useOcr'
 import { useAuth } from '@/composables/useAuth'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import type { OcrRegion } from '@/types/ocr'
-import { listHighTempBoxOrders, mapHighTempBoxOrder, updateHighTempBoxOrder, type HighTempBoxOrder } from '@/services/high-temp-box-order-api'
+import { changeHighTempBoxOrderStatus, listHighTempBoxOrders, mapHighTempBoxOrder, type HighTempBoxOrder } from '@/services/high-temp-box-order-api'
 
 export interface WorkOrder {
   id: string
@@ -649,11 +649,10 @@ export function useHighTempBox() {
 
     orderStatusMutating.value = true
     try {
-      await initAuth()
-      const resp = await updateHighTempBoxOrder(selected.dbId, { status: 2 }, getAuthHeaders())
+      const resp = await changeHighTempBoxOrderStatus(selected.dbId, 2)
       if (!resp.success || !resp.data || resp.data.code !== 0) {
-        const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
-        if (!ok) return
+        alert(resp.data?.msg || resp.error || '工单状态更新失败')
+        return
       } else {
         void refreshWorkOrders()
       }
@@ -676,11 +675,10 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        await initAuth()
-        const resp = await updateHighTempBoxOrder(orderId, { status: 1 }, getAuthHeaders())
+        const resp = await changeHighTempBoxOrderStatus(orderId, 1)
         if (!resp.success || !resp.data || resp.data.code !== 0) {
-          const ok = confirm('工单状态更新失败，是否仍取消返回？')
-          if (!ok) return
+          alert(resp.data?.msg || resp.error || '工单状态更新失败')
+          return
         } else {
           void refreshWorkOrders()
         }
@@ -824,11 +822,10 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        await initAuth()
-        const resp = await updateHighTempBoxOrder(orderId, { status: 3 }, getAuthHeaders())
+        const resp = await changeHighTempBoxOrderStatus(orderId, 3)
         if (!resp.success || !resp.data || resp.data.code !== 0) {
-          const ok = confirm('工单状态更新失败，是否仍完成测试流程？')
-          if (!ok) return
+          alert(resp.data?.msg || resp.error || '工单状态更新失败')
+          return
         } else {
           void refreshWorkOrders()
         }

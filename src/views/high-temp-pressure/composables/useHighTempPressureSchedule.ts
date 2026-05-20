@@ -196,13 +196,17 @@ export function useHighTempPressureSchedule() {
         if (page > 50) break
       }
 
-      const validOrderIds = new Set(all.map(order => order.id))
+      const startedOrders = all.filter(order => order.statusCode === 2)
+      const startedOrderIdsFromServer = new Set(startedOrders.map(order => order.id))
+      const startedInstrumentIdsFromServer = new Set(
+        startedOrders.flatMap(order => order.items.map(item => item.id))
+      )
       const nextStartedOrderIds = Object.fromEntries(
-        Object.entries(startedOrderIds.value).filter(([orderId]) => validOrderIds.has(orderId))
+        Array.from(startedOrderIdsFromServer, orderId => [orderId, true] as const)
       ) as Record<string, true>
       const nextCompletedInstrumentIds = Object.fromEntries(
         Object.entries(completedInstrumentIds.value).filter(([instrumentId]) =>
-          all.some(order => order.items.some(item => item.id === instrumentId))
+          startedInstrumentIdsFromServer.has(instrumentId)
         )
       ) as Record<string, true>
 

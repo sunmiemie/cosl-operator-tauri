@@ -53,6 +53,16 @@ export type VibrationTableOrderWriteResponse = {
   data?: VibrationTableOrderDTO
 }
 
+export type VibrationTableOrderStatusMutationResponse = {
+  code: number
+  msg?: string
+  data?: {
+    order_id: number
+    before_status: number
+    after_status: number
+  }
+}
+
 export type UpdateVibrationTableOrderBody = Partial<
   Pick<
     VibrationTableOrderDTO,
@@ -74,4 +84,16 @@ export async function updateVibrationTableOrder(
   headers?: Record<string, string>
 ): Promise<ApiResponse<VibrationTableOrderWriteResponse>> {
   return http.put<VibrationTableOrderWriteResponse>(`/test/vibration-table/order/detail/${orderId}/`, data, headers)
+}
+
+export async function changeVibrationTableOrderStatus(
+  orderId: number,
+  status: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<VibrationTableOrderStatusMutationResponse>> {
+  return http.post<VibrationTableOrderStatusMutationResponse>(
+    `/test/vibration-table/order/status/${orderId}/`,
+    { status },
+    headers
+  )
 }

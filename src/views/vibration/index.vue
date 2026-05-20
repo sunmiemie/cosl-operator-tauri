@@ -8,7 +8,7 @@ import { useVibrationSchedule } from './composables/useVibrationSchedule'
 import { useVibrationChecks } from './composables/useVibrationChecks'
 import { useVibrationTesting } from './composables/useVibrationTesting'
 import { useVibrationReport } from './composables/useVibrationReport'
-import { updateVibrationTableOrder } from '@/services/vibration-table-order-api'
+import { changeVibrationTableOrderStatus } from '@/services/vibration-table-order-api'
 import { getEngineerAssistantApplicationForms, pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { useAuth } from '@/composables/useAuth'
 import { ElMessage } from 'element-plus'
@@ -260,14 +260,16 @@ async function startExperiment() {
 
   orderStatusMutating.value = true
   try {
-    const resp = await updateVibrationTableOrder(selected.dbId!, { status: 2 }, authHeaders)
+    const resp = await changeVibrationTableOrderStatus(selected.dbId!, 2, authHeaders)
     if (!resp.success || !resp.data || resp.data.code !== 0) {
-      ElMessage.warning('工单状态更新失败，已继续进入实验流程')
+      ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+      return
     } else {
       void refreshWorkOrders()
     }
   } catch {
-    ElMessage.warning('工单状态更新异常，已继续进入实验流程')
+    ElMessage.error('工单状态更新异常，请稍后重试')
+    return
   } finally {
     orderStatusMutating.value = false
   }
@@ -307,10 +309,10 @@ async function backToDashboard(finalStatus: number = 1) {
     const authHeaders = authOk ? getAuthHeaders() : undefined
     orderStatusMutating.value = true
     try {
-      const resp = await updateVibrationTableOrder(order.dbId, { status: finalStatus }, authHeaders)
+      const resp = await changeVibrationTableOrderStatus(order.dbId, finalStatus, authHeaders)
       if (!resp.success || !resp.data || resp.data.code !== 0) {
-        const ok = confirm(`工单状态更新失败，是否仍返回主页？`)
-        if (!ok) return
+        ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+        return
       } else {
         void refreshWorkOrders()
       }
