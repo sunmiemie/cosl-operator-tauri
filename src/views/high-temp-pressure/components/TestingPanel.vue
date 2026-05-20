@@ -96,7 +96,7 @@ const emit = defineEmits<{
         <div class="live-measurement-head">
           <div>
             <div class="live-measurement-title">实时识别数据</div>
-            <div class="live-measurement-subtitle">随视频采样实时刷新，测试未结束也可查看具体字段</div>
+            <div class="live-measurement-subtitle">按视频识别结果动态显示字段，曲线和右侧实时参数重点取 250 试验容器三项</div>
           </div>
           <span>{{ videoMeasurements.length }} 项</span>
         </div>

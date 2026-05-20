@@ -14,6 +14,7 @@ import numpy as np
 
 
 TEMPLATE_TIMES = ("0.0", "3000.0")
+SCHEMA_VERSION = 2
 
 FIELDS = [
     {
@@ -65,9 +66,9 @@ FIELDS = [
         "known": {"0.0": "61", "3000.0": "58"},
     },
     {
-        "id": "vessel_250_unlabeled_yellow_value",
+        "id": "vessel_250_pressure",
         "part": "250试验容器",
-        "data": "未标注黄色数值框",
+        "data": "压力",
         "roi": [922, 332, 47, 21],
         "decimal_places": 1,
         "known": {"0.0": "0.0", "3000.0": "0.0"},
@@ -129,9 +130,9 @@ FIELDS = [
         "known": {"0.0": "106", "3000.0": "102"},
     },
     {
-        "id": "vessel_480_upper_water_temp",
-        "part": "480试验容器",
-        "data": "容器上部水温",
+        "id": "vessel_250_lower_water_temp",
+        "part": "250试验容器",
+        "data": "下部水温",
         "roi": [857, 530, 45, 24],
         "decimal_places": 0,
         "known": {"0.0": "76", "3000.0": "71"},
@@ -145,9 +146,9 @@ FIELDS = [
         "known": {"0.0": "103", "3000.0": "99"},
     },
     {
-        "id": "vessel_480_stacked_value_25",
+        "id": "vessel_480_upper_water_temp",
         "part": "480试验容器",
-        "data": "堆叠蓝色数值框下排",
+        "data": "上部水温",
         "roi": [857, 556, 45, 23],
         "decimal_places": 0,
         "known": {"0.0": "25", "3000.0": "25"},
@@ -178,8 +179,8 @@ FIELDS = [
     },
     {
         "id": "cylinder_pressure",
-        "part": "筒",
-        "data": "筒内压力",
+        "part": "筒内",
+        "data": "压力",
         "roi": [928, 816, 47, 21],
         "decimal_places": 1,
         "known": {"0.0": "0.5", "3000.0": "0.4"},
@@ -187,7 +188,7 @@ FIELDS = [
     {
         "id": "vessel_480_lower_water_temp",
         "part": "480试验容器",
-        "data": "容器下部水温",
+        "data": "下部水温",
         "roi": [862, 889, 45, 23],
         "decimal_places": 0,
         "known": {"0.0": "26", "3000.0": "26"},
@@ -201,6 +202,13 @@ FIELDS = [
         "known": {"0.0": "19", "3000.0": "19"},
     },
 ]
+
+MIN_SCREEN_FIELD_COUNT = 6
+LEGACY_FIELD_ALIASES = {
+    "vessel_250_unlabeled_yellow_value": "vessel_250_pressure",
+    "vessel_480_upper_water_temp": "vessel_250_lower_water_temp",
+    "vessel_480_stacked_value_25": "vessel_480_upper_water_temp",
+}
 
 
 def emit_event(event, **payload):
@@ -260,12 +268,30 @@ def digits_only(text):
     return re.sub(r"[^0-9]", "", text)
 
 
-def build_templates(video_path):
-    templates = {}
+def field_by_id():
+    return {field["id"]: field for field in FIELDS}
+
+
+def discover_fields(video_path):
+    template_images = []
     for target_text in TEMPLATE_TIMES:
-        target_sec = float(target_text)
-        _, image = nearest_frame(video_path, target_sec)
-        for field in FIELDS:
+        _, image = nearest_frame(video_path, float(target_text))
+        template_images.append(image)
+
+    active_fields = [
+        field
+        for field in FIELDS
+        if all(field_background_ok(image, field) for image in template_images)
+    ]
+    if len(active_fields) < MIN_SCREEN_FIELD_COUNT:
+        return FIELDS, template_images
+    return active_fields, template_images
+
+
+def build_templates(fields, template_images):
+    templates = {}
+    for target_text, image in zip(TEMPLATE_TIMES, template_images):
+        for field in fields:
             expected_digits = digits_only(field["known"][target_text])
             x, y, w, h = field["roi"]
             components = digit_components(image[y : y + h, x : x + w])
@@ -347,9 +373,10 @@ def field_background_ok(image, field):
     return blue > 220 and green > 150 and red < 60
 
 
-def screen_detected(image):
-    ok_count = sum(1 for field in FIELDS if field_background_ok(image, field))
-    return ok_count >= 18
+def screen_detected(image, fields):
+    ok_count = sum(1 for field in fields if field_background_ok(image, field))
+    threshold = max(MIN_SCREEN_FIELD_COUNT, math.ceil(len(fields) * 0.75))
+    return ok_count >= threshold
 
 
 def null_field(field):
@@ -380,10 +407,59 @@ def read_json_file(path, default):
         return default
 
 
+def has_legacy_field_ids(records):
+    legacy_markers = {"vessel_250_unlabeled_yellow_value", "vessel_480_stacked_value_25"}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for item in record.get("measurements", []):
+            if isinstance(item, dict) and item.get("id") in legacy_markers:
+                return True
+    return False
+
+
+def migrate_measurement(item, legacy_schema, field_lookup):
+    if not isinstance(item, dict):
+        return item
+    migrated = dict(item)
+    item_id = migrated.get("id")
+    if legacy_schema and item_id in LEGACY_FIELD_ALIASES:
+        migrated["id"] = LEGACY_FIELD_ALIASES[item_id]
+
+    field = field_lookup.get(migrated.get("id"))
+    if field:
+        migrated["part"] = field["part"]
+        migrated["data"] = field["data"]
+    return migrated
+
+
+def migrate_records(records, schema_version):
+    if schema_version == SCHEMA_VERSION:
+        return records
+    legacy_schema = has_legacy_field_ids(records)
+    field_lookup = field_by_id()
+    migrated_records = []
+    for record in records:
+        if not isinstance(record, dict):
+            migrated_records.append(record)
+            continue
+        migrated_record = dict(record)
+        measurements = record.get("measurements", [])
+        if isinstance(measurements, list):
+            migrated_record["measurements"] = [
+                migrate_measurement(item, legacy_schema, field_lookup)
+                for item in measurements
+            ]
+        migrated_records.append(migrated_record)
+    return migrated_records
+
+
 def load_existing_records(output_dir):
     payload = read_json_file(output_dir / "video_readings_0.5s.json", {})
     records = payload.get("records")
-    return records if isinstance(records, list) else []
+    if not isinstance(records, list):
+        return []
+    return migrate_records(records, payload.get("schema_version"))
 
 
 def clear_output(output_dir):
@@ -402,13 +478,26 @@ def clear_output(output_dir):
         shutil.rmtree(frames_dir)
 
 
-def build_summary(source_video, interval, duration, records):
+def output_field_metadata(fields):
+    return [
+        {
+            "id": field["id"],
+            "part": field["part"],
+            "data": field["data"],
+        }
+        for field in fields
+    ]
+
+
+def build_summary(source_video, interval, duration, records, fields):
     latest = records[-1] if records else None
     return {
+        "schema_version": SCHEMA_VERSION,
         "source_video": str(source_video),
         "sample_interval_seconds": interval,
         "duration_seconds": round(duration, 3),
-        "field_count": len(FIELDS),
+        "field_count": len(fields),
+        "fields": output_field_metadata(fields),
         "record_count": len(records),
         "screen_detected_count": sum(1 for record in records if record.get("screen_detected")),
         "latest_time_sec": latest.get("time_sec") if latest else 0,
@@ -416,9 +505,9 @@ def build_summary(source_video, interval, duration, records):
     }
 
 
-def build_csv(records):
+def build_csv(records, fields):
     output = io.StringIO()
-    field_ids = [field["id"] for field in FIELDS]
+    field_ids = [field["id"] for field in fields]
     writer = csv.writer(output)
     writer.writerow(["time_sec", "frame_time_sec", "screen_detected", *field_ids])
     for record in records:
@@ -438,23 +527,25 @@ def build_csv(records):
     return output.getvalue()
 
 
-def write_outputs(output_dir, source_video, interval, duration, records):
+def write_outputs(output_dir, source_video, interval, duration, records, fields):
     json_path = output_dir / "video_readings_0.5s.json"
     summary_path = output_dir / "experiment_summary.json"
     csv_path = output_dir / "video_readings.csv"
     payload = {
+        "schema_version": SCHEMA_VERSION,
         "source_video": str(source_video),
         "sample_interval_seconds": interval,
         "duration_seconds": round(duration, 3),
         "frame_selection": "nearest decoded video frame to each sample timestamp",
-        "field_count": len(FIELDS),
+        "field_count": len(fields),
+        "fields": output_field_metadata(fields),
         "record_count": len(records),
         "records": records,
     }
-    summary = build_summary(source_video, interval, duration, records)
+    summary = build_summary(source_video, interval, duration, records, fields)
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    csv_path.write_text(build_csv(records), encoding="utf-8")
+    csv_path.write_text(build_csv(records, fields), encoding="utf-8")
     return json_path, summary_path, csv_path, summary
 
 
@@ -484,9 +575,18 @@ def extract(video_path, output_dir, interval, event_callback=None, resume=False)
         event_callback(
             "status",
             phase="bootstrap",
-            message=f"正在使用 {len(FIELDS)} 个固定字段模板构建视频数字识别模板",
+            message="正在从视频模板帧识别有效字段",
         )
-    templates = build_templates(video_path)
+    fields, template_images = discover_fields(video_path)
+    if event_callback:
+        event_callback(
+            "status",
+            phase="bootstrap",
+            message=f"已从视频画面识别 {len(fields)} 个有效字段，正在构建数字模板",
+            field_count=len(fields),
+            fields=output_field_metadata(fields),
+        )
+    templates = build_templates(FIELDS, template_images)
     if event_callback:
         event_callback(
             "start",
@@ -501,6 +601,7 @@ def extract(video_path, output_dir, interval, event_callback=None, resume=False)
     write_progress(
         output_dir,
         {
+            "schema_version": SCHEMA_VERSION,
             "source_video": str(video_path),
             "duration_seconds": round(duration, 3),
             "interval": safe_interval,
@@ -533,8 +634,8 @@ def extract(video_path, output_dir, interval, event_callback=None, resume=False)
                 if previous is not None and abs(previous[0] - target) < abs(current[0] - target):
                     chosen = previous
 
-                has_screen = screen_detected(chosen[1])
-                measurements = [read_field(chosen[1], field, templates) for field in FIELDS] if has_screen else [null_field(field) for field in FIELDS]
+                has_screen = screen_detected(chosen[1], fields)
+                measurements = [read_field(chosen[1], field, templates) for field in fields] if has_screen else [null_field(field) for field in fields]
                 preview_path = write_latest_frame(output_dir, chosen[1])
                 record = {
                     "time_sec": target,
@@ -547,7 +648,7 @@ def extract(video_path, output_dir, interval, event_callback=None, resume=False)
                 progress_pct = round((current_count / total_targets) * 100) if total_targets else 100
 
                 if current_count % 10 == 0:
-                    write_outputs(output_dir, video_path, safe_interval, duration, records)
+                    write_outputs(output_dir, video_path, safe_interval, duration, records, fields)
 
                 if event_callback:
                     event_callback(
@@ -562,6 +663,7 @@ def extract(video_path, output_dir, interval, event_callback=None, resume=False)
                 write_progress(
                     output_dir,
                     {
+                        "schema_version": SCHEMA_VERSION,
                         "source_video": str(video_path),
                         "duration_seconds": round(duration, 3),
                         "interval": safe_interval,
@@ -585,11 +687,13 @@ def extract(video_path, output_dir, interval, event_callback=None, resume=False)
         safe_interval,
         duration,
         records,
+        fields,
     )
     latest_frame = output_dir / "latest_frame.jpg"
     write_progress(
         output_dir,
         {
+            "schema_version": SCHEMA_VERSION,
             "source_video": str(video_path),
             "duration_seconds": round(duration, 3),
             "interval": safe_interval,
