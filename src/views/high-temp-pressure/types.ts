@@ -4,8 +4,11 @@ export type HighTempPressureModal = 'confirm-start' | 'end-test' | 'stop-test' |
 
 export interface InstrumentItem {
   id: string
+  dbId?: number
   label: string
   sn: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
   completed?: boolean
 }
 

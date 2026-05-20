@@ -1,8 +1,11 @@
 import { http, type ApiResponse } from './http'
 
 export interface SimulatedWellOrderDeviceDTO {
+  id?: number
   device_name: string
   device_number: string
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
 }
 
 export interface SimulatedWellOrderDTO {
@@ -72,4 +75,37 @@ export async function getSimulatedWellOrderDetail(
   headers?: Record<string, string>
 ): Promise<ApiResponse<SimulatedWellOrderDetailResponse>> {
   return http.get<SimulatedWellOrderDetailResponse>(`/test/simulated-well/order/detail/${id}/`, headers)
+}
+
+export type SimulatedWellDeviceScheduleBody = {
+  scheduled_start_at: string
+  scheduled_end_at: string
+}
+
+export type SimulatedWellDeviceScheduleResponse = {
+  code: number
+  msg?: string
+  data?: SimulatedWellOrderDeviceDTO & { order_id?: number }
+}
+
+export async function saveSimulatedWellDeviceSchedule(
+  deviceId: number,
+  data: SimulatedWellDeviceScheduleBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<SimulatedWellDeviceScheduleResponse>> {
+  return http.post<SimulatedWellDeviceScheduleResponse>(
+    `/test/simulated-well/order/device-schedule/${deviceId}/`,
+    data,
+    headers
+  )
+}
+
+export async function clearSimulatedWellDeviceSchedule(
+  deviceId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<SimulatedWellDeviceScheduleResponse>> {
+  return http.delete<SimulatedWellDeviceScheduleResponse>(
+    `/test/simulated-well/order/device-schedule/${deviceId}/`,
+    headers
+  )
 }

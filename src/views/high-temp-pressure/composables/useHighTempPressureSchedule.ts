@@ -2,9 +2,12 @@ import { computed, ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 import { http } from '@/services/http'
 import {
+  clearHighTempPressureInstrumentSchedule,
   listHighTempPressureOrders,
+  saveHighTempPressureInstrumentSchedule,
   type HighTempPressureOrderDTO,
 } from '@/services/high-temp-pressure-api'
+import { ElMessage } from 'element-plus'
 import type { InstrumentItem, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
 const HTP_PROGRESS_STORAGE_KEY = 'high-temp-pressure-progress'
@@ -68,7 +71,15 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   const items: InstrumentItem[] = itemsDto.map((it, idx) => {
     const name = (it.instrument_name || '').trim() || useDevice || '仪器'
     const sn = (it.instrument_sn || '').trim() || `${taskNumber}-${idx + 1}`
-    return { id: `ins-${dto.id}-${sn || idx}`, label: name, sn, completed: it.is_completed === true }
+    return {
+      id: `ins-${dto.id}-${sn || idx}`,
+      dbId: it.id,
+      label: name,
+      sn,
+      scheduledStartAt: it.scheduled_start_at || null,
+      scheduledEndAt: it.scheduled_end_at || null,
+      completed: it.is_completed === true,
+    }
   })
   const rawSig = dto.admin_signature_url?.trim()
   const sigUrl = rawSig ? (rawSig.startsWith('/') ? `${http.getBaseUrl()}${rawSig}` : rawSig) : undefined
@@ -123,9 +134,61 @@ export function useHighTempPressureSchedule() {
   }
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
+
+  function markPendingSchedule(instrumentId: string, event: ScheduledEvent | null) {
+    pendingScheduleEvents.value = {
+      ...pendingScheduleEvents.value,
+      [instrumentId]: event ? { ...event } : null,
+    }
+  }
+
+  function clearPendingSchedule(instrumentId: string) {
+    const next = { ...pendingScheduleEvents.value }
+    delete next[instrumentId]
+    pendingScheduleEvents.value = next
+  }
+
+  function parseBackendDateTime(value?: string | null) {
+    if (!value) return null
+    const text = value.includes('T') ? value : value.replace(' ', 'T')
+    const parsed = new Date(text)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  function eventFromInstrument(instrument: InstrumentItem): ScheduledEvent | null {
+    const start = parseBackendDateTime(instrument.scheduledStartAt)
+    const end = parseBackendDateTime(instrument.scheduledEndAt)
+    if (!start || !end || end <= start) return null
+    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+    return {
+      instrumentId: instrument.id,
+      dateStr: fmtDate(start),
+      startTimeKey,
+      span,
+    }
+  }
+
+  function restoreScheduledEvents(orders: WorkOrder[]) {
+    const next: Record<string, ScheduledEvent> = {}
+    orders.forEach((order) => {
+      order.items.forEach((instrument) => {
+        if (instrument.completed) return
+        const ev = eventFromInstrument(instrument)
+        if (ev) next[instrument.id] = ev
+      })
+    })
+    Object.entries(pendingScheduleEvents.value).forEach(([instrumentId, event]) => {
+      if (event) next[instrumentId] = event
+      else delete next[instrumentId]
+    })
+    scheduledEvents.value = next
+  }
 
   const persistProgressState = () => {
     try {
@@ -219,6 +282,7 @@ export function useHighTempPressureSchedule() {
       completedInstrumentIds.value = nextCompletedInstrumentIds
 
       workOrders.value = all
+      restoreScheduledEvents(all)
       persistProgressState()
     } catch (error) {
       workOrdersError.value = error instanceof Error ? error.message : '加载高温高压井工单失败'
@@ -312,6 +376,44 @@ export function useHighTempPressureSchedule() {
       span: ev.span,
       startAtHour: `${ev.dateStr} ${startHh}`,
       endAtHour: `${ev.dateStr} ${endHh}`,
+      scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
+      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+    }
+  }
+
+  async function persistScheduledEvent(instrumentId: string, fallback?: ScheduledEvent) {
+    const instrument = getInstrumentById(instrumentId)
+    const schedule = getScheduleChangePayload(instrumentId)
+    if (!instrument?.dbId || !schedule) return true
+
+    markPendingSchedule(instrumentId, scheduledEvents.value[instrumentId] || null)
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: fallback }
+        ElMessage.error('登录状态失效，请重新登录后再保存排期')
+        return false
+      }
+      const resp = await saveHighTempPressureInstrumentSchedule(
+        instrument.dbId,
+        {
+          scheduled_start_at: schedule.scheduledStartAt,
+          scheduled_end_at: schedule.scheduledEndAt,
+        },
+        getAuthHeaders()
+      )
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: fallback }
+        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        return false
+      }
+      instrument.scheduledStartAt = resp.data.data?.scheduled_start_at || schedule.scheduledStartAt
+      instrument.scheduledEndAt = resp.data.data?.scheduled_end_at || schedule.scheduledEndAt
+      const savedEvent = eventFromInstrument(instrument)
+      if (savedEvent) scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: savedEvent }
+      return true
+    } finally {
+      clearPendingSchedule(instrumentId)
     }
   }
 
@@ -484,7 +586,7 @@ export function useHighTempPressureSchedule() {
       if (scheduled.has(p.id)) return
       const d = addDays(base, p.d)
       const dateStr = fmtDate(d)
-      scheduleInstrument(p.id, dateStr, p.t, false)
+      void scheduleInstrument(p.id, dateStr, p.t, false)
     })
   }
 
@@ -524,12 +626,14 @@ export function useHighTempPressureSchedule() {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
   }
 
-  function scheduleInstrument(instrumentId: string, dateStr: string, timeKey: string, isPast: boolean) {
+  async function scheduleInstrument(instrumentId: string, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast || !instrumentId) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
     if (scheduledEvents.value[instrumentId]) return
 
+    const previousEvents = { ...scheduledEvents.value }
+    const previousSelected = [...selectedScheduledOrderIds.value]
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
 
@@ -548,9 +652,20 @@ export function useHighTempPressureSchedule() {
       isDragging.value = false
       draggedOrder.value = null
     }
+    try {
+      const saved = await persistScheduledEvent(instrumentId)
+      if (!saved) {
+        scheduledEvents.value = previousEvents
+        selectedScheduledOrderIds.value = previousSelected
+      }
+    } catch (error) {
+      scheduledEvents.value = previousEvents
+      selectedScheduledOrderIds.value = previousSelected
+      ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+    }
   }
 
-  function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
+  async function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     e.preventDefault()
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
@@ -558,7 +673,7 @@ export function useHighTempPressureSchedule() {
 
     const instrumentId = e.dataTransfer.getData('text/plain')
     if (!instrumentId) return
-    scheduleInstrument(instrumentId, dateStr, timeKey, isPast)
+    await scheduleInstrument(instrumentId, dateStr, timeKey, isPast)
   }
 
   function handleSelectScheduledOrder(orderId: string) {
@@ -570,13 +685,54 @@ export function useHighTempPressureSchedule() {
     }
   }
 
-  function handleUnschedule(cellKey: string, orderId: string) {
+  async function handleUnschedule(cellKey: string, orderId: string) {
     void cellKey
+    const removed = scheduledEvents.value[orderId]
+    const previousSelected = [...selectedScheduledOrderIds.value]
     const next = { ...scheduledEvents.value }
     delete next[orderId]
     scheduledEvents.value = next
     if (selectedScheduledOrderIds.value.includes(orderId)) {
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => id !== orderId)
+    }
+    const instrument = getInstrumentById(orderId)
+    if (!instrument?.dbId) return
+    markPendingSchedule(orderId, null)
+
+    const rollback = () => {
+      if (removed) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: removed }
+      selectedScheduledOrderIds.value = previousSelected
+    }
+
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        rollback()
+        ElMessage.error('登录状态失效，请重新登录后再取消排期')
+        return
+      }
+      const resp = await clearHighTempPressureInstrumentSchedule(instrument.dbId, getAuthHeaders())
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        rollback()
+        ElMessage.error(resp.data?.msg || resp.error || '取消排期失败')
+        return
+      }
+      instrument.scheduledStartAt = null
+      instrument.scheduledEndAt = null
+    } catch (error) {
+      rollback()
+      ElMessage.error(error instanceof Error ? error.message : '取消排期失败')
+    } finally {
+      clearPendingSchedule(orderId)
+    }
+  }
+
+  function removeScheduledInstrumentLocal(instrumentId: string) {
+    const next = { ...scheduledEvents.value }
+    delete next[instrumentId]
+    scheduledEvents.value = next
+    if (selectedScheduledOrderIds.value.includes(instrumentId)) {
+      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => id !== instrumentId)
     }
   }
 
@@ -586,7 +742,7 @@ export function useHighTempPressureSchedule() {
 
   function cancelScheduledInstrument(instrumentId?: string) {
     if (instrumentId) {
-      handleUnschedule('', instrumentId)
+      removeScheduledInstrumentLocal(instrumentId)
       return
     }
     clearSelectedSchedule()
@@ -643,6 +799,7 @@ export function useHighTempPressureSchedule() {
   const startResize = (instrumentId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
+    const previous = { ...ev }
 
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
@@ -667,6 +824,10 @@ export function useHighTempPressureSchedule() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
+      void persistScheduledEvent(instrumentId, previous).catch((error) => {
+        scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: previous }
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
@@ -676,6 +837,7 @@ export function useHighTempPressureSchedule() {
   const startResizeTop = (instrumentId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
+    const previous = { ...ev }
 
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
@@ -696,6 +858,10 @@ export function useHighTempPressureSchedule() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
+      void persistScheduledEvent(instrumentId, previous).catch((error) => {
+        scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: previous }
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
@@ -720,7 +886,7 @@ export function useHighTempPressureSchedule() {
   const markInstrumentCompleted = (instrumentId: string) => {
     if (!instrumentId) return
     completedInstrumentIds.value = { ...completedInstrumentIds.value, [instrumentId]: true }
-    handleUnschedule('', instrumentId)
+    removeScheduledInstrumentLocal(instrumentId)
     persistProgressState()
   }
 

@@ -1,5 +1,13 @@
 import { ref, computed } from 'vue'
-import { listWaterCycleOrders, mapWaterCycleOrder, type WaterCycleOrder } from '@/services/water-cycle-api'
+import { ElMessage } from 'element-plus'
+import { useAuth } from '@/composables/useAuth'
+import {
+  clearWaterCycleOrderSchedule,
+  listWaterCycleOrders,
+  mapWaterCycleOrder,
+  saveWaterCycleOrderSchedule,
+  type WaterCycleOrder,
+} from '@/services/water-cycle-api'
 // 如果需要引用 store 中的变量：
 // import { selectedOrder } from './useTestStore'
 
@@ -14,6 +22,8 @@ export type ScheduleChangePayload = {
   test_date: string
   start_time: string
   end_time: string
+  scheduledStartAt: string
+  scheduledEndAt: string
 }
 
 export type UseScheduleOptions = {
@@ -21,6 +31,7 @@ export type UseScheduleOptions = {
 }
 
 export function useSchedule(options: UseScheduleOptions = {}) {
+  const { initAuth, getAuthHeaders } = useAuth()
   // ============ 基础状态 ============
   const searchKeyword = ref('') // 待排程工单的搜索关键字
   
@@ -35,6 +46,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   }
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
   
   // 当前在日历中被选中的工单 ID 列表
   const selectedScheduledOrderIds = ref<string[]>([])
@@ -44,7 +56,55 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const workOrders = ref<WaterCycleOrder[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
-  const visibleOrderStatus = 1
+  const visibleOrderStatuses = [1, 2]
+
+  function markPendingSchedule(orderId: string, event: ScheduledEvent | null) {
+    pendingScheduleEvents.value = {
+      ...pendingScheduleEvents.value,
+      [orderId]: event ? { ...event } : null,
+    }
+  }
+
+  function clearPendingSchedule(orderId: string) {
+    const next = { ...pendingScheduleEvents.value }
+    delete next[orderId]
+    pendingScheduleEvents.value = next
+  }
+
+  function parseBackendDateTime(value?: string | null) {
+    if (!value) return null
+    const text = value.includes('T') ? value : value.replace(' ', 'T')
+    const parsed = new Date(text)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  function eventFromOrder(order: WaterCycleOrder): ScheduledEvent | null {
+    const start = parseBackendDateTime(order.scheduledStartAt)
+    const end = parseBackendDateTime(order.scheduledEndAt)
+    if (!start || !end || end <= start) return null
+    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+    return {
+      orderId: order.id,
+      dateStr: fmtDate(start),
+      startTimeKey,
+      span,
+    }
+  }
+
+  function restoreScheduledEvents(orders: WaterCycleOrder[]) {
+    const next: Record<string, ScheduledEvent> = {}
+    orders.forEach((order) => {
+      const ev = eventFromOrder(order)
+      if (ev) next[order.id] = ev
+    })
+    Object.entries(pendingScheduleEvents.value).forEach(([orderId, event]) => {
+      if (event) next[orderId] = event
+      else delete next[orderId]
+    })
+    scheduledEvents.value = next
+  }
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
@@ -53,30 +113,35 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     try {
       const all: WaterCycleOrder[] = []
       const pageSize = 100
-      let page = 1
-      let total = Infinity
+      for (const status of visibleOrderStatuses) {
+        let page = 1
+        let loaded = 0
+        let total = Infinity
 
-      while (all.length < total) {
-        const resp = await listWaterCycleOrders({ page, pageSize, status: visibleOrderStatus })
-        if (!resp.success || !resp.data) {
-          workOrdersError.value = resp.error || '获取水循环工单失败'
-          break
+        while (loaded < total) {
+          const resp = await listWaterCycleOrders({ page, pageSize, status })
+          if (!resp.success || !resp.data) {
+            workOrdersError.value = resp.error || '获取水循环工单失败'
+            break
+          }
+          if (resp.data.code !== 0) {
+            workOrdersError.value = resp.data.msg || '获取水循环工单失败'
+            break
+          }
+
+          const chunk = resp.data.data.list.map(mapWaterCycleOrder).filter((o) => o.status === status)
+          all.push(...chunk)
+          loaded += resp.data.data.list.length
+          total = resp.data.data.total
+
+          if (resp.data.data.list.length === 0) break
+          page += 1
+          if (page > 50) break
         }
-        if (resp.data.code !== 0) {
-          workOrdersError.value = resp.data.msg || '获取水循环工单失败'
-          break
-        }
-
-        const chunk = resp.data.data.list.map(mapWaterCycleOrder).filter((o) => o.status === visibleOrderStatus)
-        all.push(...chunk)
-        total = resp.data.data.total
-
-        if (chunk.length === 0) break
-        page += 1
-        if (page > 50) break
       }
 
       workOrders.value = all
+      restoreScheduledEvents(all)
     } catch (e) {
       workOrdersError.value = e instanceof Error ? e.message : '获取水循环工单失败'
     } finally {
@@ -194,7 +259,49 @@ export function useSchedule(options: UseScheduleOptions = {}) {
       endAtHour: `${ev.dateStr} ${endHh}`,
       test_date: ev.dateStr,
       start_time: timeKeyToTimeString(ev.startTimeKey),
-      end_time: timeKeyToTimeString(endTimeKey)
+      end_time: timeKeyToTimeString(endTimeKey),
+      scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
+      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`
+    }
+  }
+
+  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent) {
+    const order = getOrderById(orderId)
+    const schedule = getScheduleChangePayload(orderId)
+    if (!order?.dbId || !schedule) return true
+
+    markPendingSchedule(orderId, scheduledEvents.value[orderId] || null)
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
+        ElMessage.error('登录状态失效，请重新登录后再保存排期')
+        return false
+      }
+      const resp = await saveWaterCycleOrderSchedule(
+        order.dbId,
+        {
+          scheduled_start_at: schedule.scheduledStartAt,
+          scheduled_end_at: schedule.scheduledEndAt,
+        },
+        getAuthHeaders()
+      )
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
+        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        return false
+      }
+      const saved = resp.data.data
+      if (saved) {
+        const updated = mapWaterCycleOrder(saved)
+        const savedEvent = eventFromOrder(updated)
+        workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
+        if (savedEvent) scheduledEvents.value = { ...scheduledEvents.value, [updated.id]: savedEvent }
+      }
+      await options.onScheduleChange?.(schedule, order)
+      return true
+    } finally {
+      clearPendingSchedule(orderId)
     }
   }
 
@@ -333,10 +440,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
       const d = addDays(base, p.d)
       const dateStr = fmtDate(d)
       if (p.t === timeSlots.value[timeSlots.value.length - 1]?.key) return
-      scheduledEvents.value = {
-        ...scheduledEvents.value,
-        [p.id]: { orderId: p.id, dateStr, startTimeKey: p.t, span: 2 }
-      }
+      void scheduleOrder(p.id, dateStr, p.t, false)
     })
   }
 
@@ -371,26 +475,35 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const handleDragEnter = (e: DragEvent) => { (e.currentTarget as HTMLElement).classList.add('drag-over') }
   const handleDragLeave = (e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove('drag-over') }
   
-  const scheduleOrder = (orderId: string, dateStr: string, timeKey: string, isPast: boolean) => {
+  const scheduleOrder = async (orderId: string, dateStr: string, timeKey: string, isPast: boolean) => {
     if (isPast) return
     if (timeKey === timeSlots.value[timeSlots.value.length - 1]?.key) return
     if (scheduledEvents.value[orderId]) return
+    const previousEvents = { ...scheduledEvents.value }
+    const previousSelected = [...selectedScheduledOrderIds.value]
     scheduledEvents.value = {
       ...scheduledEvents.value,
       [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: 1 }
     }
     selectedScheduledOrderIds.value = [orderId]
-    const payload = getScheduleChangePayload(orderId)
-    if (payload) {
-      void options.onScheduleChange?.(payload, getOrderById(orderId))
-    }
     if (isDragging.value) {
       isDragging.value = false
       draggedOrder.value = null
     }
+    try {
+      const saved = await persistScheduledEvent(orderId)
+      if (!saved) {
+        scheduledEvents.value = previousEvents
+        selectedScheduledOrderIds.value = previousSelected
+      }
+    } catch (error) {
+      scheduledEvents.value = previousEvents
+      selectedScheduledOrderIds.value = previousSelected
+      ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+    }
   }
 
-  const handleDrop = (e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) => {
+  const handleDrop = async (e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) => {
     if (isPast) return
     e.preventDefault(); 
     (e.currentTarget as HTMLElement).classList.remove('drag-over')
@@ -398,17 +511,52 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     // 获取拖拽传递的工单ID
     const orderId = e.dataTransfer?.getData('text/plain')
     if (!orderId) return
-    scheduleOrder(orderId, dateStr, timeKey, isPast)
+    await scheduleOrder(orderId, dateStr, timeKey, isPast)
   }
 
   // 从日历中移除已排程的工单
-  function handleUnschedule(_cellKey: string, orderId: string) {
+  async function handleUnschedule(_cellKey: string, orderId: string) {
+    const removed = scheduledEvents.value[orderId]
+    const previousSelected = [...selectedScheduledOrderIds.value]
     const next = { ...scheduledEvents.value }
     delete next[orderId]
     scheduledEvents.value = next
     
     // 如果移除的刚好是选中的工单，则清空选中状态
     selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
+    const order = getOrderById(orderId)
+    if (!order?.dbId) return
+    markPendingSchedule(orderId, null)
+
+    const rollback = () => {
+      if (removed) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: removed }
+      selectedScheduledOrderIds.value = previousSelected
+    }
+
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        rollback()
+        ElMessage.error('登录状态失效，请重新登录后再取消排期')
+        return
+      }
+      const resp = await clearWaterCycleOrderSchedule(order.dbId, getAuthHeaders())
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        rollback()
+        ElMessage.error(resp.data?.msg || resp.error || '取消排期失败')
+        return
+      }
+      const saved = resp.data.data
+      if (saved) {
+        const updated = mapWaterCycleOrder(saved)
+        workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
+      }
+    } catch (error) {
+      rollback()
+      ElMessage.error(error instanceof Error ? error.message : '取消排期失败')
+    } finally {
+      clearPendingSchedule(orderId)
+    }
   }
   
   // 在日历上点击选中工单
@@ -450,6 +598,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const startResize = (orderId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[orderId]
     if (!ev) return
+    const previous = { ...ev }
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
     resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
@@ -471,11 +620,11 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
-      const payload = getScheduleChangePayload(orderId)
-      if (payload) {
-        void options.onScheduleChange?.(payload, getOrderById(orderId))
-      }
       resizing.value = null
+      void persistScheduledEvent(orderId, previous).catch((error) => {
+        scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
@@ -485,6 +634,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const startResizeTop = (orderId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[orderId]
     if (!ev) return
+    const previous = { ...ev }
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
     resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
@@ -502,11 +652,11 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
-      const payload = getScheduleChangePayload(orderId)
-      if (payload) {
-        void options.onScheduleChange?.(payload, getOrderById(orderId))
-      }
       resizing.value = null
+      void persistScheduledEvent(orderId, previous).catch((error) => {
+        scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
