@@ -21,6 +21,7 @@ const startupCheck = useHighTempPressureStartupCheck()
 const testing = useHighTempPressureTesting()
 const { initAuth, getAuthHeaders } = useAuth()
 const completedSelections = ref<ScheduledSelection[]>([])
+const activeTestSelections = ref<ScheduledSelection[]>([])
 
 function handleStartupCheckComplete() {
   startupCheck.showStartupCheck.value = false
@@ -114,6 +115,7 @@ async function handleConfirmStart() {
 
   if (!ordersNeedingStart.length) {
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
+    activeTestSelections.value = selections.slice()
     testing.confirmStart()
     return
   }
@@ -130,6 +132,7 @@ async function handleConfirmStart() {
       schedule.markOrderStarted(order.id)
     }
     await schedule.refreshWorkOrders()
+    activeTestSelections.value = selections.slice()
     testing.confirmStart()
   } catch (e) {
     ElMessage.error('开始测试失败')
@@ -137,44 +140,84 @@ async function handleConfirmStart() {
 }
 
 async function handleConfirmEnd() {
-  const current = schedule.currentSelected.value
-  completedSelections.value = schedule.selectedScheduledOrders.value.slice()
-  const dbId = current?.order?.dbId
-  if (!current) {
+  const selections = activeTestSelections.value.length
+    ? activeTestSelections.value
+    : schedule.selectedScheduledOrders.value.length
+      ? schedule.selectedScheduledOrders.value
+    : schedule.currentSelected.value
+      ? [schedule.currentSelected.value]
+      : []
+  const selectedByInstrument = new Map(selections.map((selection) => [selection.instrument.id, selection]))
+  const currentSelections = Array.from(selectedByInstrument.values())
+  completedSelections.value = currentSelections.slice()
+
+  if (!currentSelections.length) {
     ElMessage.error('未找到已选中的仪器')
     return
   }
 
-  const hasRemaining = schedule.hasRemainingInstrumentsAfterCompleting(current.order.id, current.instrument.id)
-  if (hasRemaining) {
-    const captureSaved = await testing.finalizeVideoCapture()
-    if (!captureSaved) return
-    schedule.markInstrumentCompleted(current.instrument.id)
-    ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
-    testing.endTest()
-    return
-  }
-
-  if (!dbId) {
-    ElMessage.error('未找到工单ID')
-    return
-  }
-
   try {
-    await initAuth()
     const captureSaved = await testing.finalizeVideoCapture()
     if (!captureSaved) return
-    const res = await finishHighTempPressureOrder(dbId, getAuthHeaders())
-    if (res.success && res.data?.code === 0) {
-      schedule.markInstrumentCompleted(current.instrument.id)
-      schedule.clearOrderProgress(current.order.id)
-      await schedule.refreshWorkOrders()
-      testing.endTest()
-      return
+
+    const groupedByOrder = new Map<string, { order: ScheduledSelection['order']; selections: ScheduledSelection[] }>()
+    currentSelections.forEach((selection) => {
+      const group = groupedByOrder.get(selection.order.id)
+      if (group) {
+        group.selections.push(selection)
+        return
+      }
+      groupedByOrder.set(selection.order.id, { order: selection.order, selections: [selection] })
+    })
+
+    const ordersToFinish: ScheduledSelection['order'][] = []
+    const partialOrderNos: string[] = []
+    groupedByOrder.forEach(({ order }) => {
+      if (typeof order.dbId !== 'number') {
+        throw new Error(`工单 ${order.no} 未找到工单ID`)
+      }
+      ordersToFinish.push(order)
+    })
+
+    const finishedOrderNos: string[] = []
+    if (ordersToFinish.length) {
+      await initAuth()
+      for (const order of ordersToFinish) {
+        if (typeof order.dbId !== 'number') {
+          throw new Error(`工单 ${order.no} 未找到工单ID`)
+        }
+        const orderSelections = groupedByOrder.get(order.id)?.selections || []
+        const instrumentSns = Array.from(new Set(orderSelections.map((selection) => selection.instrument.sn).filter(Boolean)))
+        const res = await finishHighTempPressureOrder(order.dbId, { instrument_sns: instrumentSns }, getAuthHeaders())
+        if (!res.success || res.data?.code !== 0) {
+          throw new Error(res.data?.msg || res.error || `工单 ${order.no} 结束测试失败`)
+        }
+        if (res.data.data?.after_status === 5) {
+          finishedOrderNos.push(order.no)
+        } else {
+          partialOrderNos.push(order.no)
+        }
+      }
     }
-    ElMessage.error(res.data?.msg || res.error || '结束测试失败')
+
+    currentSelections.forEach((selection) => schedule.markInstrumentCompleted(selection.instrument.id))
+    ordersToFinish
+      .filter((order) => finishedOrderNos.includes(order.no))
+      .forEach((order) => schedule.clearOrderProgress(order.id))
+    await schedule.refreshWorkOrders()
+
+    const uniqueFinishedOrderNos = Array.from(new Set(finishedOrderNos))
+    const pendingOrderNos = Array.from(new Set(partialOrderNos))
+    if (uniqueFinishedOrderNos.length && pendingOrderNos.length) {
+      ElMessage.success(`已完成 ${uniqueFinishedOrderNos.join('、')}；${pendingOrderNos.join('、')} 仍有仪器待测试`)
+    } else if (uniqueFinishedOrderNos.length) {
+      ElMessage.success(`工单 ${uniqueFinishedOrderNos.join('、')} 已完成`)
+    } else {
+      ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
+    }
+    testing.endTest()
   } catch (e) {
-    ElMessage.error('结束测试失败')
+    ElMessage.error(e instanceof Error ? e.message : '结束测试失败')
   }
 }
 

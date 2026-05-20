@@ -6,6 +6,7 @@ export interface InstrumentItem {
   id: string
   label: string
   sn: string
+  completed?: boolean
 }
 
 export interface WorkOrder {

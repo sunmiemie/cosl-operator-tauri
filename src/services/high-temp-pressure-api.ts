@@ -31,11 +31,14 @@ export interface HighTempPressureOrderDTO {
 }
 
 export interface HighTempPressureOrderInstrumentDTO {
+  id?: number
   instrument_name: string
   instrument_sn: string
   test_type?: string
   quantity?: number
   max_diameter?: number | null
+  is_completed?: boolean
+  completed_at?: string | null
 }
 
 export interface HighTempPressureOrderListResponse {
@@ -59,6 +62,18 @@ export interface ListHighTempPressureOrdersParams {
 export interface MutationResponse {
   code: number
   msg?: string
+  data?: {
+    order_id?: number
+    before_status?: number
+    after_status?: number
+    completed_sns?: string[]
+    remaining_sns?: string[]
+    remaining_count?: number
+  }
+}
+
+export interface FinishHighTempPressureOrderPayload {
+  instrument_sns?: string[]
 }
 
 export async function listHighTempPressureOrders(
@@ -91,11 +106,12 @@ export async function startHighTempPressureOrder(
 
 export async function finishHighTempPressureOrder(
   orderId: number,
+  payload: FinishHighTempPressureOrderPayload = {},
   headers?: Record<string, string>
 ): Promise<ApiResponse<MutationResponse>> {
   return http.post<MutationResponse>(
     `/test/high-temp-pressure/order/finish/${orderId}/`,
-    {},
+    payload,
     headers
   )
 }

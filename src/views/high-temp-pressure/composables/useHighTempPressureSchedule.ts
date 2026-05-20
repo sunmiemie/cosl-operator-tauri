@@ -31,8 +31,6 @@ function fmtDate(d: Date) {
 const SCHEDULABLE_STATUS = new Set([1])
 
 function getStatusText(status?: number, fallback?: string) {
-  if (fallback?.trim()) return fallback
-
   const statusMap: Record<number, string> = {
     0: '已创建',
     1: '待领取',
@@ -45,7 +43,9 @@ function getStatusText(status?: number, fallback?: string) {
     8: '疑问',
   }
 
-  return status === undefined ? '未知状态' : (statusMap[status] ?? `状态${status}`)
+  if (status !== undefined && statusMap[status]) return statusMap[status]
+  if (fallback?.trim()) return fallback
+  return status === undefined ? '未知状态' : `状态${status}`
 }
 
 function formatDisplayValue(value: number | string | undefined | null, unit: string) {
@@ -68,7 +68,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   const items: InstrumentItem[] = itemsDto.map((it, idx) => {
     const name = (it.instrument_name || '').trim() || useDevice || '仪器'
     const sn = (it.instrument_sn || '').trim() || `${taskNumber}-${idx + 1}`
-    return { id: `ins-${dto.id}-${sn || idx}`, label: name, sn }
+    return { id: `ins-${dto.id}-${sn || idx}`, label: name, sn, completed: it.is_completed === true }
   })
   const rawSig = dto.admin_signature_url?.trim()
   const sigUrl = rawSig ? (rawSig.startsWith('/') ? `${http.getBaseUrl()}${rawSig}` : rawSig) : undefined
@@ -201,14 +201,19 @@ export function useHighTempPressureSchedule() {
       const startedInstrumentIdsFromServer = new Set(
         startedOrders.flatMap(order => order.items.map(item => item.id))
       )
+      const completedInstrumentIdsFromServer = new Set(
+        startedOrders.flatMap(order => order.items.filter(item => item.completed).map(item => item.id))
+      )
       const nextStartedOrderIds = Object.fromEntries(
         Array.from(startedOrderIdsFromServer, orderId => [orderId, true] as const)
       ) as Record<string, true>
-      const nextCompletedInstrumentIds = Object.fromEntries(
-        Object.entries(completedInstrumentIds.value).filter(([instrumentId]) =>
-          startedInstrumentIdsFromServer.has(instrumentId)
-        )
-      ) as Record<string, true>
+      const nextCompletedEntries: Array<[string, true]> = [
+        ...Array.from(completedInstrumentIdsFromServer, instrumentId => [instrumentId, true] as [string, true]),
+        ...Object.entries(completedInstrumentIds.value)
+          .filter(([instrumentId]) => startedInstrumentIdsFromServer.has(instrumentId))
+          .map(([instrumentId]) => [instrumentId, true] as [string, true]),
+      ]
+      const nextCompletedInstrumentIds = Object.fromEntries(nextCompletedEntries) as Record<string, true>
 
       startedOrderIds.value = nextStartedOrderIds
       completedInstrumentIds.value = nextCompletedInstrumentIds
@@ -719,14 +724,21 @@ export function useHighTempPressureSchedule() {
     persistProgressState()
   }
 
-  const getRemainingInstrumentCount = (orderId: string, excludingInstrumentId?: string) => {
+  const getRemainingInstrumentCount = (orderId: string, excludingInstrumentIds?: string | string[]) => {
     const order = getOrderById(orderId)
     if (!order) return 0
-    return order.items.filter((item) => item.id !== excludingInstrumentId && !completedInstrumentIds.value[item.id]).length
+    const excludingSet = new Set(
+      Array.isArray(excludingInstrumentIds)
+        ? excludingInstrumentIds
+        : excludingInstrumentIds
+          ? [excludingInstrumentIds]
+          : []
+    )
+    return order.items.filter((item) => !excludingSet.has(item.id) && !completedInstrumentIds.value[item.id]).length
   }
 
-  const hasRemainingInstrumentsAfterCompleting = (orderId: string, instrumentId: string) =>
-    getRemainingInstrumentCount(orderId, instrumentId) > 0
+  const hasRemainingInstrumentsAfterCompleting = (orderId: string, instrumentIds: string | string[]) =>
+    getRemainingInstrumentCount(orderId, instrumentIds) > 0
 
   const clearOrderProgress = (orderId: string) => {
     if (!orderId) return

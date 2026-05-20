@@ -133,15 +133,19 @@ const emit = defineEmits<{
 }
 
 .selected-order-list {
-  max-height: 430px;
-  overflow: auto;
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding-right: 4px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .selected-order-card {
+  /* 订单增多时保持卡片真实高度，由父级列表滚动，避免内容被压缩裁切。 */
+  flex: 0 0 auto;
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--color-bg-primary);
