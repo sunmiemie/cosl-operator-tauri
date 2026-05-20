@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import type {
   DevCheckItem,
@@ -60,6 +61,7 @@ const emit = defineEmits<{
   'go-next-stage': []
   'set-cal-step': [step: 'amp' | 'dur']
   'select-video': []
+  'import-video-path': [path: string]
   'clear-video': []
   'start-vib-test': []
   'pause-vib-test': []
@@ -73,6 +75,31 @@ const emit = defineEmits<{
   'toggle-shutdown-check': [id: number]
   'finish-shutdown': []
 }>()
+
+const uploadDragging = ref(false)
+
+function handleUploadDragOver(event: DragEvent) {
+  event.preventDefault()
+  uploadDragging.value = true
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+}
+
+function handleUploadDragLeave(event: DragEvent) {
+  event.preventDefault()
+  uploadDragging.value = false
+}
+
+function handleUploadDrop(event: DragEvent) {
+  event.preventDefault()
+  uploadDragging.value = false
+  const file = event.dataTransfer?.files?.[0] as File & { path?: string }
+  const droppedPath = String(file?.path || '').trim()
+  if (droppedPath) {
+    emit('import-video-path', droppedPath)
+    return
+  }
+  emit('select-video')
+}
 </script>
 
 <template>
@@ -191,21 +218,12 @@ const emit = defineEmits<{
       </div>
 
       <div v-else-if="stage === 'calibration'" class="panel-card test-panel-full">
-        <div class="cal-tabs">
-          <button class="cal-tab" :class="{ active: calStep === 'amp' }" @click="emit('set-cal-step', 'amp')">① 振级校验</button>
-          <button class="cal-tab" :class="{ active: calStep === 'dur' }" @click="emit('set-cal-step', 'dur')">② 时长校验</button>
-        </div>
-
         <div v-if="calStep === 'amp'" class="cal-layout">
           <div class="cal-main">
             <div class="cal-title">振级校验</div>
             <div class="video-upload-card">
-              <div class="video-upload-toolbar">
-                <button class="btn btn-primary" type="button" @click="emit('select-video')">
-                  <Icon icon="mdi:video-plus" />
-                  上传试验视频
-                </button>
-                <button v-if="videoReady" class="btn btn-secondary" type="button" @click="emit('clear-video')">清空视频</button>
+              <div v-if="videoReady" class="video-upload-toolbar">
+                <button class="btn btn-secondary" type="button" @click="emit('clear-video')">清空视频</button>
               </div>
               <div v-if="videoReady" class="video-preview-shell">
                 <div v-if="backendProcessingRequired" class="upload-empty-state">
@@ -229,9 +247,17 @@ const emit = defineEmits<{
                   </div>
                 </div>
               </div>
-              <div v-else class="upload-empty-state">
+              <div
+                v-else
+                class="upload-empty-state upload-dropzone"
+                :class="{ 'is-dragging': uploadDragging }"
+                @click="emit('select-video')"
+                @dragover="handleUploadDragOver"
+                @dragleave="handleUploadDragLeave"
+                @drop="handleUploadDrop"
+              >
                 <Icon icon="mdi:file-video-outline" class="upload-empty-icon" />
-                <div class="upload-empty-title">上传振动台 `.wmv` 试验视频</div>
+                <div class="upload-empty-title">点击或拖动上传振动台 `.wmv` 试验视频</div>
                 <div class="upload-empty-text">开始试验后通过 `.wmv` 录屏进行图像采集，系统会在测试阶段按固定时间间隔抽帧并输出实验数据。</div>
               </div>
             </div>
@@ -323,7 +349,7 @@ const emit = defineEmits<{
         </div>
       </div>
 
-      <div v-else-if="stage === 'testing'" class="panel-card test-panel-full">
+      <div v-else-if="stage === 'testing'" class="panel-card test-panel-full testing-panel">
         <div class="status-grid">
           <div class="status-box">
             <div class="status-header">试验状态</div>

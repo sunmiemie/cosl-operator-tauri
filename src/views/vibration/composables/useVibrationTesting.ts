@@ -332,17 +332,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     })
   }
 
-  async function selectVideoFile() {
-    const selected = await open({
-      title: '选择试验视频',
-      multiple: false,
-      directory: false,
-      filters: [
-        { name: 'WMV 视频文件', extensions: ['wmv'] },
-      ],
-    })
-    if (!selected || typeof selected !== 'string') return
-
+  async function importVideoFile(selected: string) {
     resetAnalysisState(false)
     if (!selected.toLowerCase().endsWith('.wmv')) {
       captureStatusText.value = '仅支持上传 .wmv 格式试验视频'
@@ -357,6 +347,19 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     backendProcessingRequired.value = true
     captureStatusText.value = '.wmv 视频已选择，点击开始图像采集后将调用项目内 Python 脚本实时处理'
     ElMessage.success('.wmv 视频已选择，准备使用 Python 脚本实时处理')
+  }
+
+  async function selectVideoFile() {
+    const selected = await open({
+      title: '选择试验视频',
+      multiple: false,
+      directory: false,
+      filters: [
+        { name: 'WMV 视频文件', extensions: ['wmv'] },
+      ],
+    })
+    if (!selected || typeof selected !== 'string') return
+    await importVideoFile(selected)
   }
 
   function clearVideoFile() {
@@ -602,6 +605,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     sessionStarted,
     analysisPreviewRecords,
     selectVideoFile,
+    importVideoFile,
     clearVideoFile,
     startVibTestMonitor,
     pauseVibTest,

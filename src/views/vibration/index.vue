@@ -9,7 +9,7 @@ import { useVibrationChecks } from './composables/useVibrationChecks'
 import { useVibrationTesting } from './composables/useVibrationTesting'
 import { useVibrationReport } from './composables/useVibrationReport'
 import { changeVibrationTableOrderStatus } from '@/services/vibration-table-order-api'
-import { getEngineerAssistantApplicationForms, pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
+import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { useAuth } from '@/composables/useAuth'
 import { ElMessage } from 'element-plus'
 import type { Stage, WorkOrder } from './types'
@@ -108,103 +108,15 @@ const report = useVibrationReport({
   },
 })
 
-function normalizeText(value: unknown) {
-  return String(value || '').trim().toLowerCase()
-}
-
-function collectStringValues(input: unknown, bucket: Set<string>, depth = 0) {
-  if (input == null || depth > 4) return
-  if (typeof input === 'string' || typeof input === 'number') {
-    const text = String(input).trim()
-    if (text) bucket.add(text.toLowerCase())
-    return
-  }
-  if (Array.isArray(input)) {
-    input.forEach(item => collectStringValues(item, bucket, depth + 1))
-    return
-  }
-  if (typeof input === 'object') {
-    Object.values(input as Record<string, unknown>).forEach(value => collectStringValues(value, bucket, depth + 1))
-  }
-}
-
-function pickEquipmentIdFromDevice(device: any) {
-  const candidates = [
-    device?.equipmentId,
-    device?.equipment_id,
-    device?.deviceId,
-    device?.device_id,
-    device?.id,
-    device?.deviceNumber,
-    device?.device_number,
-    device?.number,
-    device?.sn,
-    device?.code,
-  ]
-  const found = candidates.find(value => String(value || '').trim())
-  return found ? String(found).trim() : ''
-}
-
-function findBestMatchedDevice(devices: any[], selected: WorkOrder) {
-  const targetDeviceName = normalizeText(selected.device)
-  const targetDeviceNumber = normalizeText(selected.deviceNumber)
-  if (!Array.isArray(devices) || !devices.length) return null
-  return devices
-    .map((device) => {
-      const values = new Set<string>()
-      collectStringValues(device, values)
-      let score = 0
-      if (targetDeviceNumber && Array.from(values).some(value => value.includes(targetDeviceNumber))) score += 6
-      if (targetDeviceName && Array.from(values).some(value => value.includes(targetDeviceName))) score += 4
-      return { device, score }
-    })
-    .sort((a, b) => b.score - a.score)[0]?.device || null
-}
-
 async function resolveVibrationSchedulePayload(selected: WorkOrder, headers: Record<string, string>) {
   const fallbackTestType = (await resolveEngineerAssistantTestTypeId('振动台', headers))
     || (await resolveEngineerAssistantTestTypeId('振动', headers))
     || ''
 
-  const fallback = {
-    testId: String(selected.id || selected.dbId || ''),
+  return {
+    testId: String(selected.dbId ?? selected.id ?? ''),
     testType: fallbackTestType,
     equipmentId: String(selected.deviceNumber || selected.device || selected.id || ''),
-  }
-
-  const formsResp = await getEngineerAssistantApplicationForms(headers)
-  const forms = formsResp.success && formsResp.data?.code === 0 ? formsResp.data.data?.list || [] : []
-  if (!forms.length) return fallback
-
-  const selectedOrderNo = normalizeText(selected.id)
-  const selectedDeviceName = normalizeText(selected.device)
-  const selectedApplicant = normalizeText(selected.applicant)
-
-  const matched = forms
-    .map((form) => {
-      const haystack = new Set<string>()
-      collectStringValues(form.baseInfo, haystack)
-      collectStringValues(form.raw, haystack)
-      const values = Array.from(haystack)
-      let score = 0
-      if (selectedOrderNo && (normalizeText(form.testId) === selectedOrderNo || values.some(value => value.includes(selectedOrderNo)))) score += 8
-      if (selectedDeviceName && values.some(value => value.includes(selectedDeviceName))) score += 4
-      if (selectedApplicant && values.some(value => value.includes(selectedApplicant))) score += 2
-      if (normalizeText(form.testTypeName).includes('振动')) score += 1
-      return { form, score }
-    })
-    .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score)[0]?.form
-
-  if (!matched) return fallback
-
-  const device = findBestMatchedDevice(Array.isArray(matched.devices) ? matched.devices as any[] : [], selected)
-  const matchedEquipmentId = device ? pickEquipmentIdFromDevice(device) : ''
-
-  return {
-    testId: String(matched.testId || fallback.testId),
-    testType: String(matched.testType || fallback.testType),
-    equipmentId: matchedEquipmentId || fallback.equipmentId,
   }
 }
 
@@ -253,7 +165,7 @@ async function startExperiment() {
           ElMessage.warning(`推送第三方排期失败，已继续开始实验${resp.error ? `：${resp.error}` : ''}`)
         }
       } else {
-        ElMessage.warning('未匹配到可用的第三方 testId / testType / equipmentId，已跳过第三方排期推送并继续开始实验')
+        ElMessage.warning('未匹配到第三方测试类型（振动台），已跳过第三方排期推送并继续开始实验')
       }
     }
   }
@@ -483,6 +395,7 @@ function toggleShutdownCheck(id: number) {
         @go-next-stage="goNextStage"
         @set-cal-step="calStep = $event"
         @select-video="testing.selectVideoFile"
+        @import-video-path="testing.importVideoFile"
         @clear-video="testing.clearVideoFile"
         @start-vib-test="testing.startVibTestMonitor"
         @pause-vib-test="testing.pauseVibTest"
