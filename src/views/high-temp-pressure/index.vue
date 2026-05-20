@@ -230,6 +230,7 @@ function handleConfirmStop() {
 
 async function handleShutdownComplete() {
   completedSelections.value = []
+  activeTestSelections.value = []
   schedule.clearSelectedSchedule()
   testing.resetTestSession()
   testing.switchPanel('dashboard')
