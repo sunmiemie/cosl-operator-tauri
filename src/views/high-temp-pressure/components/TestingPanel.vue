@@ -92,30 +92,6 @@ const emit = defineEmits<{
           </div>
         </div>
       </div>
-      <div v-if="videoMeasurements.length" class="live-measurement-panel">
-        <div class="live-measurement-head">
-          <div>
-            <div class="live-measurement-title">实时识别数据</div>
-            <div class="live-measurement-subtitle">按视频识别结果动态显示字段，曲线和右侧实时参数重点取 250 试验容器三项</div>
-          </div>
-          <span>{{ videoMeasurements.length }} 项</span>
-        </div>
-        <div class="live-measurement-grid">
-          <div v-for="measurement in videoMeasurements" :key="measurement.id" class="live-measurement-item">
-            <div class="live-measurement-name">{{ measurement.name }}</div>
-            <div class="live-measurement-value" :style="{ color: measurement.color }">
-              {{ measurement.raw }}<span v-if="measurement.raw !== '--' && measurement.unit" class="channel-unit">{{ measurement.unit }}</span>
-            </div>
-            <div class="live-measurement-confidence" v-if="measurement.confidence !== null">
-              置信度 {{ Math.round(measurement.confidence * 100) }}%
-            </div>
-          </div>
-        </div>
-      </div>
-      <div v-else class="live-measurement-empty">
-        <Icon icon="mdi:database-search-outline" />
-        <span>等待视频识别结果，采样开始后将在这里实时显示具体数据。</span>
-      </div>
       <div v-if="exportedCaptureDir" class="export-path">已保存：{{ exportedCaptureDir }}</div>
     </div>
 
