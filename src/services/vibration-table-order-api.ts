@@ -48,6 +48,10 @@ export type VibrationTableOrderDTO = {
   status_text?: string
   scheduled_start_at?: string | null
   scheduled_end_at?: string | null
+  schedule_segments?: Array<{
+    scheduled_start_at?: string | null
+    scheduled_end_at?: string | null
+  }>
   instruments?: VibrationTableOrderInstrumentDTO[]
   order_instruments?: VibrationTableOrderInstrumentDTO[]
   vibration_table_order_instrument?: VibrationTableOrderInstrumentDTO[] | VibrationTableOrderInstrumentDTO
@@ -137,8 +141,12 @@ export async function changeVibrationTableOrderStatus(
 }
 
 export type VibrationTableOrderScheduleBody = {
-  scheduled_start_at: string
-  scheduled_end_at: string
+  scheduled_start_at?: string
+  scheduled_end_at?: string
+  schedule_segments?: Array<{
+    scheduled_start_at: string
+    scheduled_end_at: string
+  }>
 }
 
 export async function saveVibrationTableOrderSchedule(

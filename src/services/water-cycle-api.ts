@@ -16,8 +16,6 @@ export type WaterCycleOrderDTO = {
   remark: string
   status: number
   status_text?: string
-  scheduled_start_at?: string | null
-  scheduled_end_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -39,8 +37,6 @@ export type WaterCycleOrder = {
   remark: string
   status: number
   statusText?: string
-  scheduledStartAt?: string | null
-  scheduledEndAt?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -63,8 +59,6 @@ export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
     remark: dto.remark,
     status: dto.status,
     statusText: dto.status_text,
-    scheduledStartAt: dto.scheduled_start_at || null,
-    scheduledEndAt: dto.scheduled_end_at || null,
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
   }
@@ -130,31 +124,4 @@ export async function updateWaterCycleOrder(
   headers?: Record<string, string>
 ): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
   return http.put<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/detail/${orderId}/`, data, headers)
-}
-
-export type WaterCycleOrderScheduleBody = {
-  scheduled_start_at: string
-  scheduled_end_at: string
-}
-
-export async function saveWaterCycleOrderSchedule(
-  orderId: number,
-  data: WaterCycleOrderScheduleBody,
-  headers?: Record<string, string>
-): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
-  return http.post<WaterCycleOrderWriteResponse>(
-    `/test/water-cycle/order/schedule/${orderId}/`,
-    data,
-    headers
-  )
-}
-
-export async function clearWaterCycleOrderSchedule(
-  orderId: number,
-  headers?: Record<string, string>
-): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
-  return http.delete<WaterCycleOrderWriteResponse>(
-    `/test/water-cycle/order/schedule/${orderId}/`,
-    headers
-  )
 }

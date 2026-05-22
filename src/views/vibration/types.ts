@@ -7,6 +7,7 @@ export interface WorkOrder {
   statusText?: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  scheduleSegments?: WorkOrderScheduleSegment[]
   planTime?: string | null
   deviceNumber?: string
   type: string
@@ -18,6 +19,11 @@ export interface WorkOrder {
   purpose: string
   instruments: VibrationInstrument[]
   selectedInstruments?: VibrationInstrument[]
+}
+
+export interface WorkOrderScheduleSegment {
+  scheduledStartAt: string
+  scheduledEndAt: string
 }
 
 export interface VibrationInstrument {

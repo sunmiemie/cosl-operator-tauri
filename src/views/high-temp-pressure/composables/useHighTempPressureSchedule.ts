@@ -8,7 +8,7 @@ import {
   type HighTempPressureOrderDTO,
 } from '@/services/high-temp-pressure-api'
 import { ElMessage } from 'element-plus'
-import type { InstrumentItem, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
+import type { InstrumentItem, InstrumentScheduleSegment, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
 const HTP_PROGRESS_STORAGE_KEY = 'high-temp-pressure-progress'
 
@@ -29,6 +29,10 @@ function addDays(d: Date, days: number) {
 
 function fmtDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function createScheduleEventId(orderId: string, dateStr: string, startTimeKey: string, span: number) {
+  return `${orderId}-${dateStr}-${startTimeKey}-${span}`
 }
 
 const SCHEDULABLE_STATUS = new Set([1])
@@ -111,6 +115,16 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   const items: InstrumentItem[] = itemsDto.map((it, idx) => {
     const name = (it.instrument_name || '').trim() || useDevice || '仪器'
     const sn = (it.instrument_sn || '').trim() || `${taskNumber}-${idx + 1}`
+    const scheduleSegments: InstrumentScheduleSegment[] = Array.isArray(it.schedule_segments)
+      ? it.schedule_segments
+          .map((segment) => {
+            const scheduledStartAt = segment?.scheduled_start_at || ''
+            const scheduledEndAt = segment?.scheduled_end_at || ''
+            if (!scheduledStartAt || !scheduledEndAt) return null
+            return { scheduledStartAt, scheduledEndAt }
+          })
+          .filter(Boolean) as InstrumentScheduleSegment[]
+      : []
     return {
       id: `ins-${dto.id}-${sn || idx}`,
       dbId: it.id,
@@ -118,6 +132,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
       sn,
       scheduledStartAt: it.scheduled_start_at || null,
       scheduledEndAt: it.scheduled_end_at || null,
+      scheduleSegments,
       completed: it.is_completed === true,
     }
   })
@@ -171,22 +186,56 @@ export function useHighTempPressureSchedule() {
   const startedOrderIds = ref<Record<string, true>>({})
 
   type ScheduledEvent = {
+    eventId: string
+    orderId: string
     instrumentId: string
     dateStr: string
     startTimeKey: string
     span: number
   }
 
-  const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
-  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
+  const scheduledEvents = ref<Record<string, ScheduledEvent[]>>({})
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent[] | null>>({})
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
 
-  function markPendingSchedule(instrumentId: string, event: ScheduledEvent | null) {
+  function cloneScheduledEventList(events?: ScheduledEvent[] | null) {
+    return (events || []).map((event) => ({ ...event }))
+  }
+
+  function cloneScheduledEventMap(source: Record<string, ScheduledEvent[]> = scheduledEvents.value) {
+    const next: Record<string, ScheduledEvent[]> = {}
+    Object.entries(source).forEach(([instrumentId, events]) => {
+      next[instrumentId] = cloneScheduledEventList(events)
+    })
+    return next
+  }
+
+  function sortScheduledEvents(events: ScheduledEvent[]) {
+    return [...events].sort((a, b) => {
+      if (a.dateStr !== b.dateStr) return a.dateStr.localeCompare(b.dateStr)
+      if (a.startTimeKey !== b.startTimeKey) return a.startTimeKey.localeCompare(b.startTimeKey)
+      return a.eventId.localeCompare(b.eventId)
+    })
+  }
+
+  function getInstrumentEvents(instrumentId: string) {
+    return scheduledEvents.value[instrumentId] || []
+  }
+
+  function setInstrumentEvents(instrumentId: string, events: ScheduledEvent[]) {
+    const next = { ...scheduledEvents.value }
+    const normalized = sortScheduledEvents(cloneScheduledEventList(events))
+    if (normalized.length) next[instrumentId] = normalized
+    else delete next[instrumentId]
+    scheduledEvents.value = next
+  }
+
+  function markPendingSchedule(instrumentId: string, events: ScheduledEvent[] | null) {
     pendingScheduleEvents.value = {
       ...pendingScheduleEvents.value,
-      [instrumentId]: event ? { ...event } : null,
+      [instrumentId]: events ? cloneScheduledEventList(events) : null,
     }
   }
 
@@ -203,32 +252,45 @@ export function useHighTempPressureSchedule() {
     return Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
-  function eventFromInstrument(instrument: InstrumentItem): ScheduledEvent | null {
-    const start = parseBackendDateTime(instrument.scheduledStartAt)
-    const end = parseBackendDateTime(instrument.scheduledEndAt)
-    if (!start || !end || end <= start) return null
-    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
-    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
-    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
-    return {
-      instrumentId: instrument.id,
-      dateStr: fmtDate(start),
-      startTimeKey,
-      span,
-    }
+  function eventsFromInstrument(instrument: InstrumentItem, orderId: string): ScheduledEvent[] {
+    const segments = instrument.scheduleSegments?.length
+      ? instrument.scheduleSegments
+      : instrument.scheduledStartAt && instrument.scheduledEndAt
+        ? [{ scheduledStartAt: instrument.scheduledStartAt, scheduledEndAt: instrument.scheduledEndAt }]
+        : []
+
+    return segments
+      .map((segment) => {
+        const start = parseBackendDateTime(segment.scheduledStartAt)
+        const end = parseBackendDateTime(segment.scheduledEndAt)
+        if (!start || !end || end <= start) return null
+        const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+        if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+        const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+        const dateStr = fmtDate(start)
+        return {
+          eventId: createScheduleEventId(orderId, dateStr, startTimeKey, span),
+          orderId,
+          instrumentId: instrument.id,
+          dateStr,
+          startTimeKey,
+          span,
+        }
+      })
+      .filter(Boolean) as ScheduledEvent[]
   }
 
   function restoreScheduledEvents(orders: WorkOrder[]) {
-    const next: Record<string, ScheduledEvent> = {}
+    const next: Record<string, ScheduledEvent[]> = {}
     orders.forEach((order) => {
       order.items.forEach((instrument) => {
         if (instrument.completed) return
-        const ev = eventFromInstrument(instrument)
-        if (ev) next[instrument.id] = ev
+        const events = eventsFromInstrument(instrument, order.id)
+        if (events.length) next[instrument.id] = events
       })
     })
-    Object.entries(pendingScheduleEvents.value).forEach(([instrumentId, event]) => {
-      if (event) next[instrumentId] = event
+    Object.entries(pendingScheduleEvents.value).forEach(([instrumentId, events]) => {
+      if (events?.length) next[instrumentId] = cloneScheduledEventList(events)
       else delete next[instrumentId]
     })
     scheduledEvents.value = next
@@ -404,57 +466,135 @@ export function useHighTempPressureSchedule() {
     return timeSlots.value[endIdx]?.key || ''
   }
 
-  const getScheduleChangePayload = (instrumentId: string) => {
-    const ev = scheduledEvents.value[instrumentId]
-    if (!ev) return null
-    const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
-    if (!endTimeKey) return null
-    const startHh = timeKeyToHour(ev.startTimeKey)
-    const endHh = timeKeyToHour(endTimeKey)
-    if (!startHh || !endHh) return null
+  type ScheduleChangeSegment = {
+    eventId: string
+    orderId: string
+    instrumentId: string
+    dateStr: string
+    startTimeKey: string
+    endTimeKey: string
+    span: number
+    startAtHour: string
+    endAtHour: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+  }
+
+  type ScheduleChangePayload = {
+    instrumentId: string
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    endTimeKey: string
+    span: number
+    startAtHour: string
+    endAtHour: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+    scheduleSegments: Array<{
+      scheduled_start_at: string
+      scheduled_end_at: string
+    }>
+    segments: ScheduleChangeSegment[]
+  }
+
+  const getScheduleChangePayload = (instrumentId: string): ScheduleChangePayload | null => {
+    const events = getInstrumentEvents(instrumentId)
+    if (!events.length) return null
+    const segments = events
+      .map((ev) => {
+        const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
+        if (!endTimeKey) return null
+        const startHh = timeKeyToHour(ev.startTimeKey)
+        const endHh = timeKeyToHour(endTimeKey)
+        if (!startHh || !endHh) return null
+        return {
+          eventId: ev.eventId,
+          orderId: ev.orderId,
+          instrumentId: ev.instrumentId,
+          dateStr: ev.dateStr,
+          startTimeKey: ev.startTimeKey,
+          endTimeKey,
+          span: ev.span,
+          startAtHour: `${ev.dateStr} ${startHh}`,
+          endAtHour: `${ev.dateStr} ${endHh}`,
+          scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
+          scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+        }
+      })
+      .filter((segment): segment is ScheduleChangeSegment => !!segment)
+
+    if (!segments.length) return null
+
+    const sorted = [...segments].sort((a, b) => {
+      if (a.scheduledStartAt !== b.scheduledStartAt) return a.scheduledStartAt.localeCompare(b.scheduledStartAt)
+      return a.scheduledEndAt.localeCompare(b.scheduledEndAt)
+    })
+    const first = sorted[0]
+    const last = sorted[sorted.length - 1]
+
     return {
-      instrumentId: ev.instrumentId,
-      dateStr: ev.dateStr,
-      startTimeKey: ev.startTimeKey,
-      endTimeKey,
-      span: ev.span,
-      startAtHour: `${ev.dateStr} ${startHh}`,
-      endAtHour: `${ev.dateStr} ${endHh}`,
-      scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
-      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+      instrumentId,
+      orderId: first.orderId,
+      dateStr: first.dateStr,
+      startTimeKey: first.startTimeKey,
+      endTimeKey: last.endTimeKey,
+      span: sorted.reduce((sum, item) => sum + item.span, 0),
+      startAtHour: first.startAtHour,
+      endAtHour: last.endAtHour,
+      scheduledStartAt: first.scheduledStartAt,
+      scheduledEndAt: last.scheduledEndAt,
+      scheduleSegments: sorted.map((item) => ({
+        scheduled_start_at: item.scheduledStartAt,
+        scheduled_end_at: item.scheduledEndAt,
+      })),
+      segments: sorted,
     }
   }
 
-  async function persistScheduledEvent(instrumentId: string, fallback?: ScheduledEvent) {
+  async function persistScheduledEvent(instrumentId: string, fallback?: ScheduledEvent[]) {
     const instrument = getInstrumentById(instrumentId)
     const schedule = getScheduleChangePayload(instrumentId)
-    if (!instrument?.dbId || !schedule) return true
+    if (!instrument?.dbId) return true
 
-    markPendingSchedule(instrumentId, scheduledEvents.value[instrumentId] || null)
+    markPendingSchedule(instrumentId, getInstrumentEvents(instrumentId))
     try {
       const authOk = await initAuth()
       if (!authOk) {
-        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: fallback }
+        if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
         ElMessage.error('登录状态失效，请重新登录后再保存排期')
         return false
       }
-      const resp = await saveHighTempPressureInstrumentSchedule(
-        instrument.dbId,
-        {
-          scheduled_start_at: schedule.scheduledStartAt,
-          scheduled_end_at: schedule.scheduledEndAt,
-        },
-        getAuthHeaders()
-      )
+      const resp = schedule
+        ? await saveHighTempPressureInstrumentSchedule(
+            instrument.dbId,
+            {
+              scheduled_start_at: schedule.scheduledStartAt,
+              scheduled_end_at: schedule.scheduledEndAt,
+              schedule_segments: schedule.scheduleSegments,
+            },
+            getAuthHeaders()
+          )
+        : await clearHighTempPressureInstrumentSchedule(instrument.dbId, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
-        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: fallback }
+        if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
         ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
         return false
       }
-      instrument.scheduledStartAt = resp.data.data?.scheduled_start_at || schedule.scheduledStartAt
-      instrument.scheduledEndAt = resp.data.data?.scheduled_end_at || schedule.scheduledEndAt
-      const savedEvent = eventFromInstrument(instrument)
-      if (savedEvent) scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: savedEvent }
+      instrument.scheduledStartAt = resp.data.data?.scheduled_start_at || null
+      instrument.scheduledEndAt = resp.data.data?.scheduled_end_at || null
+      instrument.scheduleSegments = Array.isArray(resp.data.data?.schedule_segments)
+        ? resp.data.data!.schedule_segments!
+            .map((segment) => {
+              const scheduledStartAt = segment?.scheduled_start_at || ''
+              const scheduledEndAt = segment?.scheduled_end_at || ''
+              if (!scheduledStartAt || !scheduledEndAt) return null
+              return { scheduledStartAt, scheduledEndAt }
+            })
+            .filter(Boolean) as InstrumentScheduleSegment[]
+        : []
+      const order = getOrderByInstrumentId(instrumentId)
+      setInstrumentEvents(instrumentId, order ? eventsFromInstrument(instrument, order.id) : [])
       return true
     } finally {
       clearPendingSchedule(instrumentId)
@@ -463,15 +603,18 @@ export function useHighTempPressureSchedule() {
 
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
-    Object.values(scheduledEvents.value).forEach((ev) => {
-      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
-      if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.instrumentId)
+    Object.values(scheduledEvents.value).forEach((events) => {
+      events.forEach((ev) => {
+        const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+        if (!map[cellKey]) map[cellKey] = []
+        map[cellKey].push(ev.instrumentId)
+      })
     })
     return map
   })
 
   type ScheduledLayoutItem = {
+    eventId: string
     instrumentId: string
     instrumentIds: string[]
     orderId: string
@@ -485,20 +628,19 @@ export function useHighTempPressureSchedule() {
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
-    const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[]; orderId: string }>()
-    Object.values(scheduledEvents.value).forEach((ev) => {
-      const order = getOrderByInstrumentId(ev.instrumentId)
-      const orderId = order?.id || ev.instrumentId
-      const key = `${orderId}_${ev.dateStr}_${ev.startTimeKey}_${ev.span}`
-      const group = groupedEvents.get(key)
-      if (group) {
-        group.instrumentIds.push(ev.instrumentId)
-        return
-      }
-      groupedEvents.set(key, { ...ev, instrumentIds: [ev.instrumentId], orderId })
+    const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[] }>()
+    Object.values(scheduledEvents.value).forEach((events) => {
+      events.forEach((ev) => {
+        const group = groupedEvents.get(ev.eventId)
+        if (group) {
+          group.instrumentIds.push(ev.instrumentId)
+          return
+        }
+        groupedEvents.set(ev.eventId, { ...ev, instrumentIds: [ev.instrumentId] })
+      })
     })
 
-    const dayMap: Record<string, (ScheduledEvent & { instrumentIds: string[]; orderId: string })[]> = {}
+    const dayMap: Record<string, (ScheduledEvent & { instrumentIds: string[] })[]> = {}
     Array.from(groupedEvents.values()).forEach((ev) => {
       if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
       dayMap[ev.dateStr].push(ev)
@@ -514,7 +656,7 @@ export function useHighTempPressureSchedule() {
         })
         .filter((x) => x.startIdx >= 0)
         .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
-        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.eventId.localeCompare(b.ev.eventId))
 
       const counts = new Array(timeSlots.value.length + 1).fill(0)
       mapped.forEach((x) => {
@@ -533,7 +675,7 @@ export function useHighTempPressureSchedule() {
         } else {
           laneEnds[lane] = x.endIdx
         }
-        laneById[x.ev.orderId] = lane
+        laneById[x.ev.eventId] = lane
       })
 
       mapped.forEach((x) => {
@@ -543,6 +685,7 @@ export function useHighTempPressureSchedule() {
           laneCount = Math.max(laneCount, counts[i] || 0)
         }
         out.push({
+          eventId: x.ev.eventId,
           instrumentId: x.ev.instrumentId,
           instrumentIds: x.ev.instrumentIds,
           orderId: x.ev.orderId,
@@ -550,7 +693,7 @@ export function useHighTempPressureSchedule() {
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
           span: x.span,
-          lane: laneById[x.ev.orderId] ?? 0,
+          lane: laneById[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
         })
@@ -663,7 +806,7 @@ export function useHighTempPressureSchedule() {
   function handleOrderDragStart(e: DragEvent, order: WorkOrder, instrumentIds: string[]) {
     draggedOrder.value = order
     isDragging.value = true
-    const ids = instrumentIds.filter((id) => !scheduledEvents.value[id] && !completedInstrumentIds.value[id])
+    const ids = instrumentIds.filter((id) => !completedInstrumentIds.value[id])
     if (!ids.length) {
       e.preventDefault()
       isDragging.value = false
@@ -699,22 +842,27 @@ export function useHighTempPressureSchedule() {
     if (isPast || !instrumentId) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
-    if (scheduledEvents.value[instrumentId]) return
+    const order = getOrderByInstrumentId(instrumentId)
+    const currentEvents = getInstrumentEvents(instrumentId)
+    if (currentEvents.some((event) => event.dateStr === dateStr && event.startTimeKey === timeKey)) return
 
-    const previousEvents = { ...scheduledEvents.value }
+    const previousEvents = cloneScheduledEventMap()
     const previousSelected = [...selectedScheduledOrderIds.value]
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
+    const span = Math.min(1, maxSpan)
 
-    scheduledEvents.value = {
-      ...scheduledEvents.value,
-      [instrumentId]: {
+    setInstrumentEvents(instrumentId, [
+      ...currentEvents,
+      {
+        eventId: createScheduleEventId(order?.id || instrumentId, dateStr, timeKey, span),
+        orderId: order?.id || instrumentId,
         instrumentId,
         dateStr,
         startTimeKey: timeKey,
-        span: Math.min(1, maxSpan),
+        span,
       },
-    }
+    ])
     selectedScheduledOrderIds.value = [instrumentId]
 
     if (isDragging.value) {
@@ -722,7 +870,7 @@ export function useHighTempPressureSchedule() {
       draggedOrder.value = null
     }
     try {
-      const saved = await persistScheduledEvent(instrumentId)
+      const saved = await persistScheduledEvent(instrumentId, previousEvents[instrumentId] || [])
       if (!saved) {
         scheduledEvents.value = previousEvents
         selectedScheduledOrderIds.value = previousSelected
@@ -748,7 +896,7 @@ export function useHighTempPressureSchedule() {
         await Promise.all(
           parsed.instrumentIds.map((instrumentId) => scheduleInstrument(instrumentId, dateStr, timeKey, isPast))
         )
-        selectedScheduledOrderIds.value = parsed.instrumentIds.filter((id) => scheduledEvents.value[id])
+        selectedScheduledOrderIds.value = parsed.instrumentIds.filter((id) => (scheduledEvents.value[id] || []).length)
         return
       }
     } catch {
@@ -757,9 +905,8 @@ export function useHighTempPressureSchedule() {
     await scheduleInstrument(payload, dateStr, timeKey, isPast)
   }
 
-  function handleSelectScheduledOrder(orderId: string) {
-    const layout = scheduledLayoutItems.value.find((item) => item.instrumentId === orderId || item.orderId === orderId)
-    const targetIds = layout?.instrumentIds?.length ? layout.instrumentIds : [orderId]
+  function handleSelectScheduledOrder(instrumentIds: string | string[]) {
+    const targetIds = normalizeInstrumentIds(instrumentIds)
     const current = selectedScheduledOrderIds.value
     const allSelected = targetIds.every((id) => current.includes(id))
     if (allSelected) {
@@ -769,28 +916,17 @@ export function useHighTempPressureSchedule() {
     }
   }
 
-  async function handleUnschedule(cellKey: string, orderId: string) {
-    void cellKey
+  async function handleUnschedule(instrumentIds: string | string[], eventId: string) {
     const previousSelected = [...selectedScheduledOrderIds.value]
-    const next = { ...scheduledEvents.value }
-    const order = getOrderById(orderId)
-    const targetIds = order
-      ? order.items.map((item) => item.id).filter((id) => !!next[id])
-      : [orderId]
+    const previousEvents = cloneScheduledEventMap()
+    const targetIds = normalizeInstrumentIds(instrumentIds)
     targetIds.forEach((id) => {
-      delete next[id]
+      const nextEvents = getInstrumentEvents(id).filter((event) => event.eventId !== eventId)
+      setInstrumentEvents(id, nextEvents)
+      if (!nextEvents.length) {
+        selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((selectedId) => selectedId !== id)
+      }
     })
-    scheduledEvents.value = next
-    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => !targetIds.includes(id))
-
-    const removedEvents = Object.fromEntries(
-      targetIds
-        .map((id) => {
-          const event = scheduledEvents.value[id]
-          return event ? ([id, event] as const) : null
-        })
-        .filter((entry): entry is readonly [string, ScheduledEvent] => !!entry)
-    ) as Record<string, ScheduledEvent>
 
     const instruments = targetIds
       .map((id) => ({ id, instrument: getInstrumentById(id) }))
@@ -798,38 +934,30 @@ export function useHighTempPressureSchedule() {
 
     if (!instruments.length) return
 
-    instruments.forEach(({ id }) => markPendingSchedule(id, null))
-
     const rollback = () => {
-      scheduledEvents.value = { ...scheduledEvents.value, ...removedEvents }
+      scheduledEvents.value = previousEvents
       selectedScheduledOrderIds.value = previousSelected
     }
 
     try {
-      const authOk = await initAuth()
-      if (!authOk) {
-        rollback()
-        ElMessage.error('登录状态失效，请重新登录后再取消排期')
-        return
-      }
-
       const results = await Promise.all(
-        instruments.map(({ instrument }) =>
-          clearHighTempPressureInstrumentSchedule(instrument!.dbId as number, getAuthHeaders())
+        instruments.map(({ id }) =>
+          persistScheduledEvent(id, previousEvents[id] || [])
         )
       )
 
-      const failed = results.find((resp) => !resp.success || !resp.data || resp.data.code !== 0)
+      const failed = results.some((saved) => !saved)
       if (failed) {
         rollback()
-        ElMessage.error(failed.data?.msg || failed.error || '取消排期失败')
         return
       }
 
       instruments.forEach(({ instrument }) => {
         if (!instrument) return
+        if ((getInstrumentEvents(instrument.id) || []).length) return
         instrument.scheduledStartAt = null
         instrument.scheduledEndAt = null
+        instrument.scheduleSegments = []
       })
     } catch (error) {
       rollback()
@@ -840,9 +968,7 @@ export function useHighTempPressureSchedule() {
   }
 
   function removeScheduledInstrumentLocal(instrumentId: string) {
-    const next = { ...scheduledEvents.value }
-    delete next[instrumentId]
-    scheduledEvents.value = next
+    setInstrumentEvents(instrumentId, [])
     if (selectedScheduledOrderIds.value.includes(instrumentId)) {
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => id !== instrumentId)
     }
@@ -865,15 +991,15 @@ export function useHighTempPressureSchedule() {
     selectedScheduledOrderIds.value = []
   }
 
-  const getEvent = (instrumentId: string) => scheduledEvents.value[instrumentId]
+  const getEvent = (instrumentId: string) => getInstrumentEvents(instrumentId)[0] || null
 
   const normalizeInstrumentIds = (instrumentIds: string | string[]) =>
     Array.isArray(instrumentIds) ? instrumentIds : [instrumentIds]
 
-  const setEventSpan = (instrumentIds: string | string[], span: number) => {
+  const setEventSpan = (instrumentIds: string | string[], eventId: string, span: number) => {
     const ids = normalizeInstrumentIds(instrumentIds)
     const instrumentId = ids[0]
-    const ev = scheduledEvents.value[instrumentId]
+    const ev = getInstrumentEvents(instrumentId).find((event) => event.eventId === eventId)
     if (!ev) return
 
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
@@ -883,28 +1009,35 @@ export function useHighTempPressureSchedule() {
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
 
-    const next = { ...scheduledEvents.value }
     ids.forEach((id) => {
-      const item = next[id]
-      if (item) next[id] = { ...item, span: nextSpan }
+      const nextEvents = getInstrumentEvents(id).map((event) =>
+        event.eventId === eventId
+          ? {
+              ...event,
+              span: nextSpan,
+              eventId: createScheduleEventId(event.orderId, event.dateStr, event.startTimeKey, nextSpan),
+            }
+          : event
+      )
+      setInstrumentEvents(id, nextEvents)
     })
-    scheduledEvents.value = next
   }
 
   const resizing = ref<{
+    eventId: string
     instrumentIds: string[]
     startY: number
     originSpan: number
     originStartIdx: number
     mode: 'bottom' | 'top'
   } | null>(null)
-  const resizingInstrumentId = computed(() => resizing.value?.instrumentIds[0] || null)
+  const resizingEventId = computed(() => resizing.value?.eventId || null)
   const isResizing = computed(() => !!resizing.value)
 
-  const setEventStartAndSpan = (instrumentIds: string | string[], startIdx: number, span: number) => {
+  const setEventStartAndSpan = (instrumentIds: string | string[], eventId: string, startIdx: number, span: number) => {
     const ids = normalizeInstrumentIds(instrumentIds)
     const instrumentId = ids[0]
-    const ev = scheduledEvents.value[instrumentId]
+    const ev = getInstrumentEvents(instrumentId).find((event) => event.eventId === eventId)
     if (!ev) return
 
     const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
@@ -914,25 +1047,32 @@ export function useHighTempPressureSchedule() {
 
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
-    const next = { ...scheduledEvents.value }
     ids.forEach((id) => {
-      const item = next[id]
-      if (item) next[id] = { ...item, startTimeKey: nextStartKey, span: nextSpan }
+      const nextEvents = getInstrumentEvents(id).map((event) =>
+        event.eventId === eventId
+          ? {
+              ...event,
+              startTimeKey: nextStartKey,
+              span: nextSpan,
+              eventId: createScheduleEventId(event.orderId, event.dateStr, nextStartKey, nextSpan),
+            }
+          : event
+      )
+      setInstrumentEvents(id, nextEvents)
     })
-    scheduledEvents.value = next
   }
 
-  const startResize = (instrumentIds: string | string[], e: MouseEvent) => {
+  const startResize = (instrumentIds: string | string[], eventId: string, e: MouseEvent) => {
     const ids = normalizeInstrumentIds(instrumentIds)
     const instrumentId = ids[0]
-    const ev = scheduledEvents.value[instrumentId]
+    const ev = getInstrumentEvents(instrumentId).find((event) => event.eventId === eventId)
     if (!ev) return
-    const previous = { ...ev }
+    const previousEvents = cloneScheduledEventMap()
 
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
 
-    resizing.value = { instrumentIds: ids, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+    resizing.value = { eventId, instrumentIds: ids, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -940,20 +1080,24 @@ export function useHighTempPressureSchedule() {
       const delta = me.clientY - ctx.startY
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       if (ctx.mode === 'bottom') {
-        setEventSpan(ctx.instrumentIds, ctx.originSpan + deltaSlots)
+        setEventSpan(ctx.instrumentIds, ctx.eventId, ctx.originSpan + deltaSlots)
         return
       }
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.instrumentIds, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.instrumentIds, ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
-      void persistScheduledEvent(instrumentId, previous).catch((error) => {
-        scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: previous }
+      Promise.all(ids.map((id) => persistScheduledEvent(id, previousEvents[id] || []))).then((results) => {
+        if (results.some((saved) => !saved)) {
+          scheduledEvents.value = previousEvents
+        }
+      }).catch((error) => {
+        scheduledEvents.value = previousEvents
         ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
       })
     }
@@ -962,17 +1106,17 @@ export function useHighTempPressureSchedule() {
     window.addEventListener('mouseup', onUp)
   }
 
-  const startResizeTop = (instrumentIds: string | string[], e: MouseEvent) => {
+  const startResizeTop = (instrumentIds: string | string[], eventId: string, e: MouseEvent) => {
     const ids = normalizeInstrumentIds(instrumentIds)
     const instrumentId = ids[0]
-    const ev = scheduledEvents.value[instrumentId]
+    const ev = getInstrumentEvents(instrumentId).find((event) => event.eventId === eventId)
     if (!ev) return
-    const previous = { ...ev }
+    const previousEvents = cloneScheduledEventMap()
 
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
 
-    resizing.value = { instrumentIds: ids, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+    resizing.value = { eventId, instrumentIds: ids, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -981,15 +1125,19 @@ export function useHighTempPressureSchedule() {
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.instrumentIds, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.instrumentIds, ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
-      void persistScheduledEvent(instrumentId, previous).catch((error) => {
-        scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: previous }
+      Promise.all(ids.map((id) => persistScheduledEvent(id, previousEvents[id] || []))).then((results) => {
+        if (results.some((saved) => !saved)) {
+          scheduledEvents.value = previousEvents
+        }
+      }).catch((error) => {
+        scheduledEvents.value = previousEvents
         ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
       })
     }
@@ -1000,7 +1148,7 @@ export function useHighTempPressureSchedule() {
 
   const isOrderFullyScheduled = (order: WorkOrder) => {
     if (!order?.items?.length) return false
-    return order.items.every((it) => !!scheduledEvents.value[it.id])
+    return order.items.every((it) => getInstrumentEvents(it.id).length > 0)
   }
 
   const isInstrumentPending = (instrumentId: string) => !completedInstrumentIds.value[instrumentId]
@@ -1097,7 +1245,7 @@ export function useHighTempPressureSchedule() {
     startResizeTop,
     isOrderFullyScheduled,
     getScheduleChangePayload,
-    resizingInstrumentId,
+    resizingEventId,
     isResizing,
     isInstrumentPending,
     markOrderStarted,

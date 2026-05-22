@@ -192,7 +192,10 @@ async function confirmInstrumentSelection() {
   const authHeaders = authOk ? getAuthHeaders() : undefined
   const scheduleInfo = getScheduleChangePayload(selected.id)
   if (scheduleInfo) {
-    console.log(`[vibration schedule] ${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}`)
+    console.log(
+      '[vibration schedule]',
+      scheduleInfo.segments.map((segment) => `${segment.startAtHour} ~ ${segment.endAtHour}`).join(' | ')
+    )
   } else {
     console.log('[vibration schedule] no scheduled range')
   }
@@ -203,15 +206,18 @@ async function confirmInstrumentSelection() {
       const pushPayload = await resolveVibrationSchedulePayload(selected, authHeaders || {})
       if (pushPayload.testType && pushPayload.testId && pushPayload.equipmentId) {
         console.log('[vibration schedule push]', pushPayload)
+        const schedulePushList = scheduleInfo.segments.flatMap((segment) =>
+          selectedInstruments.map((instrument) => ({
+            testId: pushPayload.testId,
+            testType: pushPayload.testType,
+            equipmentId: String(instrument.dbId || instrument.sn || instrument.name || pushPayload.equipmentId),
+            startTime: segment.startAtHour,
+            endTime: segment.endAtHour,
+          }))
+        )
         const resp = await pushEngineerAssistantSchedules(
           {
-            schedulesInfo: selectedInstruments.map((instrument) => ({
-              testId: pushPayload.testId,
-              testType: pushPayload.testType,
-              equipmentId: String(instrument.dbId || instrument.sn || instrument.name || pushPayload.equipmentId),
-              startTime: scheduleInfo.startAtHour,
-              endTime: scheduleInfo.endAtHour,
-            })),
+            schedulesInfo: schedulePushList,
           },
           authHeaders || {}
         )

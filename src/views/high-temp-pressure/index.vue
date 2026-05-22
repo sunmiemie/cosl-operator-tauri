@@ -106,13 +106,15 @@ async function confirmProductSelection() {
         }
         const resp = await pushEngineerAssistantSchedules(
           {
-            schedulesInfo: selectedScheduleInfos.map(({ selection, scheduleInfo }) => ({
-              testId: String(selection.order.dbId ?? selection.order.id),
-              testType,
-              equipmentId: String(selection.instrument.id),
-              startTime: scheduleInfo!.startAtHour,
-              endTime: scheduleInfo!.endAtHour,
-            })),
+            schedulesInfo: selectedScheduleInfos.flatMap(({ selection, scheduleInfo }) =>
+              scheduleInfo!.segments.map((segment) => ({
+                testId: String(selection.order.dbId ?? selection.order.id),
+                testType,
+                equipmentId: String(selection.instrument.id),
+                startTime: segment.startAtHour,
+                endTime: segment.endAtHour,
+              }))
+            ),
           },
           headers
         )
@@ -325,7 +327,7 @@ onMounted(async () => {
         :is-dragging="schedule.isDragging.value"
         :start-resize="schedule.startResize"
         :start-resize-top="schedule.startResizeTop"
-        :resizing-instrument-id="schedule.resizingInstrumentId.value"
+        :resizing-event-id="schedule.resizingEventId.value"
         :is-resizing="schedule.isResizing.value"
         :selected-scheduled-order-ids="schedule.selectedScheduledOrderIds.value"
         :selected-scheduled-orders="schedule.selectedScheduledOrders.value"

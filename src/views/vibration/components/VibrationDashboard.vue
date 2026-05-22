@@ -15,6 +15,7 @@ const props = defineProps<{
   weekLabel: string
   scheduledOrders: Record<string, string[]>
   scheduledLayoutItems: {
+    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
@@ -27,8 +28,8 @@ const props = defineProps<{
   maxLaneCount: number
   slotHeightPx: number
   isDragging: boolean
-  startResize: (orderId: string, e: MouseEvent) => void
-  startResizeTop: (orderId: string, e: MouseEvent) => void
+  startResize: (eventId: string, e: MouseEvent) => void
+  startResizeTop: (eventId: string, e: MouseEvent) => void
   resizingOrderId: string | null
   isResizing: boolean
   selectedScheduledOrderIds: string[]
@@ -53,7 +54,7 @@ const emit = defineEmits<{
   'drag-over': [event: DragEvent, isPast: boolean]
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
   'select-scheduled-order': [orderId: string]
-  'unschedule': [cellKey: string, orderId: string]
+  'unschedule': [cellKey: string, orderId: string, eventId: string]
   'start-experiment': []
 }>()
 
@@ -100,11 +101,13 @@ const getOrderStatusText = (order: WorkOrder) => {
   if (order.status === 2) return '测试中'
   if (order.status === 5) return '已完成'
   if (order.status === 6) return '异常'
+  if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
   return '待排程'
 }
 
 const getStatusClass = (statusText: string) => {
   if (statusText === '测试中') return 'status-running'
+  if (statusText === '已排程') return 'status-scheduled'
   if (statusText === '已完成') return 'status-done'
   if (statusText === '异常') return 'status-error'
   return 'status-pending'
@@ -258,7 +261,9 @@ const getScheduledStyle = (item: any) => {
                             <span class="instrument-sn">{{ instrument.sn }}</span>
                           </div>
                           <div class="instrument-status-cell">
-                            <span class="status-pill status-pending">待排程</span>
+                            <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">
+                              {{ getOrderStatusText(order) }}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -312,13 +317,13 @@ const getScheduledStyle = (item: any) => {
                   v-for="it in scheduledLayoutItems
                     .map((x) => ({ ...x, dayIndex: currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
                     .filter((x) => x.dayIndex >= 0)"
-                  :key="it.orderId"
+                  :key="it.eventId"
                   class="scheduled-item"
                   :class="[
                     { 'is-selected': selectedScheduledOrderIds.includes(it.orderId) },
                     'type-formal',
                     (isDragging ? 'is-dragging' : ''),
-                    (isResizing && resizingOrderId === it.orderId ? 'is-resizing' : '')
+                    (isResizing && resizingOrderId === it.eventId ? 'is-resizing' : '')
                   ]"
                   :style="getScheduledStyle(it)"
                   @click="emit('select-scheduled-order', it.orderId)"
@@ -326,13 +331,13 @@ const getScheduledStyle = (item: any) => {
                 >
                   <div class="scheduled-content">
                     <span class="device-name">{{ it.orderId }}</span>
-                    <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.cellKey, it.orderId)">
+                    <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.cellKey, it.orderId, it.eventId)">
                       <Icon icon="mdi:close" />
                     </button>
                   </div>
                   <div class="scheduled-tag">{{ getOrderById(it.orderId)?.device }} · {{ getOrderById(it.orderId)?.instruments.length || 0 }}台</div>
-                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.orderId, $event)"></div>
-                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.orderId, $event)"></div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.eventId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.eventId, $event)"></div>
                 </div>
               </div>
 
@@ -724,6 +729,12 @@ const getScheduledStyle = (item: any) => {
 }
 
 .status-running {
+  color: var(--color-accent-green, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-scheduled {
   color: var(--color-accent-blue);
   background: rgba(59, 130, 246, 0.12);
   border: 1px solid rgba(59, 130, 246, 0.2);

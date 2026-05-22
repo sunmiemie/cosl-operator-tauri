@@ -14,6 +14,7 @@ const props = defineProps<{
   timeSlots: TimeSlotItem[]
   scheduledOrders: Record<string, string[]>
   scheduledLayoutItems: {
+    eventId: string
     instrumentId: string
     instrumentIds: string[]
     orderId: string
@@ -28,9 +29,9 @@ const props = defineProps<{
   maxLaneCount: number
   slotHeightPx: number
   isDragging: boolean
-  startResize: (instrumentIds: string | string[], e: MouseEvent) => void
-  startResizeTop: (instrumentIds: string | string[], e: MouseEvent) => void
-  resizingInstrumentId: string | null
+  startResize: (instrumentIds: string | string[], eventId: string, e: MouseEvent) => void
+  startResizeTop: (instrumentIds: string | string[], eventId: string, e: MouseEvent) => void
+  resizingEventId: string | null
   isResizing: boolean
   selectedScheduledOrderIds: string[]
   selectedScheduledOrders: ScheduledSelection[]
@@ -52,8 +53,8 @@ const emit = defineEmits<{
   'drag-over': [event: DragEvent, isPast: boolean]
   'drag-leave': [event: DragEvent]
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
-  'select-scheduled-order': [orderId: string]
-  unschedule: [cellKey: string, orderId: string]
+  'select-scheduled-order': [instrumentIds: string[]]
+  unschedule: [instrumentIds: string[], eventId: string]
   'start-scheduled-test': []
   'refresh': []
 }>()
@@ -149,7 +150,7 @@ const getOrderDeviceSummary = (order: WorkOrder) => {
 }
 
 const canDragOrder = (order: WorkOrder) => {
-  return getPendingInstruments(order).length > 0 && order.statusCode !== 2
+  return getActiveInstruments(order).length > 0 && order.statusCode !== 2
 }
 
 const getScheduledStyle = (item: any) => {
@@ -259,7 +260,7 @@ const handleGridDrop = (e: DragEvent) => {
                     }"
                     :draggable="canDragOrder(order)"
                     @click="order.expanded = !order.expanded"
-                    @dragstart="canDragOrder(order) && emit('order-drag-start', $event, order, getPendingInstruments(order).map((item) => item.id))"
+                    @dragstart="canDragOrder(order) && emit('order-drag-start', $event, order, getActiveInstruments(order).map((item) => item.id))"
                     @dragend="emit('drag-end', $event)"
                   >
                     <td class="cell-applicant">{{ order.applicant }}</td>
@@ -367,18 +368,18 @@ const handleGridDrop = (e: DragEvent) => {
                     v-for="it in scheduledLayoutItems
                       .map((x) => ({ ...x, dayIndex: currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
                       .filter((x) => x.dayIndex >= 0)"
-                    :key="`${it.orderId}-${it.cellKey}`"
+                    :key="it.eventId"
                     class="scheduled-item"
                     :class="[
                       { 'is-selected': it.instrumentIds.some((id) => selectedScheduledOrderIds.includes(id)) },
-                      (isResizing && resizingInstrumentId === it.instrumentId ? 'is-resizing' : '')
+                      (isResizing && resizingEventId === it.eventId ? 'is-resizing' : '')
                     ]"
                     :style="getScheduledStyle(it)"
-                    @click.stop="emit('select-scheduled-order', it.orderId)"
+                    @click.stop="emit('select-scheduled-order', it.instrumentIds)"
                     :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${getOrderByInstrumentId(it.instrumentId)?.type || ''} · ${it.instrumentIds.length}台`"
                   >
                     <div class="scheduled-head">
-                      <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.cellKey, it.orderId)">
+                      <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.instrumentIds, it.eventId)">
                         <Icon icon="mdi:close" />
                       </button>
                     </div>
@@ -389,8 +390,8 @@ const handleGridDrop = (e: DragEvent) => {
                       {{ getOrderByInstrumentId(it.instrumentId)?.applicant || '-' }} ·
                       {{ getOrderByInstrumentId(it.instrumentId)?.applyDate || '-' }}
                     </div>
-                    <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.instrumentIds, $event)"></div>
-                    <div class="resize-handle" @mousedown.stop.prevent="startResize(it.instrumentIds, $event)"></div>
+                    <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.instrumentIds, it.eventId, $event)"></div>
+                    <div class="resize-handle" @mousedown.stop.prevent="startResize(it.instrumentIds, it.eventId, $event)"></div>
                   </div>
                 </div>
 

@@ -9,7 +9,13 @@ export interface InstrumentItem {
   sn: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  scheduleSegments?: InstrumentScheduleSegment[]
   completed?: boolean
+}
+
+export interface InstrumentScheduleSegment {
+  scheduledStartAt: string
+  scheduledEndAt: string
 }
 
 export interface WorkOrder {

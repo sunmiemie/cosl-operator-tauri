@@ -1,6 +1,6 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { TimeSlot, VibrationInstrument, WeekDay, WorkOrder } from '../types'
+import type { TimeSlot, VibrationInstrument, WeekDay, WorkOrder, WorkOrderScheduleSegment } from '../types'
 import {
   clearVibrationTableOrderSchedule,
   listVibrationTableOrders,
@@ -24,6 +24,10 @@ function addDays(d: Date, days: number) {
 
 function fmtDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function createScheduleEventId(orderId: string) {
+  return `${orderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 export function useVibrationSchedule() {
@@ -90,6 +94,16 @@ export function useVibrationSchedule() {
 
   function mapVibrationTableOrder(dto: VibrationTableOrderDTO): WorkOrder {
     const instruments = normalizeVibrationInstruments(dto)
+    const scheduleSegments: WorkOrderScheduleSegment[] = Array.isArray(dto.schedule_segments)
+      ? dto.schedule_segments
+          .map((segment) => {
+            const scheduledStartAt = segment?.scheduled_start_at || ''
+            const scheduledEndAt = segment?.scheduled_end_at || ''
+            if (!scheduledStartAt || !scheduledEndAt) return null
+            return { scheduledStartAt, scheduledEndAt }
+          })
+          .filter(Boolean) as WorkOrderScheduleSegment[]
+      : []
     return {
       id: dto.order_no,
       dbId: dto.id,
@@ -97,6 +111,7 @@ export function useVibrationSchedule() {
       statusText: dto.status_text,
       scheduledStartAt: dto.scheduled_start_at || null,
       scheduledEndAt: dto.scheduled_end_at || null,
+      scheduleSegments,
       planTime: dto.planned_time || dto.test_date || dto.application_date || null,
       deviceNumber: (dto as any).device_number || (dto as any).deviceNumber || '',
       type: '正式实验',
@@ -196,19 +211,62 @@ export function useVibrationSchedule() {
   const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
 
   type ScheduledEvent = {
+    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
     span: number
   }
 
-  const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
-  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
+  const scheduledEvents = ref<Record<string, ScheduledEvent[]>>({})
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent[] | null>>({})
 
-  function markPendingSchedule(orderId: string, event: ScheduledEvent | null) {
+  function cloneScheduledEventList(events?: ScheduledEvent[] | null) {
+    return (events || []).map((event) => ({ ...event }))
+  }
+
+  function cloneScheduledEventMap(source: Record<string, ScheduledEvent[]> = scheduledEvents.value) {
+    const next: Record<string, ScheduledEvent[]> = {}
+    Object.entries(source).forEach(([orderId, events]) => {
+      next[orderId] = cloneScheduledEventList(events)
+    })
+    return next
+  }
+
+  function sortScheduledEvents(events: ScheduledEvent[]) {
+    return [...events].sort((a, b) => {
+      if (a.dateStr !== b.dateStr) return a.dateStr.localeCompare(b.dateStr)
+      if (a.startTimeKey !== b.startTimeKey) return a.startTimeKey.localeCompare(b.startTimeKey)
+      return a.eventId.localeCompare(b.eventId)
+    })
+  }
+
+  function getOrderEvents(orderId: string) {
+    return scheduledEvents.value[orderId] || []
+  }
+
+  function setOrderEvents(orderId: string, events: ScheduledEvent[]) {
+    const next = { ...scheduledEvents.value }
+    const normalized = sortScheduledEvents(cloneScheduledEventList(events))
+    if (normalized.length) next[orderId] = normalized
+    else delete next[orderId]
+    scheduledEvents.value = next
+  }
+
+  function findEventById(eventId: string) {
+    for (const [orderId, events] of Object.entries(scheduledEvents.value)) {
+      const index = events.findIndex((event) => event.eventId === eventId)
+      if (index !== -1) {
+        return { orderId, index, event: events[index] }
+      }
+    }
+    return null
+  }
+
+  function markPendingSchedule(orderId: string, events: ScheduledEvent[] | null) {
     pendingScheduleEvents.value = {
       ...pendingScheduleEvents.value,
-      [orderId]: event ? { ...event } : null,
+      [orderId]: events ? cloneScheduledEventList(events) : null,
     }
   }
 
@@ -225,30 +283,41 @@ export function useVibrationSchedule() {
     return Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
-  function eventFromOrder(order: WorkOrder): ScheduledEvent | null {
-    const start = parseBackendDateTime(order.scheduledStartAt)
-    const end = parseBackendDateTime(order.scheduledEndAt)
-    if (!start || !end || end <= start) return null
-    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
-    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
-    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
-    return {
-      orderId: order.id,
-      dateStr: fmtDate(start),
-      startTimeKey,
-      span,
-    }
+  function eventsFromOrder(order: WorkOrder): ScheduledEvent[] {
+    const segments = order.scheduleSegments?.length
+      ? order.scheduleSegments
+      : order.scheduledStartAt && order.scheduledEndAt
+        ? [{ scheduledStartAt: order.scheduledStartAt, scheduledEndAt: order.scheduledEndAt }]
+        : []
+
+    return segments
+      .map((segment, index) => {
+        const start = parseBackendDateTime(segment.scheduledStartAt)
+        const end = parseBackendDateTime(segment.scheduledEndAt)
+        if (!start || !end || end <= start) return null
+        const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+        if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+        const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+        return {
+          eventId: `${order.id}-${index}-${start.getTime()}-${end.getTime()}`,
+          orderId: order.id,
+          dateStr: fmtDate(start),
+          startTimeKey,
+          span,
+        }
+      })
+      .filter(Boolean) as ScheduledEvent[]
   }
 
   function restoreScheduledEvents(orders: WorkOrder[]) {
-    const next: Record<string, ScheduledEvent> = {}
+    const next: Record<string, ScheduledEvent[]> = {}
     orders.forEach((order) => {
-      const ev = eventFromOrder(order)
-      if (ev) next[order.id] = ev
+      const events = eventsFromOrder(order)
+      if (events.length) next[order.id] = events
     })
     Object.entries(pendingScheduleEvents.value).forEach(([orderId, event]) => {
-      if (event) {
-        next[orderId] = event
+      if (event?.length) {
+        next[orderId] = cloneScheduledEventList(event)
       } else {
         delete next[orderId]
       }
@@ -277,65 +346,122 @@ export function useVibrationSchedule() {
     return timeSlots.value[endIdx]?.key || ''
   }
 
-  const getScheduleChangePayload = (orderId: string) => {
-    const ev = scheduledEvents.value[orderId]
-    if (!ev) return null
-    const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
-    if (!endTimeKey) return null
-    const startHh = timeKeyToHour(ev.startTimeKey)
-    const endHh = timeKeyToHour(endTimeKey)
-    if (!startHh || !endHh) return null
+  type ScheduleChangeSegment = {
+    eventId: string
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    endTimeKey: string
+    span: number
+    startAtHour: string
+    endAtHour: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+  }
+
+  type ScheduleChangePayload = {
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    endTimeKey: string
+    span: number
+    startAtHour: string
+    endAtHour: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+    scheduleSegments: Array<{
+      scheduled_start_at: string
+      scheduled_end_at: string
+    }>
+    segments: ScheduleChangeSegment[]
+  }
+
+  const getScheduleChangePayload = (orderId: string): ScheduleChangePayload | null => {
+    const events = getOrderEvents(orderId)
+    if (!events.length) return null
+    const segments = events
+      .map((ev) => {
+        const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
+        if (!endTimeKey) return null
+        const startHh = timeKeyToHour(ev.startTimeKey)
+        const endHh = timeKeyToHour(endTimeKey)
+        if (!startHh || !endHh) return null
+        return {
+          eventId: ev.eventId,
+          orderId: ev.orderId,
+          dateStr: ev.dateStr,
+          startTimeKey: ev.startTimeKey,
+          endTimeKey,
+          span: ev.span,
+          startAtHour: `${ev.dateStr} ${startHh}`,
+          endAtHour: `${ev.dateStr} ${endHh}`,
+          scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
+          scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+        }
+      })
+      .filter((segment): segment is ScheduleChangeSegment => !!segment)
+
+    if (!segments.length) return null
+
+    const sorted = [...segments].sort((a, b) => {
+      if (a.scheduledStartAt !== b.scheduledStartAt) return a.scheduledStartAt.localeCompare(b.scheduledStartAt)
+      return a.scheduledEndAt.localeCompare(b.scheduledEndAt)
+    })
+    const first = sorted[0]
+    const last = sorted[sorted.length - 1]
+
     return {
-      orderId: ev.orderId,
-      dateStr: ev.dateStr,
-      startTimeKey: ev.startTimeKey,
-      endTimeKey,
-      span: ev.span,
-      startAtHour: `${ev.dateStr} ${startHh}`,
-      endAtHour: `${ev.dateStr} ${endHh}`,
-      scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
-      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+      orderId,
+      dateStr: first.dateStr,
+      startTimeKey: first.startTimeKey,
+      endTimeKey: last.endTimeKey,
+      span: sorted.reduce((sum, item) => sum + item.span, 0),
+      startAtHour: first.startAtHour,
+      endAtHour: last.endAtHour,
+      scheduledStartAt: first.scheduledStartAt,
+      scheduledEndAt: last.scheduledEndAt,
+      scheduleSegments: sorted.map((item) => ({
+        scheduled_start_at: item.scheduledStartAt,
+        scheduled_end_at: item.scheduledEndAt,
+      })),
+      segments: sorted,
     }
   }
 
-  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent) {
+  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent[]) {
     const order = getOrderById(orderId)
     const schedule = getScheduleChangePayload(orderId)
-    if (!order?.dbId || !schedule) return true
+    if (!order?.dbId) return true
 
-    markPendingSchedule(orderId, scheduledEvents.value[orderId] || null)
+    markPendingSchedule(orderId, getOrderEvents(orderId))
     try {
       const authOk = await initAuth()
       if (!authOk) {
-        if (fallback) {
-          scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
-        }
+        if (fallback !== undefined) setOrderEvents(orderId, fallback)
         ElMessage.error('登录状态失效，请重新登录后再保存排期')
         return false
       }
-      const resp = await saveVibrationTableOrderSchedule(
-        order.dbId,
-        {
-          scheduled_start_at: schedule.scheduledStartAt,
-          scheduled_end_at: schedule.scheduledEndAt,
-        },
-        getAuthHeaders()
-      )
+      const resp = schedule
+        ? await saveVibrationTableOrderSchedule(
+            order.dbId,
+            {
+              scheduled_start_at: schedule.scheduledStartAt,
+              scheduled_end_at: schedule.scheduledEndAt,
+              schedule_segments: schedule.scheduleSegments,
+            },
+            getAuthHeaders()
+          )
+        : await clearVibrationTableOrderSchedule(order.dbId, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
-        if (fallback) {
-          scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
-        }
+        if (fallback !== undefined) setOrderEvents(orderId, fallback)
         ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
         return false
       }
       const saved = resp.data.data
       if (saved) {
         const updated = mapVibrationTableOrder(saved)
-        const savedEvent = eventFromOrder(updated)
         workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
-        if (savedEvent) {
-          scheduledEvents.value = { ...scheduledEvents.value, [updated.id]: savedEvent }
-        }
+        setOrderEvents(updated.id, eventsFromOrder(updated))
       }
       return true
     } finally {
@@ -345,15 +471,18 @@ export function useVibrationSchedule() {
 
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
-    Object.values(scheduledEvents.value).forEach((ev) => {
-      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
-      if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.orderId)
+    Object.values(scheduledEvents.value).forEach((events) => {
+      events.forEach((ev) => {
+        const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+        if (!map[cellKey]) map[cellKey] = []
+        map[cellKey].push(ev.orderId)
+      })
     })
     return map
   })
 
   type ScheduledLayoutItem = {
+    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
@@ -366,9 +495,11 @@ export function useVibrationSchedule() {
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
     const dayMap: Record<string, ScheduledEvent[]> = {}
-    Object.values(scheduledEvents.value).forEach((ev) => {
-      if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
-      dayMap[ev.dateStr].push(ev)
+    Object.values(scheduledEvents.value).forEach((events) => {
+      events.forEach((ev) => {
+        if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
+        dayMap[ev.dateStr].push(ev)
+      })
     })
 
     const out: ScheduledLayoutItem[] = []
@@ -381,7 +512,7 @@ export function useVibrationSchedule() {
         })
         .filter((x) => x.startIdx >= 0)
         .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
-        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.eventId.localeCompare(b.ev.eventId))
 
       const counts = new Array(timeSlots.value.length + 1).fill(0)
       mapped.forEach((x) => {
@@ -391,7 +522,7 @@ export function useVibrationSchedule() {
       for (let i = 1; i < counts.length; i++) counts[i] += counts[i - 1]
 
       const laneEnds: number[] = []
-      const laneByOrderId: Record<string, number> = {}
+      const laneByEventId: Record<string, number> = {}
       mapped.forEach((x) => {
         let lane = laneEnds.findIndex((le) => le <= x.startIdx)
         if (lane === -1) {
@@ -400,7 +531,7 @@ export function useVibrationSchedule() {
         } else {
           laneEnds[lane] = x.endIdx
         }
-        laneByOrderId[x.ev.orderId] = lane
+        laneByEventId[x.ev.eventId] = lane
       })
 
       mapped.forEach((x) => {
@@ -410,12 +541,13 @@ export function useVibrationSchedule() {
           laneCount = Math.max(laneCount, counts[i] || 0)
         }
         out.push({
+          eventId: x.ev.eventId,
           orderId: x.ev.orderId,
           dateStr,
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
           span: x.span,
-          lane: laneByOrderId[x.ev.orderId] ?? 0,
+          lane: laneByEventId[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
         })
@@ -455,10 +587,8 @@ export function useVibrationSchedule() {
   const getOrderById = (id: string) => workOrders.value.find(w => w.id === id)
 
   const unscheduledOrders = computed(() => {
-    const scheduled = new Set(Object.keys(scheduledEvents.value))
     const kw = searchKeyword.value.trim()
     return workOrders.value.filter(o => {
-      if (scheduled.has(o.id)) return false
       if (!kw) return true
       return (
         o.id.includes(kw) ||
@@ -510,24 +640,31 @@ export function useVibrationSchedule() {
     if (isPast) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
-    if (scheduledEvents.value[orderId]) return
-    const previousEvents = { ...scheduledEvents.value }
+    const currentEvents = getOrderEvents(orderId)
+    if (currentEvents.some((event) => event.dateStr === dateStr && event.startTimeKey === timeKey)) return
+    const previousEvents = cloneScheduledEventMap()
     const previousSelected = [...selectedScheduledOrderIds.value]
     const order = getOrderById(orderId)
     const span = Math.max(1, Math.ceil(Number(order?.duration || 0) / 60) || 1)
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
-    scheduledEvents.value = {
-      ...scheduledEvents.value,
-      [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
-    }
+    setOrderEvents(orderId, [
+      ...currentEvents,
+      {
+        eventId: createScheduleEventId(orderId),
+        orderId,
+        dateStr,
+        startTimeKey: timeKey,
+        span: Math.min(span, maxSpan),
+      },
+    ])
     selectedScheduledOrderIds.value = [orderId]
     if (isDragging.value) {
       isDragging.value = false
       draggedOrder.value = null
     }
     try {
-      const saved = await persistScheduledEvent(orderId)
+      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
       if (!saved) {
         scheduledEvents.value = previousEvents
         selectedScheduledOrderIds.value = previousSelected
@@ -548,55 +685,40 @@ export function useVibrationSchedule() {
     await scheduleOrder(orderId, dateStr, timeKey, isPast)
   }
 
-  async function handleUnschedule(_cellKey: string, orderId: string) {
-    const next = { ...scheduledEvents.value }
-    const removed = next[orderId]
+  async function handleUnschedule(_cellKey: string, orderId: string, eventId: string) {
+    const previousEvents = cloneScheduledEventMap()
+    const previousSelected = [...selectedScheduledOrderIds.value]
     const wasSelected = selectedScheduledOrderIds.value.includes(orderId)
-    delete next[orderId]
-    scheduledEvents.value = next
+    const nextEvents = getOrderEvents(orderId).filter((event) => event.eventId !== eventId)
+    setOrderEvents(orderId, nextEvents)
     if (wasSelected) {
-      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
+      selectedScheduledOrderIds.value = nextEvents.length
+        ? selectedScheduledOrderIds.value
+        : selectedScheduledOrderIds.value.filter(id => id !== orderId)
     }
     const order = getOrderById(orderId)
     if (!order?.dbId) return
-    markPendingSchedule(orderId, null)
 
     const rollback = () => {
-      if (removed) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: removed }
-      if (wasSelected) selectedScheduledOrderIds.value = [...selectedScheduledOrderIds.value, orderId]
+      scheduledEvents.value = previousEvents
+      if (wasSelected) selectedScheduledOrderIds.value = previousSelected
     }
 
     try {
-      const authOk = await initAuth()
-      if (!authOk) {
+      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
+      if (!saved) {
         rollback()
-        ElMessage.error('登录状态失效，请重新登录后再取消排期')
         return
-      }
-      const resp = await clearVibrationTableOrderSchedule(order.dbId, getAuthHeaders())
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
-        rollback()
-        ElMessage.error(resp.data?.msg || resp.error || '取消排期失败')
-        return
-      }
-      const saved = resp.data.data
-      if (saved) {
-        const updated = mapVibrationTableOrder(saved)
-        workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
       }
     } catch (error) {
       rollback()
       ElMessage.error(error instanceof Error ? error.message : '取消排期失败')
-    } finally {
-      clearPendingSchedule(orderId)
     }
   }
 
   function removeScheduledOrder(orderId: string) {
     if (!orderId) return
-    const next = { ...scheduledEvents.value }
-    delete next[orderId]
-    scheduledEvents.value = next
+    setOrderEvents(orderId, [])
     selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
   }
 
@@ -605,48 +727,59 @@ export function useVibrationSchedule() {
     selectedScheduledOrderIds.value = arr.includes(orderId) ? arr.filter(id => id !== orderId) : [...arr, orderId]
   }
 
-  const getEvent = (orderId: string) => scheduledEvents.value[orderId]
+  const getEvent = (eventId: string) => findEventById(eventId)?.event
 
-  const setEventSpan = (orderId: string, span: number) => {
-    const ev = scheduledEvents.value[orderId]
-    if (!ev) return
+  const setEventSpan = (eventId: string, span: number) => {
+    const located = findEventById(eventId)
+    const ev = located?.event
+    if (!located || !ev) return
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
-    scheduledEvents.value = { ...scheduledEvents.value, [orderId]: { ...ev, span: nextSpan } }
+    const nextEvents = getOrderEvents(located.orderId).map((event) =>
+      event.eventId === eventId ? { ...event, span: nextSpan } : event
+    )
+    setOrderEvents(located.orderId, nextEvents)
   }
 
-  const resizing = ref<{ orderId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
-  const resizingOrderId = computed(() => resizing.value?.orderId || null)
+  const resizing = ref<{ eventId: string; orderId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
+  const resizingOrderId = computed(() => resizing.value?.eventId || null)
   const isResizing = computed(() => !!resizing.value)
 
-  const setEventStartAndSpan = (orderId: string, startIdx: number, span: number) => {
-    const ev = scheduledEvents.value[orderId]
-    if (!ev) return
+  const setEventStartAndSpan = (eventId: string, startIdx: number, span: number) => {
+    const located = findEventById(eventId)
+    const ev = located?.event
+    if (!located || !ev) return
     const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
     const nextStartIdx = Math.max(0, Math.min(maxStartIdx, startIdx))
     const nextStartKey = timeSlots.value[nextStartIdx]?.key
     if (!nextStartKey) return
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
-    scheduledEvents.value = { ...scheduledEvents.value, [orderId]: { ...ev, startTimeKey: nextStartKey, span: nextSpan } }
+    const nextEvents = getOrderEvents(located.orderId).map((event) =>
+      event.eventId === eventId ? { ...event, startTimeKey: nextStartKey, span: nextSpan } : event
+    )
+    setOrderEvents(located.orderId, nextEvents)
   }
 
-  function persistResizeChange(orderId: string, previous: ScheduledEvent) {
-    void persistScheduledEvent(orderId, previous).catch((error) => {
-      scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+  function persistResizeChange(eventId: string, previous: ScheduledEvent) {
+    const previousOrderEvents = getOrderEvents(previous.orderId).map((event) =>
+      event.eventId === eventId ? previous : event
+    )
+    void persistScheduledEvent(previous.orderId, previousOrderEvents).catch((error) => {
+      setOrderEvents(previous.orderId, previousOrderEvents)
       ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
     })
   }
 
-  const startResize = (orderId: string, e: MouseEvent) => {
-    const ev = scheduledEvents.value[orderId]
+  const startResize = (eventId: string, e: MouseEvent) => {
+    const ev = getEvent(eventId)
     if (!ev) return
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
-    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+    resizing.value = { eventId, orderId: ev.orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -654,12 +787,12 @@ export function useVibrationSchedule() {
       const delta = me.clientY - ctx.startY
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       if (ctx.mode === 'bottom') {
-        setEventSpan(ctx.orderId, ctx.originSpan + deltaSlots)
+        setEventSpan(ctx.eventId, ctx.originSpan + deltaSlots)
         return
       }
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.orderId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
@@ -667,19 +800,19 @@ export function useVibrationSchedule() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
-      persistResizeChange(orderId, previous)
+      persistResizeChange(eventId, previous)
     }
 
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
 
-  const startResizeTop = (orderId: string, e: MouseEvent) => {
-    const ev = scheduledEvents.value[orderId]
+  const startResizeTop = (eventId: string, e: MouseEvent) => {
+    const ev = getEvent(eventId)
     if (!ev) return
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
-    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+    resizing.value = { eventId, orderId: ev.orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -688,7 +821,7 @@ export function useVibrationSchedule() {
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.orderId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
@@ -696,7 +829,7 @@ export function useVibrationSchedule() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
-      persistResizeChange(orderId, previous)
+      persistResizeChange(eventId, previous)
     }
 
     window.addEventListener('mousemove', onMove)
