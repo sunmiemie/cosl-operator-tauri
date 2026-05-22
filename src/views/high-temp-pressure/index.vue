@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import DashboardPanel from './components/DashboardPanel.vue'
@@ -21,11 +21,41 @@ const startupCheck = useHighTempPressureStartupCheck()
 const testing = useHighTempPressureTesting()
 const { initAuth, getAuthHeaders } = useAuth()
 const completedSelections = ref<ScheduledSelection[]>([])
-const activeTestSelection = ref<ScheduledSelection | null>(null)
+const activeTestSelections = ref<ScheduledSelection[]>([])
+const productPickerVisible = ref(false)
+const selectedProductIds = ref<string[]>([])
 
-function handleStartupCheckComplete() {
-  startupCheck.showStartupCheck.value = false
-  testing.showModal('confirm-start')
+const productPickerRows = computed(() =>
+  schedule.selectedScheduledOrders.value.map((selection) => ({
+    id: selection.instrument.id,
+    name: selection.instrument.label,
+    sn: selection.instrument.sn,
+    orderNo: selection.order.no,
+    customer: selection.order.applicant,
+  }))
+)
+
+watch(
+  () => productPickerRows.value.map((row) => row.id).join('|'),
+  () => {
+    const validIds = new Set(productPickerRows.value.map((row) => row.id))
+    selectedProductIds.value = selectedProductIds.value.filter((id) => validIds.has(id))
+  }
+)
+
+function toggleProductSelection(instrumentId: string, checked: boolean) {
+  const set = new Set(selectedProductIds.value)
+  if (checked) set.add(instrumentId)
+  else set.delete(instrumentId)
+  selectedProductIds.value = Array.from(set)
+}
+
+function selectAllProducts() {
+  selectedProductIds.value = productPickerRows.value.map((row) => row.id)
+}
+
+function clearProductSelection() {
+  selectedProductIds.value = []
 }
 
 function backToStartupCheck() {
@@ -38,12 +68,22 @@ async function handleStartScheduledTest() {
     ElMessage.warning('请先在日历中选择已排程的仪器')
     return
   }
-  const current = schedule.currentSelected.value
-  if (!current) {
+  if (selectedProductIds.value.length === 0) selectAllProducts()
+  productPickerVisible.value = true
+}
+
+async function confirmProductSelection() {
+  if (selectedProductIds.value.length === 0) {
+    ElMessage.warning('请先选择要开始实验的测试产品')
+    return
+  }
+  schedule.selectedScheduledOrderIds.value = selectedProductIds.value.slice()
+  const selectedSelections = schedule.selectedScheduledOrders.value
+  if (!selectedSelections.length) {
     ElMessage.warning('未找到已选中的仪器')
     return
   }
-  const selectedScheduleInfos = schedule.selectedScheduledOrders.value
+  const selectedScheduleInfos = selectedSelections
     .map((selection) => ({
       selection,
       scheduleInfo: schedule.getScheduleChangePayload(selection.instrument.id),
@@ -95,17 +135,23 @@ async function handleStartScheduledTest() {
       }
     }
   }
+  activeTestSelections.value = selectedSelections.slice()
+  productPickerVisible.value = false
   startupCheck.openStartupCheck()
 }
 
+function handleStartupCheckComplete() {
+  startupCheck.showStartupCheck.value = false
+  testing.switchPanel('start')
+}
+
 async function handleConfirmStart() {
-  const activeSelection = schedule.currentSelected.value
-  if (!activeSelection) {
+  const selections = activeTestSelections.value.length ? activeTestSelections.value : schedule.selectedScheduledOrders.value
+  if (!selections.length) {
     ElMessage.error('未找到已选中的仪器')
     return
   }
   completedSelections.value = []
-  const selections = [activeSelection]
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
   const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
   const missingDbOrder = ordersNeedingStart.find((order) => typeof order.dbId !== 'number')
@@ -116,7 +162,6 @@ async function handleConfirmStart() {
 
   if (!ordersNeedingStart.length) {
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
-    activeTestSelection.value = activeSelection
     testing.confirmStart()
     return
   }
@@ -133,7 +178,6 @@ async function handleConfirmStart() {
       schedule.markOrderStarted(order.id)
     }
     await schedule.refreshWorkOrders()
-    activeTestSelection.value = activeSelection
     testing.confirmStart()
   } catch (e) {
     ElMessage.error('开始测试失败')
@@ -141,8 +185,9 @@ async function handleConfirmStart() {
 }
 
 async function handleConfirmEnd() {
-  const activeSelection = activeTestSelection.value || schedule.currentSelected.value
-  const currentSelections = activeSelection ? [activeSelection] : []
+  const currentSelections = activeTestSelections.value.length
+    ? activeTestSelections.value
+    : schedule.selectedScheduledOrders.value
   completedSelections.value = currentSelections.slice()
 
   if (!currentSelections.length) {
@@ -218,14 +263,14 @@ async function handleConfirmEnd() {
 function handleConfirmStop() {
   const current = schedule.currentSelected.value
   testing.stopTest()
-  activeTestSelection.value = null
+  activeTestSelections.value = []
   schedule.cancelScheduledInstrument(current?.instrument.id)
   ElMessage.info('已中止本次测试，视频采集状态已重置')
 }
 
 async function handleShutdownComplete() {
   completedSelections.value = []
-  activeTestSelection.value = null
+  activeTestSelections.value = []
   schedule.clearSelectedSchedule()
   testing.resetTestSession()
   testing.switchPanel('dashboard')
@@ -290,7 +335,7 @@ onMounted(async () => {
         :get-order-by-instrument-id="schedule.getOrderByInstrumentId"
         :is-instrument-pending="schedule.isInstrumentPending"
         @update:search-keyword="schedule.searchKeyword.value = $event"
-        @instrument-drag-start="schedule.handleInstrumentDragStart"
+        @order-drag-start="schedule.handleOrderDragStart"
         @drag-end="schedule.handleDragEnd"
         @prev-week="schedule.prevWeek"
         @next-week="schedule.nextWeek"
@@ -309,7 +354,7 @@ onMounted(async () => {
         v-if="testing.currentPanel.value === 'start'"
         :current-selected="schedule.currentSelected.value"
         @back-to-startup-check="backToStartupCheck"
-        @open-startup-check="startupCheck.openStartupCheck"
+        @confirm-start="handleConfirmStart"
       />
 
       <TestingPanel
@@ -344,6 +389,41 @@ onMounted(async () => {
       />
     </div>
 
+    <div v-if="testing.currentPanel.value === 'dashboard' && productPickerVisible" class="product-picker-mask">
+      <div class="product-picker-dialog">
+        <div class="product-picker-header">
+          <div>
+            <h3>选择测试产品</h3>
+            <p>已排程工单确认开始实验后，在这里选择本次实际开始测试的产品。</p>
+          </div>
+          <button class="product-picker-close" @click="productPickerVisible = false">×</button>
+        </div>
+        <div class="product-picker-actions">
+          <button class="week-cal-nav" @click="selectAllProducts">全选</button>
+          <button class="week-cal-nav" @click="clearProductSelection">清空</button>
+          <span>已选择 {{ selectedProductIds.length }} / {{ productPickerRows.length }} 个产品</span>
+        </div>
+        <div class="product-picker-list">
+          <label v-for="row in productPickerRows" :key="row.id" class="product-picker-row">
+            <input
+              type="checkbox"
+              :checked="selectedProductIds.includes(row.id)"
+              @change="toggleProductSelection(row.id, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="product-main">{{ row.name }}</span>
+            <span class="product-sub">{{ row.sn || '-' }}</span>
+            <span class="product-order">{{ row.orderNo }} · {{ row.customer }}</span>
+          </label>
+        </div>
+        <div class="product-picker-footer">
+          <button class="week-cal-nav" @click="productPickerVisible = false">取消</button>
+          <button class="primary-btn" :disabled="selectedProductIds.length === 0" @click="confirmProductSelection">
+            确认开始实验
+          </button>
+        </div>
+      </div>
+    </div>
+
     <ActionModals
       :active-modal="testing.activeModal.value"
       :current-selected="schedule.currentSelected.value"
@@ -357,3 +437,105 @@ onMounted(async () => {
 </template>
 
 <style scoped src="./components/high-temp-pressure.shared.css"></style>
+<style scoped>
+.product-picker-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.product-picker-dialog {
+  width: min(760px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.product-picker-header,
+.product-picker-actions,
+.product-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.product-picker-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.product-picker-header p {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.product-picker-actions {
+  justify-content: flex-start;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-list {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.product-picker-row {
+  display: grid;
+  grid-template-columns: 24px minmax(160px, 1fr) minmax(100px, 140px) minmax(180px, 1.2fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  cursor: pointer;
+}
+
+.product-picker-row:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.product-main {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.product-sub,
+.product-order {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--color-border);
+  border-bottom: none;
+}
+</style>

@@ -86,6 +86,30 @@ const gridInnerWidth = computed(() => {
   return timeColWidth + base * widthFactor.value
 })
 
+const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
+const expandedOrderIds = ref<string[]>([])
+const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
+const toggleExpanded = (orderId: string) => {
+  const set = new Set(expandedOrderIds.value)
+  if (set.has(orderId)) set.delete(orderId)
+  else set.add(orderId)
+  expandedOrderIds.value = Array.from(set)
+}
+
+const getOrderStatusText = (order: WorkOrder) => {
+  if (order.status === 2) return '测试中'
+  if (order.status === 5) return '已完成'
+  if (order.status === 6) return '异常'
+  return '待排程'
+}
+
+const getStatusClass = (statusText: string) => {
+  if (statusText === '测试中') return 'status-running'
+  if (statusText === '已完成') return 'status-done'
+  if (statusText === '异常') return 'status-error'
+  return 'status-pending'
+}
+
 const getScheduledStyle = (item: any) => {
   const totalWidth = gridInnerWidth.value || 0
   const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
@@ -156,7 +180,7 @@ const getScheduledStyle = (item: any) => {
         <input
           :value="searchKeyword"
           type="text"
-          placeholder="搜索工单号/申请人/设备/类型"
+          placeholder="搜索工单号/客户/设备/仪器"
           @input="emit('update:searchKeyword', ($event.target as HTMLInputElement).value)"
         />
         <button v-if="searchKeyword" class="clear-btn" @click="emit('update:searchKeyword', '')">
@@ -170,33 +194,78 @@ const getScheduledStyle = (item: any) => {
         </div>
         <div v-else class="table-wrapper">
           <table class="data-table">
+            <colgroup>
+              <col class="col-applicant" />
+              <col class="col-task" />
+              <col class="col-device" />
+              <col class="col-status" />
+            </colgroup>
             <thead>
               <tr>
-                <th>工单号</th>
-                <th>设备</th>
                 <th>申请人</th>
-                <th>参数</th>
-                <th>类型</th>
+                <th>任务编号</th>
+                <th>使用设备</th>
+                <th>状态</th>
               </tr>
             </thead>
             <tbody>
-              <tr
-                v-for="order in unscheduledOrders"
-                :key="order.id"
-                draggable="true"
-                @dragstart="emit('drag-start', $event, order)"
-                @dragend="emit('drag-end', $event)"
-              >
-                <td class="cell-id">{{ order.id }}</td>
-                <td class="cell-device" :title="order.device">{{ order.device }}</td>
-                <td class="cell-applicant">{{ order.applicant }}</td>
-                <td class="cell-param">{{ order.level }} / {{ order.duration }}分</td>
-                <td class="cell-type">
-                  <span class="type-tag formal">
-                    {{ order.type }} · {{ order.statusText || order.status || '待领取' }}
-                  </span>
-                </td>
-              </tr>
+              <template v-for="order in unscheduledOrders" :key="order.id">
+                <tr
+                  class="order-row"
+                  :class="{ 'is-scheduled': scheduledOrderIdSet.has(order.id), 'is-expanded': isExpanded(order.id) }"
+                  draggable="true"
+                  @click="toggleExpanded(order.id)"
+                  @dragstart="emit('drag-start', $event, order)"
+                  @dragend="emit('drag-end', $event)"
+                >
+                  <td class="cell-applicant">{{ order.applicant }}</td>
+                  <td class="cell-id">{{ order.id }}</td>
+                  <td class="cell-device">
+                    <div class="cell-detail">
+                      <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
+                        <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+                      </span>
+                      <span class="device-summary" :title="order.device || '-'">{{ order.device || '-' }}</span>
+                    </div>
+                  </td>
+                  <td class="cell-status">
+                    <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">
+                      {{ getOrderStatusText(order) }}
+                    </span>
+                  </td>
+                </tr>
+                <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
+                  <td class="expanded-cell" colspan="4">
+                    <div class="instrument-panel">
+                      <div class="instrument-panel-head">
+                        <div>
+                          <div class="instrument-title">设备明细</div>
+                          <div class="instrument-subtitle">该工单当前未完成的测试设备</div>
+                        </div>
+                        <span class="instrument-count-pill">{{ order.instruments.length }} 台</span>
+                      </div>
+                      <div v-if="order.instruments.length === 0" class="instrument-empty">
+                        当前无待测试仪器
+                      </div>
+                      <div v-else class="instrument-list">
+                        <div
+                          v-for="instrument in order.instruments"
+                          :key="instrument.id"
+                          class="instrument-item"
+                        >
+                          <div class="instrument-main">
+                            <span class="instrument-name">{{ instrument.name }}</span>
+                            <span class="instrument-sn">{{ instrument.sn }}</span>
+                          </div>
+                          <div class="instrument-status-cell">
+                            <span class="status-pill status-pending">待排程</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>
@@ -253,7 +322,7 @@ const getScheduledStyle = (item: any) => {
                   ]"
                   :style="getScheduledStyle(it)"
                   @click="emit('select-scheduled-order', it.orderId)"
-                  :title="`${getOrderById(it.orderId)?.id || ''} · ${getOrderById(it.orderId)?.device || ''}`"
+                  :title="`${getOrderById(it.orderId)?.id || ''} · ${getOrderById(it.orderId)?.device || ''} · ${getOrderById(it.orderId)?.instruments.length || 0}台`"
                 >
                   <div class="scheduled-content">
                     <span class="device-name">{{ it.orderId }}</span>
@@ -261,7 +330,7 @@ const getScheduledStyle = (item: any) => {
                       <Icon icon="mdi:close" />
                     </button>
                   </div>
-                  <div class="scheduled-tag">{{ getOrderById(it.orderId)?.device }}</div>
+                  <div class="scheduled-tag">{{ getOrderById(it.orderId)?.device }} · {{ getOrderById(it.orderId)?.instruments.length || 0 }}台</div>
                   <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.orderId, $event)"></div>
                   <div class="resize-handle" @mousedown.stop.prevent="startResize(it.orderId, $event)"></div>
                 </div>
@@ -310,6 +379,11 @@ const getScheduledStyle = (item: any) => {
 
 <style scoped src="./vibration.shared.css"></style>
 <style scoped>
+.sidebar {
+  width: 460px;
+  min-width: 460px;
+}
+
 .grid-scroll { flex: 1; overflow: auto; }
 .grid-body { position: relative; overflow: hidden; }
 .grid-inner { position: relative; }
@@ -337,4 +411,333 @@ const getScheduledStyle = (item: any) => {
 .icon-btn { width:28px; height:28px; display:flex; align-items:center; justify-content:center; padding:0; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); cursor:pointer; }
 .icon-btn:disabled { opacity:.5; cursor:not-allowed; }
 .icon-btn:hover:not(:disabled) { background:var(--color-bg-hover); color:var(--color-text-primary); }
+
+.table-wrapper {
+  padding: 0;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.col-applicant { width: 16%; }
+.col-task { width: 28%; }
+.col-device { width: auto; }
+.col-status { width: 88px; }
+
+.data-table th {
+  padding: 13px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.order-row {
+  cursor: grab;
+}
+
+.order-row:active {
+  cursor: grabbing;
+}
+
+.order-row td {
+  position: relative;
+  padding: 14px 12px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background-color 0.15s ease;
+  vertical-align: middle;
+}
+
+.order-row td:first-child {
+  border-left: 3px solid transparent;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.order-row td:last-child {
+  border-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.order-row:hover td,
+.order-row.is-expanded td {
+  background: var(--color-bg-hover);
+  box-shadow: none;
+}
+
+.order-row.is-expanded td:first-child,
+.order-row:hover td:first-child {
+  border-left-color: var(--color-accent-blue);
+}
+
+.cell-applicant,
+.cell-id,
+.cell-status {
+  white-space: nowrap;
+}
+
+.cell-action,
+.cell-status {
+  text-align: center;
+}
+
+.cell-plan,
+.cell-purpose {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.cell-plan {
+  white-space: nowrap;
+}
+
+.cell-purpose {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.device-summary {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--color-text-secondary);
+}
+
+.cell-device {
+  font-weight: 400;
+  min-width: 0;
+}
+
+.cell-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 88px;
+}
+
+.op-btn {
+  min-width: 56px;
+  height: 28px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--color-accent-blue);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 10px;
+  border-radius: 8px;
+}
+
+.op-btn:hover {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.28);
+}
+
+.inline-status {
+  min-width: 58px;
+}
+
+.expanded-cell {
+  padding: 0 16px 12px 19px !important;
+  background: var(--color-bg-primary) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
+}
+
+.instrument-panel {
+  margin: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.instrument-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.instrument-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.instrument-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.instrument-count-pill {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+}
+
+.instrument-list {
+  gap: 8px;
+}
+
+.order-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 12px;
+  padding: 0 2px;
+}
+
+.order-meta-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.meta-label {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.meta-value {
+  min-width: 0;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instrument-item {
+  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 10px;
+}
+
+.instrument-item:hover {
+  border-color: var(--color-border);
+  background: var(--color-bg-hover);
+}
+
+.instrument-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.instrument-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instrument-sn {
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.instrument-status-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.instrument-empty {
+  padding: 10px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.cell-status {
+  text-align: center;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.status-pending {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-running {
+  color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.status-done {
+  color: var(--color-accent-green, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-error {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
 </style>

@@ -7,6 +7,7 @@ export interface WorkOrder {
   statusText?: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  planTime?: string | null
   deviceNumber?: string
   type: string
   applicant: string
@@ -15,6 +16,18 @@ export interface WorkOrder {
   level: string
   duration: number
   purpose: string
+  instruments: VibrationInstrument[]
+  selectedInstruments?: VibrationInstrument[]
+}
+
+export interface VibrationInstrument {
+  id: string
+  dbId?: number | string
+  name: string
+  sn: string
+  model?: string
+  remark?: string
+  completed?: boolean
 }
 
 export interface DevCheckItem {

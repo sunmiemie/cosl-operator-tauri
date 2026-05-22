@@ -492,11 +492,10 @@ export function useHighTempPressureTesting() {
   function confirmStart() {
     resetTestSession()
     closeModal()
-    testRunning.value = true
     testStartTime.value = Date.now()
     switchPanel('testing')
     nextTick(() => initChart())
-    captureStatusText.value = videoPath.value ? captureStatusText.value : '等待选择试验视频'
+    captureStatusText.value = '等待选择试验视频并启动识别采集'
   }
 
   async function pauseTest() {
@@ -514,7 +513,7 @@ export function useHighTempPressureTesting() {
       await startVideoCollection(!!captureOutputDir.value)
       return
     }
-    testRunning.value = true
+    ElMessage.warning('请先选择试验视频，再启动视频识别采集')
   }
 
   function stopTest() {

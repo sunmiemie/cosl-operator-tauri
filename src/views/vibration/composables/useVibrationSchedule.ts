@@ -1,6 +1,6 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { TimeSlot, WeekDay, WorkOrder } from '../types'
+import type { TimeSlot, VibrationInstrument, WeekDay, WorkOrder } from '../types'
 import {
   clearVibrationTableOrderSchedule,
   listVibrationTableOrders,
@@ -40,7 +40,56 @@ export function useVibrationSchedule() {
 
   const visibleOrderStatuses = [1, 2]
 
+  function normalizeVibrationInstruments(dto: VibrationTableOrderDTO): VibrationInstrument[] {
+    const rawList =
+      dto.instruments ||
+      dto.order_instruments ||
+      dto.vibration_table_order_instruments ||
+      dto.vibration_table_order_instrument ||
+      []
+    const list = Array.isArray(rawList) ? rawList : rawList ? [rawList] : []
+    if (list.length) {
+      return list.map((item, index) => {
+        const dbId = item.id ?? item.instrument_id ?? item.instrumentId
+        const name =
+          item.instrument_name ||
+          item.instrumentName ||
+          item.name ||
+          item.device_name ||
+          dto.device_name ||
+          `仪器${index + 1}`
+        const sn =
+          item.instrument_sn ||
+          item.instrumentSn ||
+          item.sn_numbers ||
+          item.sn ||
+          item.device_number ||
+          item.deviceNumber ||
+          item.code ||
+          `${dto.order_no}-${index + 1}`
+        return {
+          id: `vib-ins-${dto.id}-${dbId ?? sn ?? index}`,
+          dbId,
+          name,
+          sn,
+          model: item.model,
+          remark: item.remark,
+          completed: item.is_completed === true,
+        }
+      })
+    }
+
+    const fallbackSn = (dto as any).device_number || (dto as any).deviceNumber || dto.order_no
+    return [{
+      id: `vib-ins-${dto.id}-${fallbackSn}`,
+      name: dto.device_name || '振动台仪器',
+      sn: fallbackSn,
+      completed: false,
+    }]
+  }
+
   function mapVibrationTableOrder(dto: VibrationTableOrderDTO): WorkOrder {
+    const instruments = normalizeVibrationInstruments(dto)
     return {
       id: dto.order_no,
       dbId: dto.id,
@@ -48,22 +97,24 @@ export function useVibrationSchedule() {
       statusText: dto.status_text,
       scheduledStartAt: dto.scheduled_start_at || null,
       scheduledEndAt: dto.scheduled_end_at || null,
+      planTime: dto.planned_time || dto.test_date || dto.application_date || null,
       deviceNumber: (dto as any).device_number || (dto as any).deviceNumber || '',
       type: '正式实验',
-      applicant: dto.applicant,
-      phone: '', // 后端无此字段，用空字符串或占位
+      applicant: dto.test_application_unit || dto.applicant,
+      phone: dto.applicant_phone || '',
       device: dto.device_name,
       level: dto.level,
       duration: dto.duration,
-      purpose: dto.remark || '无'
+      purpose: dto.test_purpose || dto.remark || '无',
+      instruments,
     }
   }
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     try {
-      const byId = new Map<string, WorkOrder>()
       const pageSize = 100
+      const byId = new Map<string, WorkOrder>()
       for (const status of visibleOrderStatuses) {
         let page = 1
         let loaded = 0
@@ -409,7 +460,14 @@ export function useVibrationSchedule() {
     return workOrders.value.filter(o => {
       if (scheduled.has(o.id)) return false
       if (!kw) return true
-      return o.id.includes(kw) || o.applicant.includes(kw) || o.device.includes(kw) || o.type.includes(kw) || o.level.includes(kw)
+      return (
+        o.id.includes(kw) ||
+        o.applicant.includes(kw) ||
+        o.device.includes(kw) ||
+        o.type.includes(kw) ||
+        o.level.includes(kw) ||
+        o.instruments.some((item) => item.name.includes(kw) || item.sn.includes(kw))
+      )
     })
   })
 

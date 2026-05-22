@@ -1,10 +1,42 @@
 import { http, type ApiResponse } from './http'
 
+export type VibrationTableOrderInstrumentDTO = {
+  id?: number
+  instrument_id?: number | string
+  instrumentId?: number | string
+  instrument_name?: string
+  instrumentName?: string
+  name?: string
+  device_name?: string
+  instrument_sn?: string
+  instrumentSn?: string
+  sn_numbers?: string
+  sn?: string
+  device_number?: string
+  deviceNumber?: string
+  code?: string
+  model?: string
+  remark?: string
+  quantity?: number
+  weight?: string
+  length?: string
+  max_diameter?: string
+  is_completed?: boolean
+}
+
 export type VibrationTableOrderDTO = {
   id: number
   order_no: string
   order_type: string
   applicant: string
+  applicant_phone?: string
+  test_application_unit?: string
+  application_date?: string | null
+  planned_time?: string | null
+  task_number?: string | null
+  table_no?: string | null
+  test_type?: string
+  test_purpose?: string
   device_name: string
   device_number?: string
   deviceNumber?: string
@@ -16,6 +48,10 @@ export type VibrationTableOrderDTO = {
   status_text?: string
   scheduled_start_at?: string | null
   scheduled_end_at?: string | null
+  instruments?: VibrationTableOrderInstrumentDTO[]
+  order_instruments?: VibrationTableOrderInstrumentDTO[]
+  vibration_table_order_instrument?: VibrationTableOrderInstrumentDTO[] | VibrationTableOrderInstrumentDTO
+  vibration_table_order_instruments?: VibrationTableOrderInstrumentDTO[]
   created_at: string
   updated_at: string
 }

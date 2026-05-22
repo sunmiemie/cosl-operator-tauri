@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import VibrationDashboard from './components/VibrationDashboard.vue'
 import VibrationFlow from './components/VibrationFlow.vue'
@@ -19,6 +19,8 @@ const currentWorkOrderId = ref<string | null>(null)
 const currentWorkOrderSnapshot = ref<WorkOrder | null>(null)
 const showConfirmStartModal = ref(false)
 const calStep = ref<'amp' | 'dur'>('amp')
+const productPickerVisible = ref(false)
+const selectedInstrumentIds = ref<string[]>([])
 
 const stepList = computed(() => [] as const)
 
@@ -84,6 +86,42 @@ const currentWorkOrder = computed(() => currentWorkOrderSnapshot.value)
 const forcedMode = ref<'formal' | 'pre'>('pre')
 const testMode = computed<'formal' | 'pre'>(() => forcedMode.value)
 
+const productPickerRows = computed(() =>
+  selectedScheduledOrders.value.flatMap((order) =>
+    order.instruments.map((instrument) => ({
+      id: instrument.id,
+      name: instrument.name,
+      sn: instrument.sn,
+      model: instrument.model,
+      orderId: order.id,
+      customer: order.applicant,
+    }))
+  )
+)
+
+watch(
+  () => productPickerRows.value.map((row) => row.id).join('|'),
+  () => {
+    const validIds = new Set(productPickerRows.value.map((row) => row.id))
+    selectedInstrumentIds.value = selectedInstrumentIds.value.filter((id) => validIds.has(id))
+  }
+)
+
+function toggleInstrumentSelection(instrumentId: string, checked: boolean) {
+  const set = new Set(selectedInstrumentIds.value)
+  if (checked) set.add(instrumentId)
+  else set.delete(instrumentId)
+  selectedInstrumentIds.value = Array.from(set)
+}
+
+function selectAllInstruments() {
+  selectedInstrumentIds.value = productPickerRows.value.map((row) => row.id)
+}
+
+function clearInstrumentSelection() {
+  selectedInstrumentIds.value = []
+}
+
 const testing = useVibrationTesting({
   getCurrentWorkOrder: () => currentWorkOrder.value,
   getTestMode: () => testMode.value,
@@ -125,13 +163,31 @@ async function startExperiment() {
     ElMessage.warning('请先在日历中选择一个已排程工单')
     return
   }
+  if (selectedScheduledOrders.value.length > 1) {
+    ElMessage.warning('振动台一次实验请先选择一个工单')
+    return
+  }
   if (orderStatusMutating.value) {
     ElMessage.warning('当前正在更新工单状态，请稍后再试')
+    return
+  }
+  if (!selectedInstrumentIds.value.length) selectAllInstruments()
+  productPickerVisible.value = true
+}
+
+async function confirmInstrumentSelection() {
+  if (!selectedInstrumentIds.value.length) {
+    ElMessage.warning('请先选择本次实际开始测试的仪器')
     return
   }
 
   const selected = selectedScheduledOrders.value[0]
   if (!selected) return
+  const selectedInstruments = selected.instruments.filter((instrument) => selectedInstrumentIds.value.includes(instrument.id))
+  if (!selectedInstruments.length) {
+    ElMessage.warning('未找到已选择的仪器')
+    return
+  }
   const authOk = await initAuth()
   const authHeaders = authOk ? getAuthHeaders() : undefined
   const scheduleInfo = getScheduleChangePayload(selected.id)
@@ -149,15 +205,13 @@ async function startExperiment() {
         console.log('[vibration schedule push]', pushPayload)
         const resp = await pushEngineerAssistantSchedules(
           {
-            schedulesInfo: [
-              {
-                testId: pushPayload.testId,
-                testType: pushPayload.testType,
-                equipmentId: pushPayload.equipmentId,
-                startTime: scheduleInfo.startAtHour,
-                endTime: scheduleInfo.endAtHour,
-              },
-            ],
+            schedulesInfo: selectedInstruments.map((instrument) => ({
+              testId: pushPayload.testId,
+              testType: pushPayload.testType,
+              equipmentId: String(instrument.dbId || instrument.sn || instrument.name || pushPayload.equipmentId),
+              startTime: scheduleInfo.startAtHour,
+              endTime: scheduleInfo.endAtHour,
+            })),
           },
           authHeaders || {}
         )
@@ -189,8 +243,14 @@ async function startExperiment() {
   }
 
   currentWorkOrderId.value = selected.id
-  currentWorkOrderSnapshot.value = selected
+  currentWorkOrderSnapshot.value = {
+    ...selected,
+    selectedInstruments,
+    deviceNumber: selectedInstruments.map((instrument) => instrument.sn).join('、') || selected.deviceNumber,
+    device: selectedInstruments.map((instrument) => instrument.name).join('、') || selected.device,
+  }
   forcedMode.value = 'pre'
+  productPickerVisible.value = false
   resetStartupChecks()
   showStartupCheck.value = true
 }
@@ -242,6 +302,8 @@ async function backToDashboard(finalStatus: number = 1) {
   stage.value = 'dashboard'
   currentWorkOrderId.value = null
   currentWorkOrderSnapshot.value = null
+  selectedInstrumentIds.value = []
+  productPickerVisible.value = false
   showStartupCheck.value = false
 }
 
@@ -414,6 +476,41 @@ function toggleShutdownCheck(id: number) {
       />
     </div>
 
+    <div v-if="stage === 'dashboard' && productPickerVisible" class="product-picker-mask">
+      <div class="product-picker-dialog">
+        <div class="product-picker-header">
+          <div>
+            <h3>选择测试仪器</h3>
+            <p>已排程工单确认开始实验后，在这里选择本次实际开始测试的仪器。</p>
+          </div>
+          <button class="product-picker-close" @click="productPickerVisible = false">×</button>
+        </div>
+        <div class="product-picker-actions">
+          <button class="week-cal-nav" @click="selectAllInstruments">全选</button>
+          <button class="week-cal-nav" @click="clearInstrumentSelection">清空</button>
+          <span>已选择 {{ selectedInstrumentIds.length }} / {{ productPickerRows.length }} 台仪器</span>
+        </div>
+        <div class="product-picker-list">
+          <label v-for="row in productPickerRows" :key="row.id" class="product-picker-row">
+            <input
+              type="checkbox"
+              :checked="selectedInstrumentIds.includes(row.id)"
+              @change="toggleInstrumentSelection(row.id, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="product-main">{{ row.name }}</span>
+            <span class="product-sub">{{ row.sn || row.model || '-' }}</span>
+            <span class="product-order">{{ row.orderId }} · {{ row.customer }}</span>
+          </label>
+        </div>
+        <div class="product-picker-footer">
+          <button class="week-cal-nav" @click="productPickerVisible = false">取消</button>
+          <button class="primary-btn" :disabled="selectedInstrumentIds.length === 0" @click="confirmInstrumentSelection">
+            确认开始实验
+          </button>
+        </div>
+      </div>
+    </div>
+
     <VibrationGlobalModals
       :show-safety-warning="showSafetyWarning"
       :show-confirm-start-modal="showConfirmStartModal"
@@ -429,3 +526,105 @@ function toggleShutdownCheck(id: number) {
 </template>
 
 <style scoped src="./components/vibration.shared.css"></style>
+<style scoped>
+.product-picker-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.product-picker-dialog {
+  width: min(760px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.product-picker-header,
+.product-picker-actions,
+.product-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.product-picker-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.product-picker-header p {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.product-picker-actions {
+  justify-content: flex-start;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-list {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.product-picker-row {
+  display: grid;
+  grid-template-columns: 24px minmax(160px, 1fr) minmax(100px, 140px) minmax(180px, 1.2fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  cursor: pointer;
+}
+
+.product-picker-row:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.product-main {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.product-sub,
+.product-order {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.product-picker-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--color-border);
+  border-bottom: none;
+}
+</style>

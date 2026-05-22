@@ -15,6 +15,8 @@ const props = defineProps<{
   scheduledOrders: Record<string, string[]>
   scheduledLayoutItems: {
     instrumentId: string
+    instrumentIds: string[]
+    orderId: string
     dateStr: string
     startTimeKey: string
     startIdx: number
@@ -26,8 +28,8 @@ const props = defineProps<{
   maxLaneCount: number
   slotHeightPx: number
   isDragging: boolean
-  startResize: (instrumentId: string, e: MouseEvent) => void
-  startResizeTop: (instrumentId: string, e: MouseEvent) => void
+  startResize: (instrumentIds: string | string[], e: MouseEvent) => void
+  startResizeTop: (instrumentIds: string | string[], e: MouseEvent) => void
   resizingInstrumentId: string | null
   isResizing: boolean
   selectedScheduledOrderIds: string[]
@@ -41,7 +43,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:searchKeyword': [value: string]
-  'instrument-drag-start': [event: DragEvent, instrument: { id: string; label: string; sn: string }]
+  'order-drag-start': [event: DragEvent, order: WorkOrder, instrumentIds: string[]]
   'drag-end': [event: DragEvent]
   'prev-week': []
   'next-week': []
@@ -109,6 +111,45 @@ const scheduledInstrumentIdSet = computed(() => {
 
 const getPendingInstruments = (order: WorkOrder) => {
   return order.items.filter((item) => !scheduledInstrumentIdSet.value.has(item.id) && props.isInstrumentPending(item.id))
+}
+
+const selectedScheduledOrderGroups = computed(() => {
+  const map = new Map<string, { order: WorkOrder; count: number }>()
+  props.selectedScheduledOrders.forEach((selection) => {
+    const group = map.get(selection.order.id)
+    if (group) {
+      group.count += 1
+      return
+    }
+    map.set(selection.order.id, { order: selection.order, count: 1 })
+  })
+  return Array.from(map.values())
+})
+
+const getActiveInstruments = (order: WorkOrder) => {
+  return order.items.filter((item) => props.isInstrumentPending(item.id))
+}
+
+const getScheduledInstrumentCount = (order: WorkOrder) => {
+  return getActiveInstruments(order).length - getPendingInstruments(order).length
+}
+
+const getOrderStatusMeta = (order: WorkOrder) => {
+  if (order.statusCode === 2) {
+    return { label: '测试中', className: 'status-testing' }
+  }
+  if (getScheduledInstrumentCount(order) > 0) {
+    return { label: '已排程', className: 'status-scheduled' }
+  }
+  return { label: '待排程', className: 'status-pending' }
+}
+
+const getOrderDeviceSummary = (order: WorkOrder) => {
+  return order.type?.trim() || order.vesselType?.trim() || '-'
+}
+
+const canDragOrder = (order: WorkOrder) => {
+  return getPendingInstruments(order).length > 0 && order.statusCode !== 2
 }
 
 const getScheduledStyle = (item: any) => {
@@ -195,7 +236,7 @@ const handleGridDrop = (e: DragEvent) => {
 
         <div class="table-content">
           <div v-if="unscheduledOrders.length === 0" class="empty-state">
-            <p>无待排程工单</p>
+            <p>无待测试工单</p>
           </div>
           <div v-else class="table-wrapper">
             <table class="data-table">
@@ -204,51 +245,67 @@ const handleGridDrop = (e: DragEvent) => {
                   <th>申请人</th>
                   <th>任务编号</th>
                   <th>使用设备</th>
-                  <th>详情</th>
+                  <th>操作</th>
                   <th>状态</th>
                 </tr>
               </thead>
               <tbody>
                 <template v-for="order in unscheduledOrders" :key="order.id">
-                  <tr class="work-order-row" :class="{ 'is-expanded': order.expanded }" @click="order.expanded = !order.expanded">
+                  <tr
+                    class="order-row"
+                    :class="{
+                      'is-expanded': order.expanded,
+                      'is-readonly': !canDragOrder(order),
+                    }"
+                    :draggable="canDragOrder(order)"
+                    @click="order.expanded = !order.expanded"
+                    @dragstart="canDragOrder(order) && emit('order-drag-start', $event, order, getPendingInstruments(order).map((item) => item.id))"
+                    @dragend="emit('drag-end', $event)"
+                  >
                     <td class="cell-applicant">{{ order.applicant }}</td>
                     <td class="cell-id">{{ order.no }}</td>
-                    <td class="cell-device" :title="order.type">{{ order.type }}</td>
                     <td class="cell-detail">
-                      <span class="detail-link" @click.stop="openDetail(order)">详情</span>
                       <span class="expand-icon" @click.stop="order.expanded = !order.expanded">
                         <Icon :icon="order.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                       </span>
+                      <span class="device-summary" :title="getOrderDeviceSummary(order)">{{ getOrderDeviceSummary(order) }}</span>
                     </td>
-                    <td><span class="status-tag status-pending">{{ order.status || '待排程' }}</span></td>
+                    <td class="cell-action">
+                      <button class="op-btn view" @click.stop="openDetail(order)">详情</button>
+                    </td>
+                    <td class="cell-status">
+                      <span class="status-pill" :class="getOrderStatusMeta(order).className">
+                        {{ getOrderStatusMeta(order).label }}
+                      </span>
+                    </td>
                   </tr>
                   <tr v-if="order.expanded" :key="order.id + '-expanded'">
                     <td class="expanded-cell" colspan="5">
                       <div class="instrument-panel">
                         <div class="instrument-panel-head">
                           <div>
-                            <div class="instrument-title">待排程仪器</div>
-                            <div class="instrument-subtitle">拖拽单台仪器到右侧日历完成排程</div>
+                            <div class="instrument-title">设备明细</div>
+                            <div class="instrument-subtitle">该工单当前未完成的测试设备</div>
                           </div>
-                          <span class="instrument-count">{{ getPendingInstruments(order).length }} 台</span>
+                          <span class="instrument-count">{{ getActiveInstruments(order).length }} 台</span>
                         </div>
-                        <div v-if="getPendingInstruments(order).length === 0" class="instrument-empty">
-                          当前工单暂无待排程仪器
+                        <div v-if="getActiveInstruments(order).length === 0" class="instrument-empty">
+                          当前工单暂无待测试设备
                         </div>
                         <div v-else class="instrument-list">
                           <div
-                            v-for="item in getPendingInstruments(order)"
+                            v-for="item in getActiveInstruments(order)"
                             :key="item.id"
                             class="instrument-item"
-                            draggable="true"
-                            @dragstart="emit('instrument-drag-start', $event, item)"
-                            @dragend="emit('drag-end', $event)"
                           >
-                            <span class="instrument-name">
-                              <Icon icon="mdi:drag-vertical" class="instrument-drag-icon" />
-                              {{ item.label }}
-                            </span>
+                            <span class="instrument-name">{{ item.label }}</span>
                             <span class="instrument-sn">{{ item.sn }}</span>
+                            <span
+                              class="instrument-status"
+                              :class="scheduledInstrumentIdSet.has(item.id) ? 'instrument-status-scheduled' : 'instrument-status-pending'"
+                            >
+                              {{ scheduledInstrumentIdSet.has(item.id) ? '已排程' : '待排程' }}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -310,27 +367,30 @@ const handleGridDrop = (e: DragEvent) => {
                     v-for="it in scheduledLayoutItems
                       .map((x) => ({ ...x, dayIndex: currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
                       .filter((x) => x.dayIndex >= 0)"
-                    :key="it.instrumentId"
+                    :key="`${it.orderId}-${it.cellKey}`"
                     class="scheduled-item"
                     :class="[
-                      { 'is-selected': selectedScheduledOrderIds.includes(it.instrumentId) },
+                      { 'is-selected': it.instrumentIds.some((id) => selectedScheduledOrderIds.includes(id)) },
                       (isResizing && resizingInstrumentId === it.instrumentId ? 'is-resizing' : '')
                     ]"
                     :style="getScheduledStyle(it)"
-                    @click.stop="emit('select-scheduled-order', it.instrumentId)"
-                    :title="`${getInstrumentById(it.instrumentId)?.label || ''} · ${getInstrumentById(it.instrumentId)?.sn || ''} · ${getOrderByInstrumentId(it.instrumentId)?.no || ''}`"
+                    @click.stop="emit('select-scheduled-order', it.orderId)"
+                    :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${getOrderByInstrumentId(it.instrumentId)?.type || ''} · ${it.instrumentIds.length}台`"
                   >
-                    <div class="scheduled-content">
-                      <span class="device-name">{{ getInstrumentById(it.instrumentId)?.label }}</span>
-                      <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.cellKey, it.instrumentId)">
+                    <div class="scheduled-head">
+                      <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.cellKey, it.orderId)">
                         <Icon icon="mdi:close" />
                       </button>
                     </div>
-                    <div class="scheduled-tag">
-                      {{ getInstrumentById(it.instrumentId)?.sn }} · {{ getOrderByInstrumentId(it.instrumentId)?.no }}
+                    <div class="scheduled-content">
+                      <span class="device-name">{{ getOrderByInstrumentId(it.instrumentId)?.no }}</span>
                     </div>
-                    <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.instrumentId, $event)"></div>
-                    <div class="resize-handle" @mousedown.stop.prevent="startResize(it.instrumentId, $event)"></div>
+                    <div class="scheduled-tag">
+                      {{ getOrderByInstrumentId(it.instrumentId)?.applicant || '-' }} ·
+                      {{ getOrderByInstrumentId(it.instrumentId)?.applyDate || '-' }}
+                    </div>
+                    <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.instrumentIds, $event)"></div>
+                    <div class="resize-handle" @mousedown.stop.prevent="startResize(it.instrumentIds, $event)"></div>
                   </div>
                 </div>
 
@@ -355,14 +415,14 @@ const handleGridDrop = (e: DragEvent) => {
 
         <div class="control-center">
           <div class="control-center-left">
-            <template v-if="selectedScheduledOrders.length > 0">
+            <template v-if="selectedScheduledOrderGroups.length > 0">
               <div class="selected-order">
                 <Icon icon="mdi:check" class="selected-icon" />
-                <span class="selected-label">已选中工单: {{ selectedScheduledOrders.length }} 个</span>
+                <span class="selected-label">已选中工单: {{ selectedScheduledOrderGroups.length }} 个</span>
               </div>
               <span class="selected-divider">|</span>
-              <span v-for="o in selectedScheduledOrders" :key="o.instrument.id" class="selected-device">
-                {{ o.order.no }} · {{ o.instrument.label }}
+              <span v-for="group in selectedScheduledOrderGroups" :key="group.order.id" class="selected-device">
+                {{ group.order.no }} · {{ group.count }}台
               </span>
             </template>
             <span v-else class="selected-placeholder">请在日历中选择已排程的工单</span>
@@ -381,18 +441,24 @@ const handleGridDrop = (e: DragEvent) => {
 
 <style scoped src="./high-temp-pressure.shared.css"></style>
 <style scoped>
+.sidebar {
+  width: 440px;
+  min-width: 440px;
+}
+
 .grid-scroll { flex: 1; overflow: auto; }
 .grid-body { position: relative; overflow: hidden; }
 .grid-inner { position: relative; }
 .events-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
-.scheduled-item { position: absolute; padding: 6px 8px; border-radius: 6px; color: #fff; display: flex; flex-direction: column; justify-content: flex-start; cursor: pointer; user-select: none; transition: all 0.2s ease; overflow: hidden; pointer-events: auto; z-index: 10; background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4)); }
+.scheduled-item { position: absolute; padding: 4px 6px; background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4)); border-radius: 4px; color: #fff; display: flex; flex-direction: column; justify-content: flex-start; cursor: pointer; user-select: none; transition: all 0.2s ease; overflow: hidden; pointer-events: auto; z-index: 10; font-size: 10px; }
 .calendar-grid.is-dragging .scheduled-item { pointer-events: none; }
 .scheduled-item.is-selected { position: absolute !important; outline: 2px solid rgba(255,255,255,.95); box-shadow: 0 0 0 3px rgba(37,99,235,.35); transform: scale(1.04); }
 .scheduled-item.is-resizing { transition: none !important; transform: none !important; }
 .scheduled-item.is-resizing:hover { transform: none !important; }
-.scheduled-content { display: flex; align-items: flex-start; }
-.device-name { font-size: 12px; font-weight: 800; line-height: 1.25; padding-right: 20px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.scheduled-tag { font-size: 11px; font-weight: 600; margin-top: 4px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: rgba(255,255,255,.92); }
+.scheduled-head { position: static; }
+.scheduled-content { display: flex; justify-content: space-between; align-items: flex-start; }
+.device-name { font-size: 11px; font-weight: 600; color: #fff; line-height: 1.2; padding-right: 20px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.scheduled-tag { font-size: 9px; color: rgba(255, 255, 255, 0.9); font-weight: 500; margin-top: 2px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .remove-btn { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; align-items: center; justify-content: center; background: rgba(0,0,0,.18); border: none; color: rgba(255,255,255,.9); cursor: pointer; padding: 0; border-radius: 4px; opacity: 0; pointer-events: none; transition: opacity .15s, background .15s; display: flex; }
 .scheduled-item:hover .remove-btn { opacity: 1; pointer-events: auto; }
 .remove-btn:hover { background: rgba(0,0,0,.28); color: #fff; }
@@ -415,51 +481,136 @@ const handleGridDrop = (e: DragEvent) => {
 }
 
 .data-table th {
-  padding: 12px 16px;
+  padding: 13px 14px;
   border-bottom: 1px solid var(--color-border);
   font-size: 13px;
   letter-spacing: 0;
 }
 
-.work-order-row td {
+.order-row {
+  cursor: grab;
+}
+
+.order-row:active {
+  cursor: grabbing;
+}
+
+.order-row.is-readonly,
+.order-row.is-readonly:active {
+  cursor: default;
+}
+
+.order-row td {
   position: relative;
-  padding: 12px 16px;
+  padding: 14px 14px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background-color 0.15s ease;
+  vertical-align: middle;
 }
 
-.work-order-row td:first-child {
+.order-row td:first-child {
   border-left: 3px solid transparent;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }
 
-.work-order-row td:last-child {
+.order-row td:last-child {
   border-right: 0;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
 
-.work-order-row:hover td,
-.work-order-row.is-expanded td {
+.order-row:hover td,
+.order-row.is-expanded td {
   background: var(--color-bg-hover);
   box-shadow: none;
 }
 
-.work-order-row.is-expanded td:first-child,
-.work-order-row:hover td:first-child {
+.order-row.is-expanded td:first-child,
+.order-row:hover td:first-child {
   border-left-color: var(--color-accent-blue);
 }
 
 .cell-id {
   font-size: 13px;
   font-weight: 600;
+  color: var(--color-accent-blue);
 }
 
 .cell-applicant,
 .cell-device {
   font-weight: 400;
+}
+
+.cell-applicant,
+.cell-id,
+.cell-status {
+  white-space: nowrap;
+}
+
+.cell-action,
+.cell-status {
+  text-align: center;
+}
+
+.device-summary {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.op-btn {
+  min-width: 56px;
+  height: 28px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--color-accent-blue);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 10px;
+  border-radius: 8px;
+}
+
+.op-btn:hover {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.28);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.status-pending {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-scheduled {
+  color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.status-testing {
+  color: var(--color-accent-green, #10b981);
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
 .expanded-cell {
@@ -513,9 +664,13 @@ const handleGridDrop = (e: DragEvent) => {
 
 .instrument-item {
   align-items: center;
-  padding: 6px 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   background: transparent;
+  border-radius: 10px;
 }
 
 .instrument-item:hover {
@@ -528,14 +683,11 @@ const handleGridDrop = (e: DragEvent) => {
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-weight: 400;
+  font-weight: 500;
   color: var(--color-text-primary);
-}
-
-.instrument-drag-icon {
-  flex-shrink: 0;
-  font-size: 16px;
-  color: var(--color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .instrument-sn {
@@ -544,6 +696,28 @@ const handleGridDrop = (e: DragEvent) => {
   border-radius: 0;
   background: transparent;
   font-size: 11px;
+}
+
+.instrument-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.instrument-status-pending {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.instrument-status-scheduled {
+  color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.12);
 }
 
 .instrument-empty {

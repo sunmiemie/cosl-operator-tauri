@@ -53,6 +53,41 @@ function formatDisplayValue(value: number | string | undefined | null, unit: str
   return `${value} ${unit}`
 }
 
+function applyTaskDragPreview(e: DragEvent, order: WorkOrder) {
+  if (!e.dataTransfer || typeof document === 'undefined') return
+  const preview = document.createElement('div')
+  preview.style.position = 'fixed'
+  preview.style.top = '-9999px'
+  preview.style.left = '-9999px'
+  preview.style.padding = '8px 12px'
+  preview.style.borderRadius = '10px'
+  preview.style.background = 'linear-gradient(135deg, #3b82f6, #06b6d4)'
+  preview.style.color = '#ffffff'
+  preview.style.boxShadow = '0 10px 24px rgba(37, 99, 235, 0.22)'
+  preview.style.fontFamily = 'Microsoft YaHei, sans-serif'
+  preview.style.pointerEvents = 'none'
+  preview.style.minWidth = '160px'
+
+  const title = document.createElement('div')
+  title.textContent = order.no || '未命名任务'
+  title.style.fontSize = '13px'
+  title.style.fontWeight = '700'
+  title.style.lineHeight = '1.3'
+
+  const subtitle = document.createElement('div')
+  subtitle.textContent = `${order.applicant || '-'} · ${order.type || '-'}`
+  subtitle.style.marginTop = '4px'
+  subtitle.style.fontSize = '11px'
+  subtitle.style.opacity = '0.92'
+  subtitle.style.lineHeight = '1.2'
+
+  preview.appendChild(title)
+  preview.appendChild(subtitle)
+  document.body.appendChild(preview)
+  e.dataTransfer.setDragImage(preview, 18, 18)
+  window.setTimeout(() => preview.remove(), 0)
+}
+
 function normalizeInstrumentItems(dto: HighTempPressureOrderDTO, useDevice: string, taskNumber: string) {
   const list = Array.isArray(dto.instruments) ? dto.instruments : []
   if (list.length) return list
@@ -327,6 +362,8 @@ export function useHighTempPressureSchedule() {
 
   type ScheduledLayoutItem = {
     instrumentId: string
+    instrumentIds: string[]
+    orderId: string
     dateStr: string
     startTimeKey: string
     startIdx: number
@@ -337,8 +374,21 @@ export function useHighTempPressureSchedule() {
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
-    const dayMap: Record<string, ScheduledEvent[]> = {}
+    const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[]; orderId: string }>()
     Object.values(scheduledEvents.value).forEach((ev) => {
+      const order = getOrderByInstrumentId(ev.instrumentId)
+      const orderId = order?.id || ev.instrumentId
+      const key = `${orderId}_${ev.dateStr}_${ev.startTimeKey}_${ev.span}`
+      const group = groupedEvents.get(key)
+      if (group) {
+        group.instrumentIds.push(ev.instrumentId)
+        return
+      }
+      groupedEvents.set(key, { ...ev, instrumentIds: [ev.instrumentId], orderId })
+    })
+
+    const dayMap: Record<string, (ScheduledEvent & { instrumentIds: string[]; orderId: string })[]> = {}
+    Array.from(groupedEvents.values()).forEach((ev) => {
       if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
       dayMap[ev.dateStr].push(ev)
     })
@@ -353,7 +403,7 @@ export function useHighTempPressureSchedule() {
         })
         .filter((x) => x.startIdx >= 0)
         .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
-        .sort((a, b) => a.startIdx - b.startIdx || a.ev.instrumentId.localeCompare(b.ev.instrumentId))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
 
       const counts = new Array(timeSlots.value.length + 1).fill(0)
       mapped.forEach((x) => {
@@ -372,7 +422,7 @@ export function useHighTempPressureSchedule() {
         } else {
           laneEnds[lane] = x.endIdx
         }
-        laneById[x.ev.instrumentId] = lane
+        laneById[x.ev.orderId] = lane
       })
 
       mapped.forEach((x) => {
@@ -383,11 +433,13 @@ export function useHighTempPressureSchedule() {
         }
         out.push({
           instrumentId: x.ev.instrumentId,
+          instrumentIds: x.ev.instrumentIds,
+          orderId: x.ev.orderId,
           dateStr,
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
           span: x.span,
-          lane: laneById[x.ev.instrumentId] ?? 0,
+          lane: laneById[x.ev.orderId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
         })
@@ -403,15 +455,14 @@ export function useHighTempPressureSchedule() {
   })
 
   const unscheduledOrders = computed(() => {
-    const scheduledInstrumentIds = new Set(Object.keys(scheduledEvents.value))
     const keyword = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) =>
       (
         (order.statusCode !== undefined && SCHEDULABLE_STATUS.has(order.statusCode)) ||
-        (!!startedOrderIds.value[order.id] && order.items.some((item) => !completedInstrumentIds.value[item.id]))
+        !!startedOrderIds.value[order.id]
       ) &&
-      order.items.some((item) => !scheduledInstrumentIds.has(item.id) && !completedInstrumentIds.value[item.id]) &&
+      order.items.some((item) => !completedInstrumentIds.value[item.id]) &&
       (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
@@ -498,11 +549,20 @@ export function useHighTempPressureSchedule() {
     ;(e.currentTarget as HTMLElement | null)?.classList.add('dragging')
   }
 
-  function handleInstrumentDragStart(e: DragEvent, instrument: InstrumentItem) {
+  function handleOrderDragStart(e: DragEvent, order: WorkOrder, instrumentIds: string[]) {
+    draggedOrder.value = order
     isDragging.value = true
+    const ids = instrumentIds.filter((id) => !scheduledEvents.value[id] && !completedInstrumentIds.value[id])
+    if (!ids.length) {
+      e.preventDefault()
+      isDragging.value = false
+      draggedOrder.value = null
+      return
+    }
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move'
-      e.dataTransfer.setData('text/plain', instrument.id)
+      e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'high-temp-pressure-order', instrumentIds: ids }))
+      applyTaskDragPreview(e, order)
     }
     ;(e.currentTarget as HTMLElement | null)?.classList.add('dragging')
   }
@@ -556,28 +616,45 @@ export function useHighTempPressureSchedule() {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
     if (!e.dataTransfer) return
 
-    const instrumentId = e.dataTransfer.getData('text/plain')
-    if (!instrumentId) return
-    scheduleInstrument(instrumentId, dateStr, timeKey, isPast)
+    const payload = e.dataTransfer.getData('text/plain')
+    if (!payload) return
+    try {
+      const parsed = JSON.parse(payload) as { instrumentIds?: string[] }
+      if (Array.isArray(parsed.instrumentIds) && parsed.instrumentIds.length) {
+        parsed.instrumentIds.forEach((instrumentId) => scheduleInstrument(instrumentId, dateStr, timeKey, isPast))
+        selectedScheduledOrderIds.value = parsed.instrumentIds.filter((id) => scheduledEvents.value[id])
+        return
+      }
+    } catch {
+      // Legacy single-instrument drag payload.
+    }
+    scheduleInstrument(payload, dateStr, timeKey, isPast)
   }
 
   function handleSelectScheduledOrder(orderId: string) {
+    const layout = scheduledLayoutItems.value.find((item) => item.instrumentId === orderId || item.orderId === orderId)
+    const targetIds = layout?.instrumentIds?.length ? layout.instrumentIds : [orderId]
     const current = selectedScheduledOrderIds.value
-    if (current.includes(orderId)) {
-      selectedScheduledOrderIds.value = current.filter((id) => id !== orderId)
+    const allSelected = targetIds.every((id) => current.includes(id))
+    if (allSelected) {
+      selectedScheduledOrderIds.value = current.filter((id) => !targetIds.includes(id))
     } else {
-      selectedScheduledOrderIds.value = [...current, orderId]
+      selectedScheduledOrderIds.value = Array.from(new Set([...current, ...targetIds]))
     }
   }
 
   function handleUnschedule(cellKey: string, orderId: string) {
     void cellKey
     const next = { ...scheduledEvents.value }
-    delete next[orderId]
+    const order = getOrderById(orderId)
+    const targetIds = order
+      ? order.items.map((item) => item.id).filter((id) => !!next[id])
+      : [orderId]
+    targetIds.forEach((id) => {
+      delete next[id]
+    })
     scheduledEvents.value = next
-    if (selectedScheduledOrderIds.value.includes(orderId)) {
-      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => id !== orderId)
-    }
+    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => !targetIds.includes(id))
   }
 
   function clearSelectedSchedule() {
@@ -599,7 +676,12 @@ export function useHighTempPressureSchedule() {
 
   const getEvent = (instrumentId: string) => scheduledEvents.value[instrumentId]
 
-  const setEventSpan = (instrumentId: string, span: number) => {
+  const normalizeInstrumentIds = (instrumentIds: string | string[]) =>
+    Array.isArray(instrumentIds) ? instrumentIds : [instrumentIds]
+
+  const setEventSpan = (instrumentIds: string | string[], span: number) => {
+    const ids = normalizeInstrumentIds(instrumentIds)
+    const instrumentId = ids[0]
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
 
@@ -610,20 +692,27 @@ export function useHighTempPressureSchedule() {
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
 
-    scheduledEvents.value = { ...scheduledEvents.value, [instrumentId]: { ...ev, span: nextSpan } }
+    const next = { ...scheduledEvents.value }
+    ids.forEach((id) => {
+      const item = next[id]
+      if (item) next[id] = { ...item, span: nextSpan }
+    })
+    scheduledEvents.value = next
   }
 
   const resizing = ref<{
-    instrumentId: string
+    instrumentIds: string[]
     startY: number
     originSpan: number
     originStartIdx: number
     mode: 'bottom' | 'top'
   } | null>(null)
-  const resizingInstrumentId = computed(() => resizing.value?.instrumentId || null)
+  const resizingInstrumentId = computed(() => resizing.value?.instrumentIds[0] || null)
   const isResizing = computed(() => !!resizing.value)
 
-  const setEventStartAndSpan = (instrumentId: string, startIdx: number, span: number) => {
+  const setEventStartAndSpan = (instrumentIds: string | string[], startIdx: number, span: number) => {
+    const ids = normalizeInstrumentIds(instrumentIds)
+    const instrumentId = ids[0]
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
 
@@ -634,20 +723,24 @@ export function useHighTempPressureSchedule() {
 
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
-    scheduledEvents.value = {
-      ...scheduledEvents.value,
-      [instrumentId]: { ...ev, startTimeKey: nextStartKey, span: nextSpan },
-    }
+    const next = { ...scheduledEvents.value }
+    ids.forEach((id) => {
+      const item = next[id]
+      if (item) next[id] = { ...item, startTimeKey: nextStartKey, span: nextSpan }
+    })
+    scheduledEvents.value = next
   }
 
-  const startResize = (instrumentId: string, e: MouseEvent) => {
+  const startResize = (instrumentIds: string | string[], e: MouseEvent) => {
+    const ids = normalizeInstrumentIds(instrumentIds)
+    const instrumentId = ids[0]
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
 
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
 
-    resizing.value = { instrumentId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+    resizing.value = { instrumentIds: ids, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -655,12 +748,12 @@ export function useHighTempPressureSchedule() {
       const delta = me.clientY - ctx.startY
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       if (ctx.mode === 'bottom') {
-        setEventSpan(ctx.instrumentId, ctx.originSpan + deltaSlots)
+        setEventSpan(ctx.instrumentIds, ctx.originSpan + deltaSlots)
         return
       }
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.instrumentId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.instrumentIds, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
@@ -673,14 +766,16 @@ export function useHighTempPressureSchedule() {
     window.addEventListener('mouseup', onUp)
   }
 
-  const startResizeTop = (instrumentId: string, e: MouseEvent) => {
+  const startResizeTop = (instrumentIds: string | string[], e: MouseEvent) => {
+    const ids = normalizeInstrumentIds(instrumentIds)
+    const instrumentId = ids[0]
     const ev = scheduledEvents.value[instrumentId]
     if (!ev) return
 
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
 
-    resizing.value = { instrumentId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+    resizing.value = { instrumentIds: ids, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -689,7 +784,7 @@ export function useHighTempPressureSchedule() {
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.instrumentId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.instrumentIds, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
@@ -785,7 +880,7 @@ export function useHighTempPressureSchedule() {
     gotoDate,
     loadPresetSchedule,
     handleDragStart,
-    handleInstrumentDragStart,
+    handleOrderDragStart,
     handleDragEnd,
     handleDragOver,
     handleDragLeave,
