@@ -100,7 +100,7 @@ export function useVibrationSchedule() {
       planTime: dto.planned_time || dto.test_date || dto.application_date || null,
       deviceNumber: (dto as any).device_number || (dto as any).deviceNumber || '',
       type: '正式实验',
-      applicant: dto.test_application_unit || dto.applicant,
+      applicant: dto.applicant || '',
       phone: dto.applicant_phone || '',
       device: dto.device_name,
       level: dto.level,
