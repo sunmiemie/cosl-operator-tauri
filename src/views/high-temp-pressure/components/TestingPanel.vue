@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
 import type { HighTempPressureVideoMeasurement } from '../composables/useHighTempPressureTesting'
 
-defineProps<{
+const props = defineProps<{
   t1: number[]
   t2: number[]
   p: number[]
@@ -26,6 +27,45 @@ const emit = defineEmits<{
   'open-stop-modal': []
   'open-end-modal': []
 }>()
+
+const orderDetailFields = computed(() => {
+  const selected = props.currentSelected
+  if (!selected) return []
+
+  const { order, instrument } = selected
+  return [
+    { label: '工单ID', value: order.dbId ?? '-' },
+    { label: '任务编号', value: order.no, code: true },
+    { label: '委托编号', value: order.entrustNo },
+    { label: '申请人', value: order.applicant },
+    { label: '申请单位', value: order.applicantUnit },
+    { label: '申请日期', value: order.applyDate },
+    { label: '接收编号', value: order.receivingNo },
+    { label: '使用设备', value: order.vesselType },
+    { label: '设备类型', value: order.type },
+    { label: '目标温度', value: order.targetTemp, hot: true },
+    { label: '目标压力', value: order.targetPressure, pressure: true },
+    { label: '保温保压时间', value: order.keepCondition },
+    { label: '最大直径', value: order.maxDiameter || '-' },
+    { label: '当前状态', value: order.status },
+    { label: '当前仪器', value: instrument.label },
+    { label: '当前仪器SN', value: instrument.sn },
+    { label: '仪器数量', value: `${order.items.length} 台` },
+    { label: '三新确认日期', value: order.sanxinConfirmDate || '-' },
+    { label: '测试方确认1', value: order.sanxinTesterItem1 || '-' },
+    { label: '测试方确认2', value: order.sanxinTesterItem2 || '-' },
+    { label: '是否三新测试', value: order.sanxinIsSanxin ? '是' : '否' },
+    { label: '管理员签名', value: order.adminSignatureUrl ? '已上传' : '未上传' },
+    { label: '创建时间', value: order.createdAt || '-' },
+    { label: '更新时间', value: order.updatedAt || '-' },
+    { label: '备注', value: order.remark || '-', wide: true },
+    {
+      label: '仪器明细',
+      value: order.items.map((item) => `${item.label} / ${item.sn}`).join('；') || '-',
+      wide: true,
+    },
+  ]
+})
 </script>
 
 <template>
@@ -62,83 +102,73 @@ const emit = defineEmits<{
         <div class="capture-progress-fill" :style="{ width: `${captureProgressPct}%` }"></div>
       </div>
 
-      <div class="video-capture-grid">
-        <div class="video-pane source-pane">
-          <div class="video-pane-title">源视频</div>
-          <div class="source-file-card">
-            <div class="source-file-icon">
-              <Icon icon="mdi:filmstrip-box" />
+      <div class="monitoring-board">
+        <div class="monitoring-chart-card">
+          <div class="monitoring-card-head">
+            <div class="monitoring-card-title">
+              <Icon icon="mdi:chart-line" />
+              <span>实时监控曲线</span>
             </div>
-            <div class="source-file-body">
-              <div class="source-file-name">{{ videoFileName || '未选择视频文件' }}</div>
-              <div class="source-file-meta">
-                {{ videoFileName ? '后台解码采样中，页面展示实时识别帧' : '支持 WMV / MP4 / AVI / MOV' }}
+            <div class="monitoring-card-meta">
+              <span class="monitoring-series series-hot">上部水温</span>
+              <span class="monitoring-series series-warm">下部水温</span>
+              <span class="monitoring-series series-pressure">容器压力 x10</span>
+              <span class="monitoring-status">{{ captureStatusText }}</span>
+              <span class="monitoring-count">{{ csvCount }} 条</span>
+            </div>
+          </div>
+          <div class="monitoring-chart-body">
+            <div id="htp-chart" class="monitoring-chart"></div>
+          </div>
+        </div>
+        <div class="monitoring-order-card">
+          <div class="monitoring-card-head">
+            <div class="monitoring-card-title">
+              <Icon icon="mdi:clipboard-text-outline" />
+              <span>当前工单</span>
+            </div>
+            <span class="monitoring-order-tag">{{ testRunning ? '测试中' : '已暂停' }}</span>
+          </div>
+          <div v-if="currentSelected" class="monitoring-order-body">
+            <div class="monitoring-order-grid">
+              <div
+                v-for="field in orderDetailFields"
+                :key="field.label"
+                class="monitoring-order-item"
+                :class="{ 'is-wide': field.wide }"
+              >
+                <div class="monitoring-order-label">{{ field.label }}</div>
+                <div
+                  class="monitoring-order-value"
+                  :class="{
+                    'is-code': field.code,
+                    'is-hot': field.hot,
+                    'is-pressure': field.pressure,
+                    'is-multiline': field.wide,
+                  }"
+                >
+                  {{ field.value }}
+                </div>
+              </div>
+            </div>
+            <div class="monitoring-order-footer">
+              <div class="monitoring-order-stat">
+                <span>采集状态</span>
+                <strong>{{ testRunning ? '正常' : '暂停' }}</strong>
+              </div>
+              <div class="monitoring-order-stat">
+                <span>已采集数据</span>
+                <strong>{{ csvCount }} 条</strong>
               </div>
             </div>
           </div>
-          <div class="source-note">
-            <Icon icon="mdi:information-outline" />
-            <span>WMV 在当前 WebView 中不能稳定原生播放，已改为由 Python 解码并输出实时帧。</span>
-          </div>
-        </div>
-        <div class="video-pane">
-          <div class="video-pane-title">最新识别帧</div>
-          <div class="frame-viewer">
-            <img v-if="latestFrameUrl" :src="latestFrameUrl" class="capture-frame" alt="最新识别帧" />
-            <div v-else class="capture-placeholder">
-              <Icon icon="mdi:image-search-outline" />
-              <span>等待脚本输出 latest_frame.jpg</span>
-            </div>
+          <div v-else class="monitoring-order-empty">
+            <Icon icon="mdi:clipboard-remove-outline" />
+            <span>未选择排程仪器</span>
           </div>
         </div>
       </div>
       <div v-if="exportedCaptureDir" class="export-path">已保存：{{ exportedCaptureDir }}</div>
-    </div>
-
-    <div class="testing-grid">
-      <div class="card chart-fill">
-        <div class="card-header">
-          <div class="card-title">📈 实时监控曲线</div>
-        </div>
-        <div class="card-body">
-          <div id="htp-chart" class="chart-container"></div>
-        </div>
-      </div>
-      <div class="right-col">
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">📊 实时参数</div>
-            <span style="font-size:11px;color:var(--color-text-secondary)">测试中</span>
-          </div>
-          <div class="card-body" style="padding:10px 14px">
-            <div class="realtime-stats">
-              <div class="rt-stat"><div class="rt-stat-label">上部水温</div><div class="rt-stat-val temp">{{ t1[t1.length - 1]?.toFixed(1) || '--.-' }}°C</div></div>
-              <div class="rt-stat"><div class="rt-stat-label">下部水温</div><div class="rt-stat-val temp">{{ t2[t2.length - 1]?.toFixed(1) || '--.-' }}°C</div></div>
-              <div class="rt-stat" style="grid-column:span 2"><div class="rt-stat-label">容器压力</div><div class="rt-stat-val press">{{ p[p.length - 1]?.toFixed(2) || '--.--' }} MPa</div></div>
-            </div>
-            <div class="divider"></div>
-            <div style="display:flex;justify-content:space-between">
-              <div><div class="info-key">已采集数据</div><div class="info-val">{{ csvCount }} 条</div></div>
-              <div><div class="info-key">采集状态</div><div class="info-val" style="color:var(--green-bright)">正常</div></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header"><div class="card-title">📋 当前工单</div></div>
-          <div class="card-body" style="padding:10px 14px">
-            <div class="info-grid" style="grid-template-columns:1fr 1fr;gap:8px" v-if="currentSelected">
-              <div class="info-item"><div class="info-key">工单编号</div><div class="info-val" style="font-size:12px">{{ currentSelected.order.no }}</div></div>
-              <div class="info-item"><div class="info-key">器皿类型</div><div class="info-val">{{ currentSelected.order.vesselType }}</div></div>
-              <div class="info-item"><div class="info-key">目标温度</div><div class="info-val" style="color:var(--red-bright)">{{ currentSelected.order.targetTemp }}</div></div>
-              <div class="info-item"><div class="info-key">目标压力</div><div class="info-val" style="color:var(--cyan)">{{ currentSelected.order.targetPressure }}</div></div>
-              <div class="info-item"><div class="info-key">保温保压</div><div class="info-val">{{ currentSelected.order.keepCondition }}</div></div>
-              <div class="info-item"><div class="info-key">本次仪器</div><div class="info-val">{{ currentSelected.instrument.label }} / {{ currentSelected.instrument.sn }}</div></div>
-            </div>
-            <div v-else class="text-muted">未选择排程仪器</div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <div class="test-controls">
@@ -265,147 +295,229 @@ const emit = defineEmits<{
   transition: width 0.28s ease;
 }
 
-.video-capture-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.video-pane {
-  min-width: 0;
-}
-
-.video-pane-title {
-  color: var(--capture-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  margin-bottom: 8px;
-}
-
-.source-file-card,
-.frame-viewer {
-  height: 240px;
-  width: 100%;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 16px;
-  background: #0f172a;
-  overflow: hidden;
-}
-
-.source-file-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 22px;
-  background:
-    linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.94)),
-    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 10px);
-}
-
-.source-file-icon {
-  flex: 0 0 auto;
-  width: 56px;
-  height: 56px;
-  display: grid;
-  place-items: center;
-  border-radius: 18px;
-  color: #fbbf24;
-  background: rgba(245, 158, 11, 0.14);
-  border: 1px solid rgba(245, 158, 11, 0.22);
-  font-size: 28px;
-}
-
-.source-file-body {
-  min-width: 0;
-}
-
-.source-file-name {
-  color: #f8fafc;
-  font-size: 16px;
-  font-weight: 800;
-  line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.source-file-meta {
-  color: #94a3b8;
-  font-size: 12px;
-  line-height: 1.6;
-  margin-top: 8px;
-}
-
-.source-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin-top: 10px;
-  color: var(--capture-muted);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.source-note svg {
-  flex: 0 0 auto;
-  margin-top: 2px;
-}
-
-.frame-viewer {
-  position: relative;
-  display: grid;
-  place-items: center;
-  background:
-    linear-gradient(135deg, #020617, #0f172a),
-    radial-gradient(circle at 50% 40%, rgba(59, 130, 246, 0.14), transparent 42%);
-}
-
-.frame-viewer::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-  background-size: 28px 28px;
-  mask-image: radial-gradient(circle at center, black, transparent 76%);
-}
-
-.capture-frame {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  max-height: 320px;
-  object-fit: contain;
-  display: block;
-}
-
-.capture-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: #64748b;
-  text-align: center;
-  padding: 16px;
-  min-height: 240px;
-  font-size: 13px;
-}
-
-.capture-placeholder svg {
-  font-size: 28px;
-  color: #94a3b8;
-}
-
 .export-path {
   margin-top: 10px;
   font-size: 12px;
   color: var(--color-accent-blue);
   word-break: break-all;
+}
+
+.monitoring-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.monitoring-chart-card,
+.monitoring-order-card {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.monitoring-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.monitoring-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--capture-ink);
+}
+
+.monitoring-card-title svg {
+  color: var(--color-accent-blue);
+  font-size: 18px;
+}
+
+.monitoring-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.monitoring-series,
+.monitoring-status,
+.monitoring-count,
+.monitoring-order-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.monitoring-series::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+
+.series-hot {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.series-hot::before {
+  background: #ef4444;
+}
+
+.series-warm {
+  color: #ea580c;
+  background: rgba(249, 115, 22, 0.08);
+}
+
+.series-warm::before {
+  background: #f97316;
+}
+
+.series-pressure {
+  color: #0284c7;
+  background: rgba(14, 165, 233, 0.1);
+}
+
+.series-pressure::before {
+  background: #0ea5e9;
+}
+
+.monitoring-status,
+.monitoring-count {
+  color: var(--capture-muted);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.monitoring-order-tag {
+  color: var(--color-accent-blue);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.monitoring-chart-body {
+  padding: 8px 14px 14px;
+}
+
+.monitoring-chart {
+  width: 100%;
+  height: 420px;
+  min-height: 420px;
+}
+
+.monitoring-order-body {
+  padding: 14px;
+}
+
+.monitoring-order-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+}
+
+.monitoring-order-item {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.86));
+}
+
+.monitoring-order-item.is-wide {
+  grid-column: 1 / -1;
+}
+
+.monitoring-order-label {
+  font-size: 12px;
+  color: var(--capture-muted);
+}
+
+.monitoring-order-value {
+  margin-top: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--capture-ink);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.monitoring-order-value.is-code {
+  font-size: 13px;
+  color: var(--color-accent-blue);
+}
+
+.monitoring-order-value.is-hot {
+  color: #dc2626;
+}
+
+.monitoring-order-value.is-pressure {
+  color: #0284c7;
+}
+
+.monitoring-order-value.is-multiline {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.monitoring-order-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.monitoring-order-stat {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(37, 99, 235, 0.06);
+  border: 1px solid rgba(37, 99, 235, 0.12);
+}
+
+.monitoring-order-stat span {
+  display: block;
+  font-size: 12px;
+  color: var(--capture-muted);
+}
+
+.monitoring-order-stat strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--capture-ink);
+}
+
+.monitoring-order-empty {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--capture-muted);
+  font-size: 13px;
+  padding: 18px;
+}
+
+.monitoring-order-empty svg {
+  font-size: 28px;
+  color: #94a3b8;
 }
 
 .test-controls {
@@ -571,19 +683,33 @@ const emit = defineEmits<{
 }
 
 @media (max-width: 1100px) {
-  .video-capture-grid,
-  .live-measurement-grid,
   .test-controls {
     grid-template-columns: 1fr;
   }
 
-  .video-capture-head {
-    align-items: stretch;
-    flex-direction: column;
+  .monitoring-board {
+    grid-template-columns: 1fr;
   }
 
-  .select-video-btn {
-    width: 100%;
+  .monitoring-chart {
+    height: 320px;
+    min-height: 320px;
+  }
+}
+
+@media (max-width: 768px) {
+  .monitoring-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .monitoring-card-meta {
+    justify-content: flex-start;
+  }
+
+  .monitoring-order-grid,
+  .monitoring-order-footer {
+    grid-template-columns: 1fr;
   }
 }
 </style>

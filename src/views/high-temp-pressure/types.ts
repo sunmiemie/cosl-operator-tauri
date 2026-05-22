@@ -26,8 +26,12 @@ export interface WorkOrder {
   targetTemp: string
   targetPressure: string
   keepCondition: string
+  maxDiameter?: string
+  remark?: string
   status: string
   statusCode?: number
+  createdAt?: string
+  updatedAt?: string
   expanded: boolean
   items: InstrumentItem[]
   adminSignatureUrl?: string

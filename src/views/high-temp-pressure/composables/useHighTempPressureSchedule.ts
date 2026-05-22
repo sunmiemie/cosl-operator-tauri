@@ -56,6 +56,11 @@ function formatDisplayValue(value: number | string | undefined | null, unit: str
   return `${value} ${unit}`
 }
 
+function formatHoldTime(value: number | string | undefined | null) {
+  if (value === undefined || value === null || value === '') return '-'
+  return String(value)
+}
+
 function applyTaskDragPreview(e: DragEvent, order: WorkOrder) {
   if (!e.dataTransfer || typeof document === 'undefined') return
   const preview = document.createElement('div')
@@ -138,9 +143,13 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     type: useDevice,
     targetTemp: formatDisplayValue(dto.target_temp, 'C'),
     targetPressure: formatDisplayValue(dto.target_pressure, 'MPa'),
-    keepCondition: dto.remark?.trim() || '-',
+    keepCondition: formatHoldTime(dto.hold_time),
+    maxDiameter: formatDisplayValue(dto.max_diameter, 'mm'),
+    remark: dto.remark?.trim() || '-',
     status: getStatusText(dto.status, dto.status_text),
     statusCode: dto.status,
+    createdAt: dto.created_at || '-',
+    updatedAt: dto.updated_at || '-',
     expanded: false,
     items,
     adminSignatureUrl: sigUrl,
