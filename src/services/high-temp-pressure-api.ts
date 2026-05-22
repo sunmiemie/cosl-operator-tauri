@@ -37,6 +37,8 @@ export interface HighTempPressureOrderInstrumentDTO {
   test_type?: string
   quantity?: number
   max_diameter?: number | null
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
   is_completed?: boolean
   completed_at?: string | null
 }
@@ -112,6 +114,39 @@ export async function finishHighTempPressureOrder(
   return http.post<MutationResponse>(
     `/test/high-temp-pressure/order/finish/${orderId}/`,
     payload,
+    headers
+  )
+}
+
+export type HighTempPressureInstrumentScheduleBody = {
+  scheduled_start_at: string
+  scheduled_end_at: string
+}
+
+export type HighTempPressureInstrumentScheduleResponse = {
+  code: number
+  msg?: string
+  data?: HighTempPressureOrderInstrumentDTO & { order_id?: number }
+}
+
+export async function saveHighTempPressureInstrumentSchedule(
+  instrumentId: number,
+  data: HighTempPressureInstrumentScheduleBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HighTempPressureInstrumentScheduleResponse>> {
+  return http.post<HighTempPressureInstrumentScheduleResponse>(
+    `/test/high-temp-pressure/order/instrument-schedule/${instrumentId}/`,
+    data,
+    headers
+  )
+}
+
+export async function clearHighTempPressureInstrumentSchedule(
+  instrumentId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HighTempPressureInstrumentScheduleResponse>> {
+  return http.delete<HighTempPressureInstrumentScheduleResponse>(
+    `/test/high-temp-pressure/order/instrument-schedule/${instrumentId}/`,
     headers
   )
 }

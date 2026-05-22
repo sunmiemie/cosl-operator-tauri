@@ -14,6 +14,8 @@ export type HighTempBoxOrderDTO = {
   feedback_reason: string
   status: number
   status_text?: string
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -33,6 +35,8 @@ export type HighTempBoxOrder = {
   feedbackReason: string
   status: number
   statusText?: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -53,6 +57,8 @@ export function mapHighTempBoxOrder(dto: HighTempBoxOrderDTO): HighTempBoxOrder 
     feedbackReason: dto.feedback_reason,
     status: dto.status,
     statusText: dto.status_text,
+    scheduledStartAt: dto.scheduled_start_at || null,
+    scheduledEndAt: dto.scheduled_end_at || null,
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
   }
@@ -136,6 +142,33 @@ export async function changeHighTempBoxOrderStatus(
   return http.post<HighTempBoxOrderStatusMutationResponse>(
     `/test/high-temp-box/order/status/${orderId}/`,
     { status },
+    headers
+  )
+}
+
+export type HighTempBoxOrderScheduleBody = {
+  scheduled_start_at: string
+  scheduled_end_at: string
+}
+
+export async function saveHighTempBoxOrderSchedule(
+  orderId: number,
+  data: HighTempBoxOrderScheduleBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HighTempBoxOrderWriteResponse>> {
+  return http.post<HighTempBoxOrderWriteResponse>(
+    `/test/high-temp-box/order/schedule/${orderId}/`,
+    data,
+    headers
+  )
+}
+
+export async function clearHighTempBoxOrderSchedule(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HighTempBoxOrderWriteResponse>> {
+  return http.delete<HighTempBoxOrderWriteResponse>(
+    `/test/high-temp-box/order/schedule/${orderId}/`,
     headers
   )
 }

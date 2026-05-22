@@ -1,12 +1,20 @@
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import * as echarts from 'echarts'
+import { ElMessage } from 'element-plus'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
 import { useAuth } from '@/composables/useAuth'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import type { OcrRegion } from '@/types/ocr'
-import { changeHighTempBoxOrderStatus, listHighTempBoxOrders, mapHighTempBoxOrder, type HighTempBoxOrder } from '@/services/high-temp-box-order-api'
+import {
+  changeHighTempBoxOrderStatus,
+  clearHighTempBoxOrderSchedule,
+  listHighTempBoxOrders,
+  mapHighTempBoxOrder,
+  saveHighTempBoxOrderSchedule,
+  type HighTempBoxOrder,
+} from '@/services/high-temp-box-order-api'
 
 export interface WorkOrder {
   id: string
@@ -22,6 +30,8 @@ export interface WorkOrder {
   remark: string
   status: number
   statusText?: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
   priority?: 'high' | 'normal' | 'low'
 }
 
@@ -94,11 +104,60 @@ export function useHighTempBox() {
   }
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
-  const visibleOrderStatus = 1
+  const visibleOrderStatuses = [1, 2]
   const orderStatusMutating = ref(false)
+
+  function markPendingSchedule(orderId: string, event: ScheduledEvent | null) {
+    pendingScheduleEvents.value = {
+      ...pendingScheduleEvents.value,
+      [orderId]: event ? { ...event } : null,
+    }
+  }
+
+  function clearPendingSchedule(orderId: string) {
+    const next = { ...pendingScheduleEvents.value }
+    delete next[orderId]
+    pendingScheduleEvents.value = next
+  }
+
+  function parseBackendDateTime(value?: string | null) {
+    if (!value) return null
+    const text = value.includes('T') ? value : value.replace(' ', 'T')
+    const parsed = new Date(text)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  function eventFromOrder(order: WorkOrder): ScheduledEvent | null {
+    const start = parseBackendDateTime(order.scheduledStartAt)
+    const end = parseBackendDateTime(order.scheduledEndAt)
+    if (!start || !end || end <= start) return null
+    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+    return {
+      orderId: order.id,
+      dateStr: fmtDate(start),
+      startTimeKey,
+      span,
+    }
+  }
+
+  function restoreScheduledEvents(orders: WorkOrder[]) {
+    const next: Record<string, ScheduledEvent> = {}
+    orders.forEach((order) => {
+      const ev = eventFromOrder(order)
+      if (ev) next[order.id] = ev
+    })
+    Object.entries(pendingScheduleEvents.value).forEach(([orderId, event]) => {
+      if (event) next[orderId] = event
+      else delete next[orderId]
+    })
+    scheduledEvents.value = next
+  }
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
@@ -107,30 +166,35 @@ export function useHighTempBox() {
     try {
       const all: HighTempBoxOrder[] = []
       const pageSize = 100
-      let page = 1
-      let total = Infinity
+      for (const status of visibleOrderStatuses) {
+        let page = 1
+        let loaded = 0
+        let total = Infinity
 
-      while (all.length < total) {
-        const resp = await listHighTempBoxOrders({ page, pageSize, status: visibleOrderStatus })
-        if (!resp.success || !resp.data) {
-          workOrdersError.value = resp.error || '获取高温箱工单失败'
-          break
+        while (loaded < total) {
+          const resp = await listHighTempBoxOrders({ page, pageSize, status })
+          if (!resp.success || !resp.data) {
+            workOrdersError.value = resp.error || '获取高温箱工单失败'
+            break
+          }
+          if (resp.data.code !== 0) {
+            workOrdersError.value = resp.data.msg || '获取高温箱工单失败'
+            break
+          }
+
+          const chunk = resp.data.data.list.map(mapHighTempBoxOrder).filter((o) => o.status === status)
+          all.push(...chunk)
+          loaded += resp.data.data.list.length
+          total = resp.data.data.total
+
+          if (resp.data.data.list.length === 0) break
+          page += 1
+          if (page > 50) break
         }
-        if (resp.data.code !== 0) {
-          workOrdersError.value = resp.data.msg || '获取高温箱工单失败'
-          break
-        }
-
-        const chunk = resp.data.data.list.map(mapHighTempBoxOrder).filter((o) => o.status === visibleOrderStatus)
-        all.push(...chunk)
-        total = resp.data.data.total
-
-        if (chunk.length === 0) break
-        page += 1
-        if (page > 50) break
       }
 
       workOrders.value = all
+      restoreScheduledEvents(all)
     } catch (e) {
       workOrdersError.value = e instanceof Error ? e.message : '获取高温箱工单失败'
     } finally {
@@ -335,6 +399,47 @@ export function useHighTempBox() {
       span: ev.span,
       startAtHour: `${ev.dateStr} ${startHh}`,
       endAtHour: `${ev.dateStr} ${endHh}`,
+      scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
+      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+    }
+  }
+
+  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent) {
+    const order = getOrderById(orderId)
+    const schedule = getScheduleChangePayload(orderId)
+    if (!order?.dbId || !schedule) return true
+
+    markPendingSchedule(orderId, scheduledEvents.value[orderId] || null)
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
+        ElMessage.error('登录状态失效，请重新登录后再保存排期')
+        return false
+      }
+      const resp = await saveHighTempBoxOrderSchedule(
+        order.dbId,
+        {
+          scheduled_start_at: schedule.scheduledStartAt,
+          scheduled_end_at: schedule.scheduledEndAt,
+        },
+        getAuthHeaders()
+      )
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
+        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        return false
+      }
+      const saved = resp.data.data
+      if (saved) {
+        const updated = mapHighTempBoxOrder(saved)
+        const savedEvent = eventFromOrder(updated)
+        workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
+        if (savedEvent) scheduledEvents.value = { ...scheduledEvents.value, [updated.id]: savedEvent }
+      }
+      return true
+    } finally {
+      clearPendingSchedule(orderId)
     }
   }
 
@@ -453,16 +558,51 @@ export function useHighTempBox() {
       if (scheduled.has(p.id)) return
       const d = addDays(base, p.d)
       const dateStr = fmtDate(d)
-      scheduleOrder(p.id, dateStr, p.t, false)
+      void scheduleOrder(p.id, dateStr, p.t, false)
     })
   }
 
-  function handleUnschedule(cellKey: string, orderId: string) {
+  async function handleUnschedule(cellKey: string, orderId: string) {
     void cellKey
+    const removed = scheduledEvents.value[orderId]
+    const wasSelected = selectedScheduledOrder.value === orderId
     if (selectedScheduledOrder.value === orderId) selectedScheduledOrder.value = null
     const next = { ...scheduledEvents.value }
     delete next[orderId]
     scheduledEvents.value = next
+    const order = getOrderById(orderId)
+    if (!order?.dbId) return
+    markPendingSchedule(orderId, null)
+
+    const rollback = () => {
+      if (removed) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: removed }
+      if (wasSelected) selectedScheduledOrder.value = orderId
+    }
+
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        rollback()
+        ElMessage.error('登录状态失效，请重新登录后再取消排期')
+        return
+      }
+      const resp = await clearHighTempBoxOrderSchedule(order.dbId, getAuthHeaders())
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        rollback()
+        ElMessage.error(resp.data?.msg || resp.error || '取消排期失败')
+        return
+      }
+      const saved = resp.data.data
+      if (saved) {
+        const updated = mapHighTempBoxOrder(saved)
+        workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
+      }
+    } catch (error) {
+      rollback()
+      ElMessage.error(error instanceof Error ? error.message : '取消排期失败')
+    } finally {
+      clearPendingSchedule(orderId)
+    }
   }
 
   function removeSchedule(cellKey: string) {
@@ -506,13 +646,15 @@ export function useHighTempBox() {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
   }
 
-  function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean) {
+  async function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     if (!orderId) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
     if (scheduledEvents.value[orderId]) return
 
+    const previousEvents = { ...scheduledEvents.value }
+    const previousSelected = selectedScheduledOrder.value
     const order = getOrderById(orderId)
     const span = Math.max(1, Math.ceil(Number(order?.duration || 0) / 60) || 1)
     const startIdx = timeKeyToIndex.value[timeKey]
@@ -526,15 +668,26 @@ export function useHighTempBox() {
       isDragging.value = false
       draggedOrderId.value = null
     }
+    try {
+      const saved = await persistScheduledEvent(orderId)
+      if (!saved) {
+        scheduledEvents.value = previousEvents
+        selectedScheduledOrder.value = previousSelected
+      }
+    } catch (error) {
+      scheduledEvents.value = previousEvents
+      selectedScheduledOrder.value = previousSelected
+      ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+    }
   }
 
-  function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
+  async function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     e.preventDefault()
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
     const orderId = e.dataTransfer?.getData('text/plain')
     if (!orderId) return
-    scheduleOrder(orderId, dateStr, timeKey, isPast)
+    await scheduleOrder(orderId, dateStr, timeKey, isPast)
   }
 
   const getEvent = (orderId: string) => scheduledEvents.value[orderId]
@@ -557,6 +710,7 @@ export function useHighTempBox() {
   const startResize = (orderId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[orderId]
     if (!ev) return
+    const previous = { ...ev }
     resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, isTop: false }
 
     const onMove = (me: MouseEvent) => {
@@ -571,6 +725,10 @@ export function useHighTempBox() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
+      void persistScheduledEvent(orderId, previous).catch((error) => {
+        scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
@@ -599,6 +757,7 @@ export function useHighTempBox() {
   const startResizeTop = (orderId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[orderId]
     if (!ev) return
+    const previous = { ...ev }
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
 
@@ -623,6 +782,10 @@ export function useHighTempBox() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
+      void persistScheduledEvent(orderId, previous).catch((error) => {
+        scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
@@ -670,7 +833,12 @@ export function useHighTempBox() {
 
     orderStatusMutating.value = true
     try {
-      const resp = await changeHighTempBoxOrderStatus(selected.dbId, 2)
+      const authOk = await initAuth()
+      if (!authOk) {
+        alert('登录状态失效，请重新登录后再开始实验')
+        return
+      }
+      const resp = await changeHighTempBoxOrderStatus(selected.dbId, 2, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         alert(resp.data?.msg || resp.error || '工单状态更新失败')
         return
@@ -696,7 +864,12 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await changeHighTempBoxOrderStatus(orderId, 1)
+        const authOk = await initAuth()
+        if (!authOk) {
+          alert('登录状态失效，请重新登录后再取消实验')
+          return
+        }
+        const resp = await changeHighTempBoxOrderStatus(orderId, 1, getAuthHeaders())
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return
@@ -843,7 +1016,12 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await changeHighTempBoxOrderStatus(orderId, 3)
+        const authOk = await initAuth()
+        if (!authOk) {
+          alert('登录状态失效，请重新登录后再完成测试')
+          return
+        }
+        const resp = await changeHighTempBoxOrderStatus(orderId, 3, getAuthHeaders())
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return

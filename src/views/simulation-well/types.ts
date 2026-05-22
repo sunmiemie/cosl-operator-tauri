@@ -2,10 +2,13 @@ export type SimulationWellView = 'dashboard' | 'downhole-work' | 'equipment-pack
 
 export interface DeviceItem {
   id: string
+  dbId?: number
   name: string
   sn?: string
   template?: string
   code?: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
 }
 
 export interface WorkOrder {
