@@ -33,6 +33,8 @@ export interface VibrationInstrument {
   sn: string
   model?: string
   remark?: string
+  status?: number
+  statusText?: string
   completed?: boolean
 }
 

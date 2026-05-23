@@ -37,6 +37,7 @@ const props = defineProps<{
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
   getOrderById: (id: string) => WorkOrder | undefined
+  getInstrumentStatusText: (order: WorkOrder, instrumentId: string) => string
   workOrdersLoading: boolean
   refreshWorkOrders: () => void
 }>()
@@ -261,8 +262,8 @@ const getScheduledStyle = (item: any) => {
                             <span class="instrument-sn">{{ instrument.sn }}</span>
                           </div>
                           <div class="instrument-status-cell">
-                            <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">
-                              {{ getOrderStatusText(order) }}
+                            <span class="status-pill" :class="getStatusClass(getInstrumentStatusText(order, instrument.id))">
+                              {{ getInstrumentStatusText(order, instrument.id) }}
                             </span>
                           </div>
                         </div>

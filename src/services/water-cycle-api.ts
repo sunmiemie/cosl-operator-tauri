@@ -6,6 +6,8 @@ export type WaterCycleOrderDTO = {
   test_date: string
   start_time: string
   end_time: string
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
   device_name: string
   device_number: string
   task_number: string
@@ -25,6 +27,8 @@ export type WaterCycleOrder = {
   dbId: number
   taskNumber: string
   applicant: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
   deviceName: string
   deviceNumber: string
   flowProcess: string
@@ -47,6 +51,8 @@ export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
     dbId: dto.id,
     taskNumber: dto.task_number,
     applicant: dto.applicant,
+    scheduledStartAt: dto.scheduled_start_at || null,
+    scheduledEndAt: dto.scheduled_end_at || null,
     deviceName: dto.device_name,
     deviceNumber: dto.device_number,
     flowProcess: dto.flow_process,
@@ -124,4 +130,24 @@ export async function updateWaterCycleOrder(
   headers?: Record<string, string>
 ): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
   return http.put<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/detail/${orderId}/`, data, headers)
+}
+
+export type WaterCycleOrderScheduleBody = {
+  scheduled_start_at: string
+  scheduled_end_at: string
+}
+
+export async function saveWaterCycleOrderSchedule(
+  orderId: number,
+  data: WaterCycleOrderScheduleBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
+  return http.post<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/schedule/${orderId}/`, data, headers)
+}
+
+export async function clearWaterCycleOrderSchedule(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
+  return http.delete<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/schedule/${orderId}/`, headers)
 }

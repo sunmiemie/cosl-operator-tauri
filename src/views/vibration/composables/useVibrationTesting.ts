@@ -24,8 +24,8 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
   const sessionStarted = ref(false)
   const analysisCompleted = ref(false)
 
-  const liveLevel = ref('-- G')
-  const liveFreq = ref('-- Hz')
+  const liveLevel = ref('--')
+  const liveFreq = ref('--')
   const liveAx = ref('--.-g')
   const liveAy = ref('--.-g')
   const liveAz = ref('--.-g')
@@ -83,8 +83,8 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     analysisCompleted.value = false
     sessionStarted.value = false
     isPaused.value = false
-    liveLevel.value = '-- G'
-    liveFreq.value = '-- Hz'
+    liveLevel.value = '--'
+    liveFreq.value = '--'
     liveAx.value = '--.-g'
     liveAy.value = '--.-g'
     liveAz.value = '--.-g'
@@ -108,9 +108,16 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     return { raw, value, unit }
   }
 
+  function formatMetricValue(field: { raw?: string; value?: number | null; unit?: string }) {
+    const raw = String(field.raw || '').trim()
+    const unit = String(field.unit || '').trim()
+    if (!raw) return '--'
+    return unit ? `${raw} ${unit}` : raw
+  }
+
   function updateLiveMetrics(record: VibrationCaptureRecord) {
-    liveLevel.value = `${captureRecords.value.length} 张`
-    liveFreq.value = `${sampleIntervalSeconds.value.toFixed(1)} 秒`
+    liveLevel.value = formatMetricValue(record.values.response)
+    liveFreq.value = formatMetricValue(record.values.target)
     liveAx.value = record.values.elapsedTime.raw || '--'
     liveAy.value = record.values.remainingTime.raw || '--'
     liveAz.value = '--'
@@ -228,16 +235,15 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
       await updateLatestCapturePreview(String(status.latest_screenshot))
     }
     vibTestSeconds.value = Math.floor(Number(status?.latest_time_sec || 0))
+    if (status?.latest_record) {
+      const latestRecord = mapPythonRecord(status.latest_record)
+      updateLiveMetrics(latestRecord)
+    }
     captureStatusText.value = current
       ? paused ? `图像采集已暂停 (${current}/${total || current})` : `图像采集中 (${current}/${total || current})`
       : '正在初始化图像采集...'
     isPaused.value = paused
     isRunning.value = !paused && !Boolean(status?.complete) && current < (total || Number.MAX_SAFE_INTEGER)
-    liveLevel.value = `${current} 张`
-    liveFreq.value = `${sampleIntervalSeconds.value.toFixed(1)} 秒`
-    liveAx.value = formatClock(Number(status?.latest_time_sec || 0))
-    liveAy.value = total ? `${Math.max(0, total - current)} 张待采` : '--'
-    liveAz.value = '--'
 
     if (status?.complete) {
       stopCapturePolling()
@@ -281,6 +287,20 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     }
 
     if (eventType === 'sample') {
+      const record = mapPythonRecord(payload?.record || {})
+      if (record.timeSec || record.values.target.raw || record.values.response.raw) {
+        const nextRecords = captureRecords.value.slice()
+        const existingIndex = nextRecords.findIndex(item => item.timeSec === record.timeSec)
+        if (existingIndex >= 0) nextRecords[existingIndex] = record
+        else nextRecords.push(record)
+        captureRecords.value = nextRecords
+        vibDataCount.value = Number(payload?.current || nextRecords.length)
+        vibTestSeconds.value = Math.floor(record.timeSec || 0)
+        updateLiveMetrics(record)
+        if (payload?.record?.chart_screenshot) {
+          void updateLatestCapturePreview(String(payload.record.chart_screenshot)).catch(() => undefined)
+        }
+      }
       return
     }
 

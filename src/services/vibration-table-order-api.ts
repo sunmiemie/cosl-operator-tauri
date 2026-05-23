@@ -17,6 +17,9 @@ export type VibrationTableOrderInstrumentDTO = {
   code?: string
   model?: string
   remark?: string
+  status?: number
+  status_text?: string
+  statusText?: string
   quantity?: number
   weight?: string
   length?: string

@@ -356,8 +356,8 @@ function handleUploadDrop(event: DragEvent) {
         <div class="status-grid">
           <div class="status-box">
             <div class="status-header">试验状态</div>
-            <div class="status-row"><span class="label">振动量级</span><span class="value orange">{{ liveLevel }}</span></div>
-            <div class="status-row mt-1"><span class="label">频率</span><span class="value cyan">{{ liveFreq }}</span></div>
+            <div class="status-row"><span class="label">响应</span><span class="value orange">{{ liveLevel }}</span></div>
+            <div class="status-row mt-1"><span class="label">目标</span><span class="value cyan">{{ liveFreq }}</span></div>
           </div>
           <div class="status-box">
             <div class="status-header">图像采集</div>

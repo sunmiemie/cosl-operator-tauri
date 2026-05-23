@@ -37,6 +37,7 @@ export function useVibrationSchedule() {
   const selectedScheduledOrderIds = ref<string[]>([])
   const isDragging = ref(false)
   const slotHeightPx = 44
+  const runningInstrumentIds = ref<Record<string, true>>({})
 
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
@@ -78,6 +79,8 @@ export function useVibrationSchedule() {
           sn,
           model: item.model,
           remark: item.remark,
+          status: item.status,
+          statusText: item.status_text || item.statusText,
           completed: item.is_completed === true,
         }
       })
@@ -88,6 +91,8 @@ export function useVibrationSchedule() {
       id: `vib-ins-${dto.id}-${fallbackSn}`,
       name: dto.device_name || '振动台仪器',
       sn: fallbackSn,
+      status: dto.status,
+      statusText: dto.status_text,
       completed: false,
     }]
   }
@@ -605,6 +610,32 @@ export function useVibrationSchedule() {
     return selectedScheduledOrderIds.value.map(id => getOrderById(id)).filter(Boolean) as WorkOrder[]
   })
 
+  function markInstrumentsRunning(instrumentIds: string[]) {
+    const next = { ...runningInstrumentIds.value }
+    instrumentIds.forEach((id) => {
+      if (id) next[id] = true
+    })
+    runningInstrumentIds.value = next
+  }
+
+  function clearRunningInstruments(instrumentIds: string[]) {
+    const next = { ...runningInstrumentIds.value }
+    instrumentIds.forEach((id) => {
+      delete next[id]
+    })
+    runningInstrumentIds.value = next
+  }
+
+  function getInstrumentStatusText(order: WorkOrder, instrumentId: string) {
+    const instrument = order.instruments.find((item) => item.id === instrumentId)
+    if (runningInstrumentIds.value[instrumentId] || instrument?.status === 2) return '测试中'
+    if (instrument?.completed) return '已完成'
+    if (instrument?.status === 5) return '已完成'
+    if (instrument?.status === 6) return '异常'
+    if (instrument?.statusText?.trim()) return instrument.statusText
+    return '待排程'
+  }
+
   function prevWeek() { calBase.value = addDays(calBase.value, -7) }
   function nextWeek() { calBase.value = addDays(calBase.value, 7) }
   function gotoDate(e: Event) {
@@ -869,6 +900,9 @@ export function useVibrationSchedule() {
     scheduleOrder,
     handleUnschedule,
     removeScheduledOrder,
+    markInstrumentsRunning,
+    clearRunningInstruments,
+    getInstrumentStatusText,
     selectScheduledOrder,
     getEvent,
     startResize,

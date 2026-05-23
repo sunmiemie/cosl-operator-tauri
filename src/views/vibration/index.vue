@@ -57,6 +57,9 @@ const {
   isResizing,
   handleUnschedule,
   removeScheduledOrder,
+  markInstrumentsRunning,
+  clearRunningInstruments,
+  getInstrumentStatusText,
   selectScheduledOrder,
   getScheduleChangePayload,
 } = useVibrationSchedule()
@@ -248,6 +251,7 @@ async function confirmInstrumentSelection() {
     }
   }
 
+  markInstrumentsRunning(selectedInstruments.map((instrument) => instrument.id))
   currentWorkOrderId.value = selected.id
   currentWorkOrderSnapshot.value = {
     ...selected,
@@ -300,6 +304,8 @@ async function backToDashboard(finalStatus: number = 1) {
       orderStatusMutating.value = false
     }
   }
+
+  clearRunningInstruments(currentWorkOrderSnapshot.value?.selectedInstruments?.map((instrument) => instrument.id) || [])
 
   if (finalStatus === 5 && currentWorkOrderId.value) {
     removeScheduledOrder(currentWorkOrderId.value)
@@ -399,6 +405,7 @@ function toggleShutdownCheck(id: number) {
         :fmt-date="fmtDate"
         :get-cell-key="getCellKey"
         :get-order-by-id="getOrderById"
+        :get-instrument-status-text="getInstrumentStatusText"
         :work-orders-loading="workOrdersLoading"
         :refresh-work-orders="refreshWorkOrders"
         @update:show-startup-check="val => val ? (showStartupCheck = true) : handleCancelStartupCheck()"
