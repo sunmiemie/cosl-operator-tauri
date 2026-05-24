@@ -100,7 +100,11 @@ const toggleExpanded = (orderId: string) => {
 }
 
 const getOrderStatusText = (order: WorkOrder) => {
-  if (order.status === 2) return '测试中'
+  const visibleInstruments = props.getVisibleOrderInstruments(order)
+  const hasRunningInstrument = visibleInstruments.some((instrument) =>
+    props.getInstrumentStatusText(order, instrument.id) === '测试中'
+  )
+  if (hasRunningInstrument) return '测试中'
   if (order.status === 5) return '已完成'
   if (order.status === 6) return '异常'
   if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
