@@ -136,6 +136,10 @@ const getScheduledInstrumentCount = (order: WorkOrder) => {
   return getActiveInstruments(order).length - getPendingInstruments(order).length
 }
 
+const getRunningInstrumentCount = (order: WorkOrder) => {
+  return getActiveInstruments(order).filter((item) => props.isInstrumentRunning(item.id)).length
+}
+
 const getInstrumentStatusMeta = (instrumentId: string) => {
   if (props.isInstrumentRunning(instrumentId)) {
     return { label: '测试中', className: 'instrument-status-running' }
@@ -147,7 +151,7 @@ const getInstrumentStatusMeta = (instrumentId: string) => {
 }
 
 const getOrderStatusMeta = (order: WorkOrder) => {
-  if (order.statusCode === 2) {
+  if (getRunningInstrumentCount(order) > 0) {
     return { label: '测试中', className: 'status-testing' }
   }
   if (getScheduledInstrumentCount(order) > 0) {
@@ -161,7 +165,7 @@ const getOrderDeviceSummary = (order: WorkOrder) => {
 }
 
 const canDragOrder = (order: WorkOrder) => {
-  return getActiveInstruments(order).length > 0 && order.statusCode !== 2
+  return getPendingInstruments(order).length > 0
 }
 
 const getScheduledStyle = (item: any) => {
