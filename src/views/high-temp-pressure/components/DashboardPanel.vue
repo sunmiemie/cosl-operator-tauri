@@ -252,6 +252,13 @@ const handleGridDrop = (e: DragEvent) => {
           </div>
           <div v-else class="table-wrapper">
             <table class="data-table">
+              <colgroup>
+                <col class="col-applicant" />
+                <col class="col-task" />
+                <col class="col-device" />
+                <col class="col-action" />
+                <col class="col-status" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>申请人</th>
@@ -481,22 +488,32 @@ const handleGridDrop = (e: DragEvent) => {
 
 .table-wrapper {
   padding: 0;
+  overflow-x: hidden;
 }
 
 .data-table {
+  width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   border-spacing: 0;
 }
+
+.col-applicant { width: 64px; }
+.col-task { width: 132px; }
+.col-device { width: 84px; }
+.col-action { width: 60px; }
+.col-status { width: 66px; }
 
 .data-table thead {
   top: 0;
 }
 
 .data-table th {
-  padding: 13px 14px;
+  padding: 12px 6px;
   border-bottom: 1px solid var(--color-border);
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .order-row {
@@ -514,7 +531,7 @@ const handleGridDrop = (e: DragEvent) => {
 
 .order-row td {
   position: relative;
-  padding: 14px 14px;
+  padding: 13px 6px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background-color 0.15s ease;
@@ -545,7 +562,7 @@ const handleGridDrop = (e: DragEvent) => {
 }
 
 .cell-id {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--color-accent-blue);
 }
@@ -557,8 +574,11 @@ const handleGridDrop = (e: DragEvent) => {
 
 .cell-applicant,
 .cell-id,
-.cell-status {
+.cell-status,
+.cell-detail {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-action,
@@ -570,22 +590,22 @@ const handleGridDrop = (e: DragEvent) => {
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  max-width: 180px;
+  max-width: 54px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .op-btn {
-  min-width: 56px;
-  height: 28px;
+  min-width: 48px;
+  height: 26px;
   border: 1px solid rgba(59, 130, 246, 0.18);
   background: rgba(59, 130, 246, 0.08);
   color: var(--color-accent-blue);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
-  padding: 0 10px;
+  padding: 0 8px;
   border-radius: 8px;
 }
 
@@ -598,11 +618,11 @@ const handleGridDrop = (e: DragEvent) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 64px;
-  height: 28px;
-  padding: 0 10px;
+  min-width: 54px;
+  height: 26px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.01em;
 }

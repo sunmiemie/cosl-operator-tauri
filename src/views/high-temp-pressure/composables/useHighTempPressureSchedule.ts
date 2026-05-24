@@ -36,6 +36,7 @@ function createScheduleEventId(orderId: string, dateStr: string, startTimeKey: s
 }
 
 const SCHEDULABLE_STATUS = new Set([1])
+const VISIBLE_ORDER_STATUSES = [1, 2]
 
 function getStatusText(status?: number, fallback?: string) {
   const statusMap: Record<number, string> = {
@@ -109,6 +110,7 @@ function normalizeInstrumentItems(dto: HighTempPressureOrderDTO, useDevice: stri
 }
 
 function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
+  const statusCode = Number(dto.status)
   const taskNumber = dto.task_number?.trim() || `HTP-${dto.id}`
   const useDevice = dto.use_device?.trim() || dto.device_name?.trim() || dto.test_platform?.trim() || '-'
   const itemsDto = normalizeInstrumentItems(dto, useDevice, taskNumber)
@@ -161,8 +163,8 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     keepCondition: formatHoldTime(dto.hold_time),
     maxDiameter: formatDisplayValue(dto.max_diameter, 'mm'),
     remark: dto.remark?.trim() || '-',
-    status: getStatusText(dto.status, dto.status_text),
-    statusCode: dto.status,
+    status: getStatusText(Number.isFinite(statusCode) ? statusCode : undefined, dto.status_text),
+    statusCode: Number.isFinite(statusCode) ? statusCode : undefined,
     createdAt: dto.created_at || '-',
     updatedAt: dto.updated_at || '-',
     expanded: false,
@@ -340,36 +342,46 @@ export function useHighTempPressureSchedule() {
     try {
       await initAuth()
 
-      const all: WorkOrder[] = []
+      const byId = new Map<string, WorkOrder>()
       const pageSize = 100
-      let page = 1
-      let total = Infinity
 
-      while (all.length < total) {
-        const response = await listHighTempPressureOrders(
-          { page, pageSize },
-          getAuthHeaders()
-        )
+      for (const status of VISIBLE_ORDER_STATUSES) {
+        let page = 1
+        let loaded = 0
+        let total = Infinity
 
-        if (!response.success || !response.data) {
-          workOrdersError.value = response.error || '加载高温高压井工单失败'
-          break
+        while (loaded < total) {
+          const response = await listHighTempPressureOrders(
+            { page, pageSize, status },
+            getAuthHeaders()
+          )
+
+          if (!response.success || !response.data) {
+            workOrdersError.value = response.error || '加载高温高压井工单失败'
+            break
+          }
+
+          if (response.data.code !== 0) {
+            workOrdersError.value = response.data.msg || '加载高温高压井工单失败'
+            break
+          }
+
+          const list = response.data.data.list
+          list
+            .filter((item) => Number(item.status) === status)
+            .map(mapHighTempPressureOrder)
+            .forEach((order) => byId.set(order.id, order))
+
+          loaded += list.length
+          total = response.data.data.total
+
+          if (list.length === 0) break
+          page += 1
+          if (page > 50) break
         }
-
-        if (response.data.code !== 0) {
-          workOrdersError.value = response.data.msg || '加载高温高压井工单失败'
-          break
-        }
-
-        const chunk = response.data.data.list.map(mapHighTempPressureOrder)
-        all.push(...chunk)
-        total = response.data.data.total
-
-        if (chunk.length === 0) break
-        page += 1
-        if (page > 50) break
       }
 
+      const all = Array.from(byId.values())
       const startedOrders = all.filter(order => order.statusCode === 2)
       const startedOrderIdsFromServer = new Set(startedOrders.map(order => order.id))
       const allInstrumentIdsFromServer = new Set(
@@ -383,9 +395,6 @@ export function useHighTempPressureSchedule() {
       ) as Record<string, true>
       const nextCompletedEntries: Array<[string, true]> = [
         ...Array.from(completedInstrumentIdsFromServer, instrumentId => [instrumentId, true] as [string, true]),
-        ...Object.entries(completedInstrumentIds.value)
-          .filter(([instrumentId]) => allInstrumentIdsFromServer.has(instrumentId))
-          .map(([instrumentId]) => [instrumentId, true] as [string, true]),
       ]
       const nextCompletedInstrumentIds = Object.fromEntries(nextCompletedEntries) as Record<string, true>
       const nextRunningEntries: Array<[string, true]> = [
