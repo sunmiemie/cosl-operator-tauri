@@ -30,6 +30,19 @@ function createScheduleEventId(orderId: string) {
   return `${orderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+const VIBRATION_RUNNING_INSTRUMENTS_KEY = 'vibration-running-instrument-ids'
+const VIBRATION_COMPLETED_INSTRUMENTS_KEY = 'vibration-completed-instrument-ids'
+
+function getInstrumentRuntimeKeys(orderId: string, instrument: VibrationInstrument) {
+  return Array.from(new Set([
+    instrument.id,
+    `${orderId}::${instrument.id}`,
+    instrument.dbId ? `${orderId}::db:${instrument.dbId}` : '',
+    instrument.sn ? `${orderId}::sn:${instrument.sn}` : '',
+    instrument.name ? `${orderId}::name:${instrument.name}` : '',
+  ].filter(Boolean)))
+}
+
 export function useVibrationSchedule() {
   const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
@@ -38,6 +51,7 @@ export function useVibrationSchedule() {
   const isDragging = ref(false)
   const slotHeightPx = 44
   const runningInstrumentIds = ref<Record<string, true>>({})
+  const completedInstrumentIds = ref<Record<string, true>>({})
 
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
@@ -594,6 +608,8 @@ export function useVibrationSchedule() {
   const unscheduledOrders = computed(() => {
     const kw = searchKeyword.value.trim()
     return workOrders.value.filter(o => {
+      const visibleInstruments = getVisibleOrderInstruments(o)
+      if (visibleInstruments.length === 0) return false
       if (!kw) return true
       return (
         o.id.includes(kw) ||
@@ -601,7 +617,7 @@ export function useVibrationSchedule() {
         o.device.includes(kw) ||
         o.type.includes(kw) ||
         o.level.includes(kw) ||
-        o.instruments.some((item) => item.name.includes(kw) || item.sn.includes(kw))
+        visibleInstruments.some((item) => item.name.includes(kw) || item.sn.includes(kw))
       )
     })
   })
@@ -610,27 +626,99 @@ export function useVibrationSchedule() {
     return selectedScheduledOrderIds.value.map(id => getOrderById(id)).filter(Boolean) as WorkOrder[]
   })
 
-  function markInstrumentsRunning(instrumentIds: string[]) {
-    const next = { ...runningInstrumentIds.value }
-    instrumentIds.forEach((id) => {
-      if (id) next[id] = true
-    })
-    runningInstrumentIds.value = next
+  function persistRunningInstrumentIds() {
+    try {
+      window.localStorage.setItem(VIBRATION_RUNNING_INSTRUMENTS_KEY, JSON.stringify(runningInstrumentIds.value))
+    } catch {
+      // ignore storage failures
+    }
   }
 
-  function clearRunningInstruments(instrumentIds: string[]) {
+  function persistCompletedInstrumentIds() {
+    try {
+      window.localStorage.setItem(VIBRATION_COMPLETED_INSTRUMENTS_KEY, JSON.stringify(completedInstrumentIds.value))
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  function hydrateRunningInstrumentIds() {
+    try {
+      const raw = window.localStorage.getItem(VIBRATION_RUNNING_INSTRUMENTS_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Record<string, true>
+      runningInstrumentIds.value = parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      runningInstrumentIds.value = {}
+    }
+  }
+
+  function hydrateCompletedInstrumentIds() {
+    try {
+      const raw = window.localStorage.getItem(VIBRATION_COMPLETED_INSTRUMENTS_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Record<string, true>
+      completedInstrumentIds.value = parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      completedInstrumentIds.value = {}
+    }
+  }
+
+  hydrateRunningInstrumentIds()
+  hydrateCompletedInstrumentIds()
+
+  function markInstrumentsRunning(orderId: string, instruments: VibrationInstrument[]) {
     const next = { ...runningInstrumentIds.value }
-    instrumentIds.forEach((id) => {
-      delete next[id]
+    instruments.forEach((instrument) => {
+      getInstrumentRuntimeKeys(orderId, instrument).forEach((key) => {
+        next[key] = true
+      })
     })
     runningInstrumentIds.value = next
+    persistRunningInstrumentIds()
+  }
+
+  function clearRunningInstruments(orderId: string, instruments: VibrationInstrument[]) {
+    const next = { ...runningInstrumentIds.value }
+    instruments.forEach((instrument) => {
+      getInstrumentRuntimeKeys(orderId, instrument).forEach((key) => {
+        delete next[key]
+      })
+    })
+    runningInstrumentIds.value = next
+    persistRunningInstrumentIds()
+  }
+
+  function markInstrumentsCompleted(orderId: string, instruments: VibrationInstrument[]) {
+    const next = { ...completedInstrumentIds.value }
+    instruments.forEach((instrument) => {
+      getInstrumentRuntimeKeys(orderId, instrument).forEach((key) => {
+        next[key] = true
+      })
+    })
+    completedInstrumentIds.value = next
+    persistCompletedInstrumentIds()
+  }
+
+  function isInstrumentCompleted(order: WorkOrder, instrument: VibrationInstrument) {
+    return (
+      instrument.completed === true ||
+      instrument.status === 5 ||
+      getInstrumentRuntimeKeys(order.id, instrument).some((key) => completedInstrumentIds.value[key])
+    )
+  }
+
+  function getVisibleOrderInstruments(order: WorkOrder) {
+    return order.instruments.filter((instrument) => !isInstrumentCompleted(order, instrument))
   }
 
   function getInstrumentStatusText(order: WorkOrder, instrumentId: string) {
     const instrument = order.instruments.find((item) => item.id === instrumentId)
-    if (runningInstrumentIds.value[instrumentId] || instrument?.status === 2) return '测试中'
-    if (instrument?.completed) return '已完成'
-    if (instrument?.status === 5) return '已完成'
+    const isRunning = instrument
+      ? getInstrumentRuntimeKeys(order.id, instrument).some((key) => runningInstrumentIds.value[key])
+      : Boolean(runningInstrumentIds.value[instrumentId])
+    if (isRunning || instrument?.status === 2) return '测试中'
+    if (instrument && isInstrumentCompleted(order, instrument)) return '已完成'
     if (instrument?.status === 6) return '异常'
     if (instrument?.statusText?.trim()) return instrument.statusText
     return '待排程'
@@ -902,6 +990,8 @@ export function useVibrationSchedule() {
     removeScheduledOrder,
     markInstrumentsRunning,
     clearRunningInstruments,
+    markInstrumentsCompleted,
+    getVisibleOrderInstruments,
     getInstrumentStatusText,
     selectScheduledOrder,
     getEvent,

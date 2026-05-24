@@ -59,6 +59,8 @@ const {
   removeScheduledOrder,
   markInstrumentsRunning,
   clearRunningInstruments,
+  markInstrumentsCompleted,
+  getVisibleOrderInstruments,
   getInstrumentStatusText,
   selectScheduledOrder,
   getScheduleChangePayload,
@@ -91,7 +93,7 @@ const testMode = computed<'formal' | 'pre'>(() => forcedMode.value)
 
 const productPickerRows = computed(() =>
   selectedScheduledOrders.value.flatMap((order) =>
-    order.instruments.map((instrument) => ({
+    getVisibleOrderInstruments(order).map((instrument) => ({
       id: instrument.id,
       name: instrument.name,
       sn: instrument.sn,
@@ -175,6 +177,10 @@ async function startExperiment() {
     return
   }
   if (!selectedInstrumentIds.value.length) selectAllInstruments()
+  if (!productPickerRows.value.length) {
+    ElMessage.warning('该工单暂无待测试仪器')
+    return
+  }
   productPickerVisible.value = true
 }
 
@@ -251,7 +257,7 @@ async function confirmInstrumentSelection() {
     }
   }
 
-  markInstrumentsRunning(selectedInstruments.map((instrument) => instrument.id))
+  markInstrumentsRunning(selected.id, selectedInstruments)
   currentWorkOrderId.value = selected.id
   currentWorkOrderSnapshot.value = {
     ...selected,
@@ -288,12 +294,25 @@ async function backToDashboard(finalStatus: number = 1) {
   if (orderStatusMutating.value) return
 
   const order = currentWorkOrderSnapshot.value
+  const selectedInstruments = order?.selectedInstruments || []
+  let nextOrderStatus = finalStatus
+  let shouldRemoveSchedule = finalStatus === 5
+  if (order && selectedInstruments.length) {
+    if (finalStatus === 5) {
+      markInstrumentsCompleted(order.id, selectedInstruments)
+      const hasRemainingInstruments = getVisibleOrderInstruments(order).length > 0
+      nextOrderStatus = hasRemainingInstruments ? 1 : 5
+      shouldRemoveSchedule = !hasRemainingInstruments
+    }
+    clearRunningInstruments(order.id, selectedInstruments)
+  }
+
   if (order && order.dbId !== undefined) {
     const authOk = await initAuth()
     const authHeaders = authOk ? getAuthHeaders() : undefined
     orderStatusMutating.value = true
     try {
-      const resp = await changeVibrationTableOrderStatus(order.dbId, finalStatus, authHeaders)
+      const resp = await changeVibrationTableOrderStatus(order.dbId, nextOrderStatus, authHeaders)
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
         return
@@ -305,9 +324,7 @@ async function backToDashboard(finalStatus: number = 1) {
     }
   }
 
-  clearRunningInstruments(currentWorkOrderSnapshot.value?.selectedInstruments?.map((instrument) => instrument.id) || [])
-
-  if (finalStatus === 5 && currentWorkOrderId.value) {
+  if (shouldRemoveSchedule && currentWorkOrderId.value) {
     removeScheduledOrder(currentWorkOrderId.value)
   }
 
@@ -320,11 +337,25 @@ async function backToDashboard(finalStatus: number = 1) {
 }
 
 function handleCancelStartupCheck() {
+  if (currentWorkOrderSnapshot.value) {
+    clearRunningInstruments(
+      currentWorkOrderSnapshot.value.id,
+      currentWorkOrderSnapshot.value.selectedInstruments || []
+    )
+  }
   backToDashboard(1)
 }
 
 function goPrevStage() {
-  if (stage.value === 'start') backToDashboard(1)
+  if (stage.value === 'start') {
+    if (currentWorkOrderSnapshot.value) {
+      clearRunningInstruments(
+        currentWorkOrderSnapshot.value.id,
+        currentWorkOrderSnapshot.value.selectedInstruments || []
+      )
+    }
+    backToDashboard(1)
+  }
   else if (stage.value === 'calibration') stage.value = 'start'
   else if (stage.value === 'testing') stage.value = 'calibration'
   else if (stage.value === 'report') stage.value = 'testing'
@@ -405,6 +436,7 @@ function toggleShutdownCheck(id: number) {
         :fmt-date="fmtDate"
         :get-cell-key="getCellKey"
         :get-order-by-id="getOrderById"
+        :get-visible-order-instruments="getVisibleOrderInstruments"
         :get-instrument-status-text="getInstrumentStatusText"
         :work-orders-loading="workOrdersLoading"
         :refresh-work-orders="refreshWorkOrders"

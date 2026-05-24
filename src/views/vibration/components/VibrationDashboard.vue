@@ -37,6 +37,7 @@ const props = defineProps<{
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
   getOrderById: (id: string) => WorkOrder | undefined
+  getVisibleOrderInstruments: (order: WorkOrder) => WorkOrder['instruments']
   getInstrumentStatusText: (order: WorkOrder, instrumentId: string) => string
   workOrdersLoading: boolean
   refreshWorkOrders: () => void
@@ -246,14 +247,14 @@ const getScheduledStyle = (item: any) => {
                           <div class="instrument-title">设备明细</div>
                           <div class="instrument-subtitle">该工单当前未完成的测试设备</div>
                         </div>
-                        <span class="instrument-count-pill">{{ order.instruments.length }} 台</span>
+                        <span class="instrument-count-pill">{{ getVisibleOrderInstruments(order).length }} 台</span>
                       </div>
-                      <div v-if="order.instruments.length === 0" class="instrument-empty">
+                      <div v-if="getVisibleOrderInstruments(order).length === 0" class="instrument-empty">
                         当前无待测试仪器
                       </div>
                       <div v-else class="instrument-list">
                         <div
-                          v-for="instrument in order.instruments"
+                          v-for="instrument in getVisibleOrderInstruments(order)"
                           :key="instrument.id"
                           class="instrument-item"
                         >

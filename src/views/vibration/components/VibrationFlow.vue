@@ -396,27 +396,30 @@ function handleUploadDrop(event: DragEvent) {
             <div class="card">
               <div class="card-header"><h3 class="card-title">当前工单</h3></div>
               <div class="info-body">
-                <div v-if="currentWorkOrder" class="wo-info">
-                  <div>{{ currentWorkOrder.id }}</div>
-                  <div class="sub">{{ currentWorkOrder.device }}</div>
+                <div v-if="currentWorkOrder" class="wo-detail-stack">
+                  <div class="wo-title">{{ currentWorkOrder.id }}</div>
+                  <div class="wo-kv-grid">
+                    <div class="wo-kv"><span>申请人</span><strong>{{ currentWorkOrder.applicant || '-' }}</strong></div>
+                    <div class="wo-kv"><span>联系电话</span><strong>{{ currentWorkOrder.phone || '-' }}</strong></div>
+                    <div class="wo-kv full"><span>使用设备</span><strong>{{ currentWorkOrder.device || '-' }}</strong></div>
+                    <div class="wo-kv"><span>振动量级</span><strong>{{ currentWorkOrder.level || '-' }}</strong></div>
+                    <div class="wo-kv"><span>测试时长</span><strong>{{ currentWorkOrder.duration || '-' }} 分钟</strong></div>
+                    <div class="wo-kv"><span>测试类型</span><strong>{{ currentWorkOrder.type || '-' }}</strong></div>
+                    <div class="wo-kv"><span>设备编号</span><strong>{{ currentWorkOrder.deviceNumber || '-' }}</strong></div>
+                  </div>
+                  <div class="wo-instrument-list">
+                    <div class="wo-section-title">本次测试仪器</div>
+                    <div
+                      v-for="instrument in (currentWorkOrder.selectedInstruments?.length ? currentWorkOrder.selectedInstruments : currentWorkOrder.instruments)"
+                      :key="instrument.id"
+                      class="wo-instrument-item"
+                    >
+                      <span>{{ instrument.name }}</span>
+                      <strong>{{ instrument.sn || '-' }}</strong>
+                    </div>
+                  </div>
                 </div>
                 <div v-else class="text-muted">未选择工单</div>
-              </div>
-            </div>
-            <div class="card">
-              <div class="card-header"><h3 class="card-title">采集概况</h3></div>
-              <div class="info-body">
-                <div class="video-info-stack">
-                  <div class="info-line"><span>视频文件</span><strong>{{ videoFileName || '-' }}</strong></div>
-                  <div class="info-line"><span>视频时长</span><strong>{{ videoDurationText }}</strong></div>
-                  <div class="info-line"><span>采样间隔</span><strong>{{ sampleIntervalSeconds }} 秒</strong></div>
-                  <div class="info-line"><span>采集状态</span><strong>{{ captureStatusText }}</strong></div>
-                </div>
-                <div class="param-grid mt-3">
-                  <div class="param-box"><div class="label">X轴加速度</div><div class="val red">{{ liveAx }}</div></div>
-                  <div class="param-box"><div class="label">Y轴加速度</div><div class="val cyan">{{ liveAy }}</div></div>
-                  <div class="param-box full"><div class="label">Z轴加速度</div><div class="val amber">{{ liveAz }}</div></div>
-                </div>
               </div>
             </div>
             <div class="card" v-if="analysisSummary || analysisPreviewRecords.length">
