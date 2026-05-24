@@ -40,6 +40,7 @@ const props = defineProps<{
   getInstrumentById: (id: string) => { id: string; label: string; sn: string } | null
   getOrderByInstrumentId: (id: string) => WorkOrder | undefined
   isInstrumentPending: (id: string) => boolean
+  isInstrumentRunning: (id: string) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -133,6 +134,16 @@ const getActiveInstruments = (order: WorkOrder) => {
 
 const getScheduledInstrumentCount = (order: WorkOrder) => {
   return getActiveInstruments(order).length - getPendingInstruments(order).length
+}
+
+const getInstrumentStatusMeta = (instrumentId: string) => {
+  if (props.isInstrumentRunning(instrumentId)) {
+    return { label: '测试中', className: 'instrument-status-running' }
+  }
+  if (scheduledInstrumentIdSet.value.has(instrumentId)) {
+    return { label: '已排程', className: 'instrument-status-scheduled' }
+  }
+  return { label: '待排程', className: 'instrument-status-pending' }
 }
 
 const getOrderStatusMeta = (order: WorkOrder) => {
@@ -303,9 +314,9 @@ const handleGridDrop = (e: DragEvent) => {
                             <span class="instrument-sn">{{ item.sn }}</span>
                             <span
                               class="instrument-status"
-                              :class="scheduledInstrumentIdSet.has(item.id) ? 'instrument-status-scheduled' : 'instrument-status-pending'"
+                              :class="getInstrumentStatusMeta(item.id).className"
                             >
-                              {{ scheduledInstrumentIdSet.has(item.id) ? '已排程' : '待排程' }}
+                              {{ getInstrumentStatusMeta(item.id).label }}
                             </span>
                           </div>
                         </div>
@@ -719,6 +730,11 @@ const handleGridDrop = (e: DragEvent) => {
 .instrument-status-scheduled {
   color: var(--color-accent-blue);
   background: rgba(59, 130, 246, 0.12);
+}
+
+.instrument-status-running {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.16);
 }
 
 .instrument-empty {

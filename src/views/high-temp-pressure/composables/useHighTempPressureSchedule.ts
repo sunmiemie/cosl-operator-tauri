@@ -184,6 +184,7 @@ export function useHighTempPressureSchedule() {
   const slotHeightPx = 44
   const completedInstrumentIds = ref<Record<string, true>>({})
   const startedOrderIds = ref<Record<string, true>>({})
+  const runningInstrumentIds = ref<Record<string, true>>({})
 
   type ScheduledEvent = {
     eventId: string
@@ -284,7 +285,7 @@ export function useHighTempPressureSchedule() {
     const next: Record<string, ScheduledEvent[]> = {}
     orders.forEach((order) => {
       order.items.forEach((instrument) => {
-        if (instrument.completed) return
+        if (instrument.completed || completedInstrumentIds.value[instrument.id]) return
         const events = eventsFromInstrument(instrument, order.id)
         if (events.length) next[instrument.id] = events
       })
@@ -303,6 +304,7 @@ export function useHighTempPressureSchedule() {
         JSON.stringify({
           completedInstrumentIds: completedInstrumentIds.value,
           startedOrderIds: startedOrderIds.value,
+          runningInstrumentIds: runningInstrumentIds.value,
         })
       )
     } catch {
@@ -317,12 +319,15 @@ export function useHighTempPressureSchedule() {
       const parsed = JSON.parse(raw) as {
         completedInstrumentIds?: Record<string, true>
         startedOrderIds?: Record<string, true>
+        runningInstrumentIds?: Record<string, true>
       }
       completedInstrumentIds.value = parsed.completedInstrumentIds || {}
       startedOrderIds.value = parsed.startedOrderIds || {}
+      runningInstrumentIds.value = parsed.runningInstrumentIds || {}
     } catch {
       completedInstrumentIds.value = {}
       startedOrderIds.value = {}
+      runningInstrumentIds.value = {}
     }
   }
 
@@ -367,11 +372,11 @@ export function useHighTempPressureSchedule() {
 
       const startedOrders = all.filter(order => order.statusCode === 2)
       const startedOrderIdsFromServer = new Set(startedOrders.map(order => order.id))
-      const startedInstrumentIdsFromServer = new Set(
-        startedOrders.flatMap(order => order.items.map(item => item.id))
+      const allInstrumentIdsFromServer = new Set(
+        all.flatMap(order => order.items.map(item => item.id))
       )
       const completedInstrumentIdsFromServer = new Set(
-        startedOrders.flatMap(order => order.items.filter(item => item.completed).map(item => item.id))
+        all.flatMap(order => order.items.filter(item => item.completed).map(item => item.id))
       )
       const nextStartedOrderIds = Object.fromEntries(
         Array.from(startedOrderIdsFromServer, orderId => [orderId, true] as const)
@@ -379,13 +384,20 @@ export function useHighTempPressureSchedule() {
       const nextCompletedEntries: Array<[string, true]> = [
         ...Array.from(completedInstrumentIdsFromServer, instrumentId => [instrumentId, true] as [string, true]),
         ...Object.entries(completedInstrumentIds.value)
-          .filter(([instrumentId]) => startedInstrumentIdsFromServer.has(instrumentId))
+          .filter(([instrumentId]) => allInstrumentIdsFromServer.has(instrumentId))
           .map(([instrumentId]) => [instrumentId, true] as [string, true]),
       ]
       const nextCompletedInstrumentIds = Object.fromEntries(nextCompletedEntries) as Record<string, true>
+      const nextRunningEntries: Array<[string, true]> = [
+        ...Object.entries(runningInstrumentIds.value)
+          .filter(([instrumentId]) => allInstrumentIdsFromServer.has(instrumentId) && !nextCompletedInstrumentIds[instrumentId])
+          .map(([instrumentId]) => [instrumentId, true] as [string, true]),
+      ]
+      const nextRunningInstrumentIds = Object.fromEntries(nextRunningEntries) as Record<string, true>
 
       startedOrderIds.value = nextStartedOrderIds
       completedInstrumentIds.value = nextCompletedInstrumentIds
+      runningInstrumentIds.value = nextRunningInstrumentIds
 
       workOrders.value = all
       restoreScheduledEvents(all)
@@ -716,7 +728,7 @@ export function useHighTempPressureSchedule() {
         (order.statusCode !== undefined && SCHEDULABLE_STATUS.has(order.statusCode)) ||
         !!startedOrderIds.value[order.id]
       ) &&
-      order.items.some((item) => !completedInstrumentIds.value[item.id]) &&
+      order.items.some((item) => !item.completed && !completedInstrumentIds.value[item.id]) &&
       (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
@@ -745,7 +757,7 @@ export function useHighTempPressureSchedule() {
   const selectedScheduledOrders = computed<ScheduledSelection[]>(() => {
     return selectedScheduledOrderIds.value
       .map((id) => ({ instrument: getInstrumentById(id), order: getOrderByInstrumentId(id) }))
-      .filter((obj) => obj.instrument && obj.order)
+      .filter((obj) => obj.instrument && obj.order && isInstrumentPending(obj.instrument.id))
       .map((obj) => ({ instrument: obj.instrument as InstrumentItem, order: obj.order as WorkOrder }))
   })
 
@@ -755,7 +767,7 @@ export function useHighTempPressureSchedule() {
 
     const order = getOrderByInstrumentId(id)
     const instrument = getInstrumentById(id)
-    return order && instrument ? { order, instrument } : null
+    return order && instrument && isInstrumentPending(instrument.id) ? { order, instrument } : null
   })
 
   function prevWeek() {
@@ -1151,7 +1163,32 @@ export function useHighTempPressureSchedule() {
     return order.items.every((it) => getInstrumentEvents(it.id).length > 0)
   }
 
-  const isInstrumentPending = (instrumentId: string) => !completedInstrumentIds.value[instrumentId]
+  const isInstrumentPending = (instrumentId: string) => {
+    const instrument = getInstrumentById(instrumentId)
+    return !instrument?.completed && !completedInstrumentIds.value[instrumentId]
+  }
+
+  const markInstrumentsRunning = (instrumentIds: string[]) => {
+    const next = { ...runningInstrumentIds.value }
+    instrumentIds.forEach((instrumentId) => {
+      if (instrumentId && isInstrumentPending(instrumentId)) next[instrumentId] = true
+    })
+    runningInstrumentIds.value = next
+    persistProgressState()
+  }
+
+  const clearRunningInstruments = (instrumentIds: string[]) => {
+    const next = { ...runningInstrumentIds.value }
+    instrumentIds.forEach((instrumentId) => {
+      delete next[instrumentId]
+    })
+    runningInstrumentIds.value = next
+    persistProgressState()
+  }
+
+  const isInstrumentRunning = (instrumentId: string) => {
+    return isInstrumentPending(instrumentId) && !!runningInstrumentIds.value[instrumentId]
+  }
 
   const markOrderStarted = (orderId: string) => {
     if (!orderId) return
@@ -1163,6 +1200,9 @@ export function useHighTempPressureSchedule() {
 
   const markInstrumentCompleted = (instrumentId: string) => {
     if (!instrumentId) return
+    const nextRunning = { ...runningInstrumentIds.value }
+    delete nextRunning[instrumentId]
+    runningInstrumentIds.value = nextRunning
     completedInstrumentIds.value = { ...completedInstrumentIds.value, [instrumentId]: true }
     removeScheduledInstrumentLocal(instrumentId)
     persistProgressState()
@@ -1178,7 +1218,11 @@ export function useHighTempPressureSchedule() {
           ? [excludingInstrumentIds]
           : []
     )
-    return order.items.filter((item) => !excludingSet.has(item.id) && !completedInstrumentIds.value[item.id]).length
+    return order.items.filter((item) =>
+      !excludingSet.has(item.id) &&
+      !item.completed &&
+      !completedInstrumentIds.value[item.id]
+    ).length
   }
 
   const hasRemainingInstrumentsAfterCompleting = (orderId: string, instrumentIds: string | string[]) =>
@@ -1248,6 +1292,9 @@ export function useHighTempPressureSchedule() {
     resizingEventId,
     isResizing,
     isInstrumentPending,
+    markInstrumentsRunning,
+    clearRunningInstruments,
+    isInstrumentRunning,
     markOrderStarted,
     isOrderStarted,
     markInstrumentCompleted,

@@ -153,6 +153,7 @@ async function handleConfirmStart() {
     ElMessage.error('未找到已选中的仪器')
     return
   }
+  const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
   completedSelections.value = []
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
   const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
@@ -164,6 +165,7 @@ async function handleConfirmStart() {
 
   if (!ordersNeedingStart.length) {
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
+    schedule.markInstrumentsRunning(runningInstrumentIds)
     testing.confirmStart()
     return
   }
@@ -179,6 +181,7 @@ async function handleConfirmStart() {
       }
       schedule.markOrderStarted(order.id)
     }
+    schedule.markInstrumentsRunning(runningInstrumentIds)
     await schedule.refreshWorkOrders()
     testing.confirmStart()
   } catch (e) {
@@ -257,14 +260,19 @@ async function handleConfirmEnd() {
       ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
     }
     testing.endTest()
+    activeTestSelections.value = []
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '结束测试失败')
   }
 }
 
 function handleConfirmStop() {
+  const currentSelections = activeTestSelections.value.length
+    ? activeTestSelections.value
+    : schedule.selectedScheduledOrders.value
   const current = schedule.currentSelected.value
   testing.stopTest()
+  schedule.clearRunningInstruments(currentSelections.map((selection) => selection.instrument.id))
   activeTestSelections.value = []
   schedule.cancelScheduledInstrument(current?.instrument.id)
   ElMessage.info('已中止本次测试，视频采集状态已重置')
@@ -336,6 +344,7 @@ onMounted(async () => {
         :get-instrument-by-id="schedule.getInstrumentById"
         :get-order-by-instrument-id="schedule.getOrderByInstrumentId"
         :is-instrument-pending="schedule.isInstrumentPending"
+        :is-instrument-running="schedule.isInstrumentRunning"
         @update:search-keyword="schedule.searchKeyword.value = $event"
         @order-drag-start="schedule.handleOrderDragStart"
         @drag-end="schedule.handleDragEnd"
