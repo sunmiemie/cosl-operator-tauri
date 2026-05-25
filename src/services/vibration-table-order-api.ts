@@ -120,7 +120,13 @@ export type VibrationTableOrderStatusMutationResponse = {
     order_id: number
     before_status: number
     after_status: number
+    completed_instrument_ids?: number[]
+    remaining_instrument_ids?: number[]
   }
+}
+
+export type ChangeVibrationTableOrderStatusOptions = {
+  completedInstrumentIds?: Array<number | string>
 }
 
 export type UpdateVibrationTableOrderBody = Partial<
@@ -149,11 +155,15 @@ export async function updateVibrationTableOrder(
 export async function changeVibrationTableOrderStatus(
   orderId: number,
   status: number,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  options: ChangeVibrationTableOrderStatusOptions = {}
 ): Promise<ApiResponse<VibrationTableOrderStatusMutationResponse>> {
   return http.post<VibrationTableOrderStatusMutationResponse>(
     `/test/vibration-table/order/status/${orderId}/`,
-    { status },
+    {
+      status,
+      completed_instrument_ids: options.completedInstrumentIds,
+    },
     headers
   )
 }

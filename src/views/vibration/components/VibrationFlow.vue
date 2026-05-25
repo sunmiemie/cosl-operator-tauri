@@ -11,7 +11,7 @@ import type {
   WorkOrder,
 } from '../types'
 
-defineProps<{
+const props = defineProps<{
   stage: Stage
   stepList: ReadonlyArray<{ id: Stage; label: string }>
   devCheckItems: DevCheckItem[]
@@ -78,6 +78,33 @@ const emit = defineEmits<{
 }>()
 
 const uploadDragging = ref(false)
+const woDetailOpen = ref(false)
+
+const currentTestInstruments = () =>
+  props.currentWorkOrder?.selectedInstruments?.length
+    ? props.currentWorkOrder.selectedInstruments
+    : props.currentWorkOrder?.instruments || []
+
+const displayValue = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return '-'
+  return String(value)
+}
+
+const maskPhone = (phone?: string) => {
+  if (!phone) return '-'
+  return phone.length >= 7 ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : phone
+}
+
+const durationText = (duration?: number) => duration ? `${duration} 分钟` : '-'
+
+const openWODetail = () => {
+  if (!props.currentWorkOrder) return
+  woDetailOpen.value = true
+}
+
+const closeWODetail = () => {
+  woDetailOpen.value = false
+}
 
 function handleUploadDragOver(event: DragEvent) {
   event.preventDefault()
@@ -393,31 +420,57 @@ function handleUploadDrop(event: DragEvent) {
           </div>
 
           <div class="side-info">
-            <div class="card">
-              <div class="card-header"><h3 class="card-title">当前工单</h3></div>
-              <div class="info-body">
-                <div v-if="currentWorkOrder" class="wo-detail-stack">
-                  <div class="wo-title">{{ currentWorkOrder.id }}</div>
-                  <div class="wo-kv-grid">
-                    <div class="wo-kv"><span>申请人</span><strong>{{ currentWorkOrder.applicant || '-' }}</strong></div>
-                    <div class="wo-kv"><span>联系电话</span><strong>{{ currentWorkOrder.phone || '-' }}</strong></div>
-                    <div class="wo-kv full"><span>使用设备</span><strong>{{ currentWorkOrder.device || '-' }}</strong></div>
-                    <div class="wo-kv"><span>振动量级</span><strong>{{ currentWorkOrder.level || '-' }}</strong></div>
-                    <div class="wo-kv"><span>测试时长</span><strong>{{ currentWorkOrder.duration || '-' }} 分钟</strong></div>
-                    <div class="wo-kv"><span>测试类型</span><strong>{{ currentWorkOrder.type || '-' }}</strong></div>
-                    <div class="wo-kv"><span>设备编号</span><strong>{{ currentWorkOrder.deviceNumber || '-' }}</strong></div>
-                  </div>
-                  <div class="wo-instrument-list">
-                    <div class="wo-section-title">本次测试仪器</div>
-                    <div
-                      v-for="instrument in (currentWorkOrder.selectedInstruments?.length ? currentWorkOrder.selectedInstruments : currentWorkOrder.instruments)"
-                      :key="instrument.id"
-                      class="wo-instrument-item"
-                    >
-                      <span>{{ instrument.name }}</span>
-                      <strong>{{ instrument.sn || '-' }}</strong>
+            <div class="card current-wo-card">
+              <div class="card-header compact-wo-header">
+                <h3 class="card-title"><span class="wo-mini-icon">▣</span>当前工单</h3>
+              </div>
+              <div class="info-body current-wo-body">
+                <div v-if="currentWorkOrder" class="wo-compact-stack">
+                  <div class="wo-compact-title">{{ currentWorkOrder.id }}</div>
+                  <div class="wo-compact-grid">
+                    <div class="wo-compact-cell">
+                      <span>申请人</span>
+                      <strong>{{ displayValue(currentWorkOrder.applicant) }}</strong>
+                    </div>
+                    <div class="wo-compact-cell">
+                      <span>联系电话</span>
+                      <strong>{{ maskPhone(currentWorkOrder.phone) }}</strong>
+                    </div>
+                    <div class="wo-compact-cell full">
+                      <span>使用设备</span>
+                      <strong>{{ displayValue(currentWorkOrder.device) }}</strong>
+                    </div>
+                    <div class="wo-compact-cell">
+                      <span>振动量级</span>
+                      <strong class="danger-text">{{ displayValue(currentWorkOrder.level) }}</strong>
+                    </div>
+                    <div class="wo-compact-cell">
+                      <span>测试时长</span>
+                      <strong>{{ durationText(currentWorkOrder.duration) }}</strong>
+                    </div>
+                    <div class="wo-compact-cell">
+                      <span>测试类型</span>
+                      <strong>{{ displayValue(currentWorkOrder.type) }}</strong>
+                    </div>
+                    <div class="wo-compact-cell">
+                      <span>设备编号</span>
+                      <strong>{{ displayValue(currentWorkOrder.deviceNumber) }}</strong>
                     </div>
                   </div>
+                  <div class="wo-compact-section-title">本次测试仪器</div>
+                  <div class="wo-compact-instrument-list">
+                    <div
+                      v-for="instrument in currentTestInstruments()"
+                      :key="instrument.id"
+                      class="wo-compact-instrument"
+                    >
+                      <strong>{{ instrument.name }}</strong>
+                      <span>{{ displayValue(instrument.sn) }}</span>
+                    </div>
+                  </div>
+                  <button class="wo-detail-action" type="button" @click="openWODetail">
+                    查看完整测试详情 →
+                  </button>
                 </div>
                 <div v-else class="text-muted">未选择工单</div>
               </div>
@@ -511,6 +564,238 @@ function handleUploadDrop(event: DragEvent) {
           </div>
         </div>
       </div>
+
+      <div
+        v-if="currentWorkOrder"
+        class="wo-detail-overlay"
+        :class="{ open: woDetailOpen }"
+        @click="closeWODetail"
+      ></div>
+      <aside
+        v-if="currentWorkOrder"
+        class="wo-detail-drawer"
+        :class="{ open: woDetailOpen }"
+      >
+        <div class="wo-detail-drawer-header">
+          <div>
+            <div class="drawer-eyebrow">完整测试详情</div>
+            <h3>{{ currentWorkOrder.id }}</h3>
+          </div>
+          <button class="drawer-close" type="button" @click="closeWODetail">×</button>
+        </div>
+        <div class="wo-detail-drawer-body">
+          <div class="detail-report-head">
+            <div>
+              <p>报告类型</p>
+              <h4>Report of Vibration Test Operation</h4>
+            </div>
+            <span class="detail-status-chip">{{ testMode === 'pre' ? '预实验' : '正式测试' }}</span>
+          </div>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:file-document-outline" />
+              <span>基本信息 Basic Information</span>
+            </div>
+            <div class="detail-table-card">
+              <div class="detail-table-cell">
+                <span>标题 Title</span>
+                <strong>{{ displayValue(currentWorkOrder.purpose || currentWorkOrder.testType) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>试件 Specimen</span>
+                <strong>{{ displayValue(currentWorkOrder.device) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>操作员 Operator</span>
+                <strong>{{ displayValue(currentWorkOrder.applicant) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>联系电话 Phone</span>
+                <strong>{{ maskPhone(currentWorkOrder.phone) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>试验开始 Date of Test Start</span>
+                <strong>{{ displayValue(currentWorkOrder.planTime || currentWorkOrder.testDate) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>完成状态 State</span>
+                <strong>{{ analysisCompleted ? '测试完成' : sessionStarted ? '测试进行中' : '待开始' }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>设备编号 Device No.</span>
+                <strong>{{ displayValue(currentWorkOrder.deviceNumber) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>备注 Comment</span>
+                <strong>{{ displayValue(currentWorkOrder.remark) }}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:pulse" />
+              <span>测试条件 TEST CONDITION</span>
+            </div>
+            <div class="detail-condition-card">
+              <div class="detail-metric-grid">
+                <div class="detail-metric">
+                  <span>加速度</span>
+                  <strong>10.081 <em>g rms</em></strong>
+                </div>
+                <div class="detail-metric">
+                  <span>速度</span>
+                  <strong>58.733 <em>cm/s rms</em></strong>
+                </div>
+                <div class="detail-metric">
+                  <span>位移</span>
+                  <strong>5.259 <em>mm rms</em></strong>
+                </div>
+              </div>
+
+              <div class="detail-subtitle">交越点 PSD</div>
+              <div class="detail-data-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>No.</th>
+                      <th>频率 (Hz)</th>
+                      <th>量级 (g²/Hz)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>1</td><td>10.00</td><td>8.823e-2</td></tr>
+                    <tr><td>2</td><td>18.00</td><td>8.8226</td></tr>
+                    <tr><td>3</td><td>22.00</td><td>0.8823</td></tr>
+                    <tr><td>4</td><td>100.00</td><td>0.8823</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="detail-subtitle">容差设置</div>
+              <div class="detail-data-table tolerance-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>类型</th>
+                      <th>上限 (dB)</th>
+                      <th>下限 (dB)</th>
+                      <th>允许宽度 (Hz)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr class="danger-row"><td>中断</td><td>+20.00</td><td>-15.00</td><td>0.00</td></tr>
+                    <tr class="warning-row"><td>警告</td><td>+6.00</td><td>-6.00</td><td>0.00</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="detail-muted-strip">
+                <Icon icon="mdi:circle-off-outline" />
+                <span>扩张容差 0 件</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:input" />
+              <span>输入条件 INPUT CONDITION</span>
+            </div>
+            <div class="detail-channel-card">
+              <div class="channel-head">
+                <span>Ch1</span>
+                <strong>中间位置</strong>
+                <em>000-Ch1</em>
+              </div>
+              <div class="channel-row"><span>输入类型</span><strong>电荷输入 (1 mV/pC)</strong></div>
+              <div class="channel-row"><span>输入灵敏度</span><strong>25.730 pC/g</strong></div>
+              <div class="channel-row"><span>极性</span><strong>正</strong></div>
+              <div class="channel-row"><span>输入通道类别</span><strong>未使用</strong></div>
+              <div class="channel-row"><span>平均化参数</span><strong>[M : 4 , E : 8 ( 120 DOF )]</strong></div>
+            </div>
+            <div class="detail-channel-card">
+              <div class="channel-head">
+                <span>Ch2</span>
+                <strong>边缘位置</strong>
+                <em>000-Ch2</em>
+              </div>
+              <div class="channel-row"><span>输入类型</span><strong>电荷输入 (1 mV/pC)</strong></div>
+              <div class="channel-row"><span>输入灵敏度</span><strong>28.910 pC/g</strong></div>
+              <div class="channel-row"><span>极性</span><strong>正</strong></div>
+              <div class="channel-row"><span>输入通道类别</span><strong>未使用</strong></div>
+              <div class="channel-row"><span>平均化参数</span><strong>[M : 4 , E : 8 ( 120 DOF )]</strong></div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:tune-variant" />
+              <span>控制条件 CONTROL CONDITION</span>
+            </div>
+            <div class="detail-condition-card">
+              <div class="detail-metric-grid control-grid">
+                <div class="detail-metric"><span>控制对象</span><strong>加速度 (g)</strong></div>
+                <div class="detail-metric"><span>频率范围</span><strong>1000.00 Hz</strong></div>
+                <div class="detail-metric"><span>分析谱线</span><strong>400 lines</strong></div>
+                <div class="detail-metric"><span>Δf / 帧时间</span><strong>2.50 Hz / 400.00 ms</strong></div>
+                <div class="detail-metric"><span>最高参考频率</span><strong>1000.00 Hz</strong></div>
+                <div class="detail-metric"><span>平均化参数</span><strong>M:4, E:8 [120 DOF]</strong></div>
+              </div>
+
+              <div class="detail-subtitle">环检 <span>宽松</span></div>
+              <div class="detail-param-box">
+                <div><span>环境噪声的上限值</span><strong>[ 80.0% ]</strong></div>
+                <div><span>初始试验中的传递率变化检测值</span><strong>[ 90.0% ]</strong></div>
+                <div><span>试验运行中的传递率变化检测值</span><strong>[ 60.0% ]</strong></div>
+                <div><span>超载检测值</span><strong>[ 83.30% ]（对满量程rms比率）</strong></div>
+              </div>
+
+              <div class="detail-subtitle">均衡化模式 <span>标准</span></div>
+              <div class="detail-param-box">
+                <div><span>频谱的重合分析</span><strong>[ 50.0% ]</strong></div>
+                <div><span>初始EQ量级增加侧限制值</span><strong>[ 10.00 dB ]</strong></div>
+                <div><span>初始EQ量级减少侧限制值</span><strong>[ 15.00 dB ]</strong></div>
+                <div><span>传递特性更新比率</span><strong>[ 50.0% ]</strong></div>
+                <div><span>源于错误的控制对象敏感度</span><strong>[ 50.0% ]</strong></div>
+                <div><span>过去的控制量级的继承比率</span><strong>[ 100.0% ]</strong></div>
+                <div><span>根据错误的控制上限（增加侧）</span><strong>[ 4.00 dB ]</strong></div>
+                <div><span>根据错误的控制下限（减少侧）</span><strong>[ 5.00 dB ]</strong></div>
+              </div>
+
+              <div class="detail-subtitle">输出参数</div>
+              <div class="detail-param-box">
+                <div><span>试验时间</span><strong>01:00:00</strong></div>
+                <div><span>初始输出量级</span><strong>-20.00 dB</strong></div>
+                <div><span>量级增减值</span><strong>2.00 dB</strong></div>
+                <div><span>自动开始</span><strong>不运行</strong></div>
+                <div><span>输出停止过滤时间</span><strong>500.0 ms</strong></div>
+                <div><span>观测频率的限制</span><strong>仅目标频率范围</strong></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:tools" />
+              <span>本次测试仪器 Instruments</span>
+            </div>
+            <div class="detail-instrument-list">
+              <div
+                v-for="instrument in currentTestInstruments()"
+                :key="instrument.id"
+                class="detail-instrument-item"
+              >
+                <div>
+                  <strong>{{ instrument.name }}</strong>
+                  <span>{{ displayValue(instrument.sn) }}</span>
+                </div>
+                <em>{{ displayValue(instrument.model || instrument.maxDiameter || instrument.weight) }}</em>
+              </div>
+            </div>
+          </section>
+        </div>
+      </aside>
     </div>
   </div>
 </template>

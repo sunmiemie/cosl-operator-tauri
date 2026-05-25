@@ -297,12 +297,12 @@ async function backToDashboard(finalStatus: number = 1) {
   const selectedInstruments = order?.selectedInstruments || []
   let nextOrderStatus = finalStatus
   let shouldRemoveSchedule = finalStatus === 5
+  const completedInstrumentIds = finalStatus === 5
+    ? selectedInstruments.map((instrument) => instrument.dbId).filter((id): id is number | string => id !== undefined)
+    : []
   if (order && selectedInstruments.length) {
     if (finalStatus === 5) {
-      markInstrumentsCompleted(order.id, selectedInstruments)
-      const hasRemainingInstruments = getVisibleOrderInstruments(order).length > 0
-      nextOrderStatus = hasRemainingInstruments ? 1 : 5
-      shouldRemoveSchedule = !hasRemainingInstruments
+      shouldRemoveSchedule = true
     }
     clearRunningInstruments(order.id, selectedInstruments)
   }
@@ -312,11 +312,19 @@ async function backToDashboard(finalStatus: number = 1) {
     const authHeaders = authOk ? getAuthHeaders() : undefined
     orderStatusMutating.value = true
     try {
-      const resp = await changeVibrationTableOrderStatus(order.dbId, nextOrderStatus, authHeaders)
+      const resp = await changeVibrationTableOrderStatus(
+        order.dbId,
+        nextOrderStatus,
+        authHeaders,
+        { completedInstrumentIds }
+      )
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
         return
       } else {
+        if (finalStatus === 5 && selectedInstruments.length) {
+          markInstrumentsCompleted(order.id, selectedInstruments)
+        }
         void refreshWorkOrders()
       }
     } finally {

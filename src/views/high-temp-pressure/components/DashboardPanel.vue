@@ -165,7 +165,7 @@ const getOrderDeviceSummary = (order: WorkOrder) => {
 }
 
 const canDragOrder = (order: WorkOrder) => {
-  return getPendingInstruments(order).length > 0
+  return getActiveInstruments(order).length > 0
 }
 
 const getScheduledStyle = (item: any) => {

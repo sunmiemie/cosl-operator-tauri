@@ -31,7 +31,7 @@ function createScheduleEventId(orderId: string) {
 }
 
 const VIBRATION_RUNNING_INSTRUMENTS_KEY = 'vibration-running-instrument-ids'
-const VIBRATION_COMPLETED_INSTRUMENTS_KEY = 'vibration-completed-instrument-ids'
+const VIBRATION_COMPLETED_INSTRUMENTS_KEY = 'vibration-completed-instrument-ids-v2'
 
 function getInstrumentRuntimeKeys(orderId: string, instrument: VibrationInstrument) {
   return Array.from(new Set([
@@ -727,13 +727,22 @@ export function useVibrationSchedule() {
     })
     completedInstrumentIds.value = next
     persistCompletedInstrumentIds()
+    const completedIds = new Set(instruments.map((instrument) => instrument.id))
+    workOrders.value = workOrders.value.map((order) => {
+      if (order.id !== orderId) return order
+      return {
+        ...order,
+        instruments: order.instruments.map((instrument) =>
+          completedIds.has(instrument.id) ? { ...instrument, completed: true } : instrument
+        ),
+      }
+    })
   }
 
-  function isInstrumentCompleted(order: WorkOrder, instrument: VibrationInstrument) {
+  function isInstrumentCompleted(_order: WorkOrder, instrument: VibrationInstrument) {
     return (
       instrument.completed === true ||
-      instrument.status === 5 ||
-      getInstrumentRuntimeKeys(order.id, instrument).some((key) => completedInstrumentIds.value[key])
+      instrument.status === 5
     )
   }
 
@@ -749,6 +758,7 @@ export function useVibrationSchedule() {
     if (isRunning || instrument?.status === 2) return '测试中'
     if (instrument && isInstrumentCompleted(order, instrument)) return '已完成'
     if (instrument?.status === 6) return '异常'
+    if (getOrderEvents(order.id).length > 0) return '已排程'
     if (instrument?.statusText?.trim()) return instrument.statusText
     return '待排程'
   }

@@ -35,7 +35,6 @@ function createScheduleEventId(orderId: string, dateStr: string, startTimeKey: s
   return `${orderId}-${dateStr}-${startTimeKey}-${span}`
 }
 
-const SCHEDULABLE_STATUS = new Set([1])
 const VISIBLE_ORDER_STATUSES = [1, 2]
 
 function getStatusText(status?: number, fallback?: string) {
@@ -196,7 +195,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
 }
 
 export function useHighTempPressureSchedule() {
-  const { initAuth, getAuthHeaders } = useAuth()
+  const { initAuth, validateToken, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
   const selectedScheduledOrderIds = ref<string[]>([])
@@ -599,7 +598,8 @@ export function useHighTempPressureSchedule() {
     markPendingSchedule(instrumentId, getInstrumentEvents(instrumentId))
     try {
       const authOk = await initAuth()
-      if (!authOk) {
+      const tokenOk = authOk && await validateToken()
+      if (!tokenOk) {
         if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
         ElMessage.error('登录状态失效，请重新登录后再保存排期')
         return false
@@ -617,7 +617,13 @@ export function useHighTempPressureSchedule() {
         : await clearHighTempPressureInstrumentSchedule(instrument.dbId, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
-        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        if (resp.status === 401) {
+          ElMessage.error('登录状态失效，请重新登录后再保存排期')
+        } else if (resp.status === 403) {
+          ElMessage.error('当前账号没有高温高压井排程权限，请联系管理员开通权限')
+        } else {
+          ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        }
         return false
       }
       instrument.scheduledStartAt = resp.data.data?.scheduled_start_at || null
@@ -751,10 +757,6 @@ export function useHighTempPressureSchedule() {
     const keyword = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) =>
-      (
-        (order.statusCode !== undefined && SCHEDULABLE_STATUS.has(order.statusCode)) ||
-        !!startedOrderIds.value[order.id]
-      ) &&
       order.items.some((item) => !item.completed && !completedInstrumentIds.value[item.id]) &&
       (
         keyword === '' ||
