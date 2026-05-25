@@ -34,12 +34,27 @@ export type VibrationTableOrderDTO = {
   applicant: string
   applicant_phone?: string
   test_application_unit?: string
+  test_application_unit_manager?: string
   application_date?: string | null
+  research_number?: string
+  project_budget_number?: string
+  project_name?: string
+  client?: string
   planned_time?: string | null
   task_number?: string | null
   table_no?: string | null
   test_type?: string
   test_purpose?: string
+  vibration_direction?: string
+  acceleration?: string
+  slope?: string
+  frequency?: string
+  vibration_times?: number
+  project_members?: string
+  equipment_list?: string
+  instrument_combination?: string
+  test_steps?: string
+  safety_risks?: string
   device_name: string
   device_number?: string
   deviceNumber?: string

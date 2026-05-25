@@ -285,9 +285,9 @@ const handleGridDrop = (e: DragEvent) => {
                     @dragstart="canDragOrder(order) && emit('order-drag-start', $event, order, getActiveInstruments(order).map((item) => item.id))"
                     @dragend="emit('drag-end', $event)"
                   >
-                    <td class="cell-applicant">{{ order.applicant }}</td>
-                    <td class="cell-id">{{ order.no }}</td>
-                    <td class="cell-detail">
+                    <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
+                    <td class="cell-id" :title="order.no">{{ order.no }}</td>
+                    <td class="cell-detail" :title="getOrderDeviceSummary(order)">
                       <span class="expand-icon" @click.stop="order.expanded = !order.expanded">
                         <Icon :icon="order.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                       </span>
@@ -296,7 +296,7 @@ const handleGridDrop = (e: DragEvent) => {
                     <td class="cell-action">
                       <button class="op-btn view" @click.stop="openDetail(order)">详情</button>
                     </td>
-                    <td class="cell-status">
+                    <td class="cell-status" :title="getOrderStatusMeta(order).label">
                       <span class="status-pill" :class="getOrderStatusMeta(order).className">
                         {{ getOrderStatusMeta(order).label }}
                       </span>

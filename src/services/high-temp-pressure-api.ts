@@ -10,9 +10,24 @@ export interface HighTempPressureOrderDTO {
   target_temp: number
   target_pressure: number
   applicant: string
+  applicant_phone?: string
+  test_application_unit?: string
+  test_application_unit_manager?: string
+  application_date?: string | null
+  research_number?: string
+  project_budget_number?: string
+  project_name?: string
+  client?: string
+  planned_time?: string | null
+  test_type?: string
   use_device?: string
   max_diameter?: number | null
   hold_time?: number | null
+  project_members?: string
+  equipment_list?: string
+  instrument_combination?: string
+  test_steps?: string
+  safety_risks?: string
   admin_signature_url?: string | null
   sanxin_confirm_date?: string | null
   sanxin_tester_item_1?: string | null
@@ -36,6 +51,7 @@ export interface HighTempPressureOrderInstrumentDTO {
   instrument_sn: string
   test_type?: string
   quantity?: number
+  instrument_length?: string
   max_diameter?: number | null
   scheduled_start_at?: string | null
   scheduled_end_at?: string | null

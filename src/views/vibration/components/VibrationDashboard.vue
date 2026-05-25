@@ -91,12 +91,37 @@ const gridInnerWidth = computed(() => {
 
 const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
 const expandedOrderIds = ref<string[]>([])
+const detailVisible = ref(false)
+const detailOrder = ref<WorkOrder | null>(null)
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
 const toggleExpanded = (orderId: string) => {
   const set = new Set(expandedOrderIds.value)
   if (set.has(orderId)) set.delete(orderId)
   else set.add(orderId)
   expandedOrderIds.value = Array.from(set)
+}
+
+const displayValue = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return '-'
+  return String(value)
+}
+
+const multilineItems = (value?: string) => {
+  if (!value?.trim()) return []
+  return value
+    .split(/\r?\n|[；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+const openDetail = (order: WorkOrder) => {
+  detailOrder.value = order
+  detailVisible.value = true
+}
+
+const closeDetail = () => {
+  detailVisible.value = false
+  detailOrder.value = null
 }
 
 const getOrderStatusText = (order: WorkOrder) => {
@@ -207,6 +232,7 @@ const getScheduledStyle = (item: any) => {
               <col class="col-applicant" />
               <col class="col-task" />
               <col class="col-device" />
+              <col class="col-action" />
               <col class="col-status" />
             </colgroup>
             <thead>
@@ -214,6 +240,7 @@ const getScheduledStyle = (item: any) => {
                 <th>申请人</th>
                 <th>任务编号</th>
                 <th>使用设备</th>
+                <th>操作</th>
                 <th>状态</th>
               </tr>
             </thead>
@@ -227,9 +254,9 @@ const getScheduledStyle = (item: any) => {
                   @dragstart="emit('drag-start', $event, order)"
                   @dragend="emit('drag-end', $event)"
                 >
-                  <td class="cell-applicant">{{ order.applicant }}</td>
-                  <td class="cell-id">{{ order.id }}</td>
-                  <td class="cell-device">
+                  <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
+                  <td class="cell-id" :title="order.id">{{ order.id }}</td>
+                  <td class="cell-device" :title="order.device || '-'">
                     <div class="cell-detail">
                       <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
                         <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
@@ -237,14 +264,17 @@ const getScheduledStyle = (item: any) => {
                       <span class="device-summary" :title="order.device || '-'">{{ order.device || '-' }}</span>
                     </div>
                   </td>
-                  <td class="cell-status">
+                  <td class="cell-action">
+                    <button class="op-btn view" @click.stop="openDetail(order)">详情</button>
+                  </td>
+                  <td class="cell-status" :title="getOrderStatusText(order)">
                     <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">
                       {{ getOrderStatusText(order) }}
                     </span>
                   </td>
                 </tr>
                 <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
-                  <td class="expanded-cell" colspan="4">
+                  <td class="expanded-cell" colspan="5">
                     <div class="instrument-panel">
                       <div class="instrument-panel-head">
                         <div>
@@ -279,6 +309,146 @@ const getScheduledStyle = (item: any) => {
               </template>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" v-if="detailVisible" @click.self="closeDetail">
+      <div class="detail-modal">
+        <div class="detail-modal-header">
+          <div>
+            <div class="detail-modal-title">工单详情</div>
+            <div class="detail-modal-subtitle">{{ detailOrder?.id || '-' }}</div>
+          </div>
+          <button class="detail-close" @click="closeDetail">×</button>
+        </div>
+        <div class="detail-body" v-if="detailOrder">
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">基础信息</div>
+              <span class="status-pill" :class="getStatusClass(getOrderStatusText(detailOrder))">{{ getOrderStatusText(detailOrder) }}</span>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item"><span>工单号</span><strong>{{ detailOrder.id }}</strong></div>
+              <div class="detail-item"><span>工单类型</span><strong>{{ displayValue(detailOrder.orderType || detailOrder.type) }}</strong></div>
+              <div class="detail-item"><span>任务编号</span><strong>{{ displayValue(detailOrder.taskNumber) }}</strong></div>
+              <div class="detail-item"><span>表格编号</span><strong>{{ displayValue(detailOrder.tableNo) }}</strong></div>
+              <div class="detail-item"><span>计划时间</span><strong>{{ displayValue(detailOrder.planTime) }}</strong></div>
+              <div class="detail-item"><span>更新时间</span><strong>{{ displayValue(detailOrder.updatedAt) }}</strong></div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">申请信息</div>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item"><span>申请人</span><strong>{{ displayValue(detailOrder.applicant) }}</strong></div>
+              <div class="detail-item"><span>联系电话</span><strong>{{ displayValue(detailOrder.phone) }}</strong></div>
+              <div class="detail-item"><span>申请单位</span><strong>{{ displayValue(detailOrder.applicationUnit) }}</strong></div>
+              <div class="detail-item"><span>单位负责人</span><strong>{{ displayValue(detailOrder.applicationUnitManager) }}</strong></div>
+              <div class="detail-item"><span>申请日期</span><strong>{{ displayValue(detailOrder.applicationDate) }}</strong></div>
+              <div class="detail-item"><span>测试日期</span><strong>{{ displayValue(detailOrder.testDate) }}</strong></div>
+              <div class="detail-item"><span>委托人</span><strong>{{ displayValue(detailOrder.client) }}</strong></div>
+              <div class="detail-item"><span>项目名称</span><strong>{{ displayValue(detailOrder.projectName) }}</strong></div>
+              <div class="detail-item"><span>科研编号</span><strong>{{ displayValue(detailOrder.researchNumber) }}</strong></div>
+              <div class="detail-item"><span>预算编号</span><strong>{{ displayValue(detailOrder.projectBudgetNumber) }}</strong></div>
+              <div class="detail-item detail-item-wide"><span>项目成员</span><strong>{{ displayValue(detailOrder.projectMembers) }}</strong></div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">测试参数</div>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item"><span>使用设备</span><strong>{{ displayValue(detailOrder.device) }}</strong></div>
+              <div class="detail-item"><span>设备编号</span><strong>{{ displayValue(detailOrder.deviceNumber) }}</strong></div>
+              <div class="detail-item"><span>振动量级</span><strong>{{ displayValue(detailOrder.level) }}</strong></div>
+              <div class="detail-item"><span>测试时长</span><strong>{{ displayValue(detailOrder.duration) }} 分钟</strong></div>
+              <div class="detail-item"><span>测试类型</span><strong>{{ displayValue(detailOrder.testType) }}</strong></div>
+              <div class="detail-item"><span>测试目的</span><strong>{{ displayValue(detailOrder.purpose) }}</strong></div>
+              <div class="detail-item"><span>振动方向</span><strong>{{ displayValue(detailOrder.vibrationDirection) }}</strong></div>
+              <div class="detail-item"><span>加速度</span><strong>{{ displayValue(detailOrder.acceleration) }}</strong></div>
+              <div class="detail-item"><span>斜率</span><strong>{{ displayValue(detailOrder.slope) }}</strong></div>
+              <div class="detail-item"><span>频率</span><strong>{{ displayValue(detailOrder.frequency) }}</strong></div>
+              <div class="detail-item"><span>振动次数</span><strong>{{ displayValue(detailOrder.vibrationTimes) }}</strong></div>
+              <div class="detail-item"><span>创建时间</span><strong>{{ displayValue(detailOrder.createdAt) }}</strong></div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">测试步骤与安全风险</div>
+            </div>
+            <div class="detail-text-wrap">
+              <div class="detail-text-block">
+                <div class="detail-text-title">测试步骤</div>
+                <ol v-if="multilineItems(detailOrder.testSteps).length" class="detail-list">
+                  <li v-for="(item, idx) in multilineItems(detailOrder.testSteps)" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="detail-empty">暂无测试步骤</div>
+              </div>
+              <div class="detail-text-block">
+                <div class="detail-text-title">安全风险及预防措施</div>
+                <ol v-if="multilineItems(detailOrder.safetyRisks).length" class="detail-list">
+                  <li v-for="(item, idx) in multilineItems(detailOrder.safetyRisks)" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="detail-empty">暂无安全风险说明</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">仪器明细</div>
+              <span class="detail-count">{{ detailOrder.instruments.length }} 台</span>
+            </div>
+            <div class="detail-grid detail-grid-top">
+              <div class="detail-item detail-item-wide"><span>设备清单</span><strong>{{ displayValue(detailOrder.equipmentList) }}</strong></div>
+              <div class="detail-item detail-item-wide"><span>仪器串组合</span><strong>{{ displayValue(detailOrder.instrumentCombination) }}</strong></div>
+            </div>
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th>仪器</th>
+                  <th>SN/编号</th>
+                  <th>型号</th>
+                  <th>数量</th>
+                  <th>重量</th>
+                  <th>长度</th>
+                  <th>最大直径</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="instrument in detailOrder.instruments" :key="instrument.id">
+                  <td>{{ instrument.name }}</td>
+                  <td>{{ displayValue(instrument.sn) }}</td>
+                  <td>{{ displayValue(instrument.model) }}</td>
+                  <td>{{ displayValue(instrument.quantity) }}</td>
+                  <td>{{ displayValue(instrument.weight) }}</td>
+                  <td>{{ displayValue(instrument.length) }}</td>
+                  <td>{{ displayValue(instrument.maxDiameter) }}</td>
+                  <td>
+                    <span class="status-pill" :class="getStatusClass(getInstrumentStatusText(detailOrder, instrument.id))">
+                      {{ getInstrumentStatusText(detailOrder, instrument.id) }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">备注</div>
+            </div>
+            <div class="detail-note">{{ displayValue(detailOrder.remark) }}</div>
+          </div>
+        </div>
+        <div class="detail-modal-footer">
+          <button class="cancel-btn" @click="closeDetail">关闭</button>
         </div>
       </div>
     </div>
@@ -425,6 +595,7 @@ const getScheduledStyle = (item: any) => {
 
 .table-wrapper {
   padding: 0;
+  overflow-x: hidden;
 }
 
 .data-table {
@@ -434,16 +605,18 @@ const getScheduledStyle = (item: any) => {
   table-layout: fixed;
 }
 
-.col-applicant { width: 16%; }
-.col-task { width: 28%; }
-.col-device { width: auto; }
-.col-status { width: 88px; }
+.col-applicant { width: 64px; }
+.col-task { width: 132px; }
+.col-device { width: 86px; }
+.col-action { width: 58px; }
+.col-status { width: 68px; }
 
 .data-table th {
-  padding: 13px 12px;
+  padding: 12px 6px;
   border-bottom: 1px solid var(--color-border);
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .order-row {
@@ -456,7 +629,7 @@ const getScheduledStyle = (item: any) => {
 
 .order-row td {
   position: relative;
-  padding: 14px 12px;
+  padding: 13px 6px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background-color 0.15s ease;
@@ -488,8 +661,11 @@ const getScheduledStyle = (item: any) => {
 
 .cell-applicant,
 .cell-id,
-.cell-status {
+.cell-status,
+.cell-device {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-action,
@@ -525,7 +701,7 @@ const getScheduledStyle = (item: any) => {
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  max-width: 100%;
+  max-width: 54px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -550,19 +726,19 @@ const getScheduledStyle = (item: any) => {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  width: 88px;
+  width: 68px;
 }
 
 .op-btn {
-  min-width: 56px;
-  height: 28px;
+  min-width: 46px;
+  height: 26px;
   border: 1px solid rgba(59, 130, 246, 0.18);
   background: rgba(59, 130, 246, 0.08);
   color: var(--color-accent-blue);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
-  padding: 0 10px;
+  padding: 0 8px;
   border-radius: 8px;
 }
 
@@ -718,11 +894,11 @@ const getScheduledStyle = (item: any) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 64px;
-  height: 28px;
-  padding: 0 10px;
+  min-width: 54px;
+  height: 26px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -756,5 +932,233 @@ const getScheduledStyle = (item: any) => {
   color: #dc2626;
   background: rgba(239, 68, 68, 0.12);
   border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.detail-modal {
+  width: min(900px, 94vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-primary);
+  box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.3);
+}
+
+.detail-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.detail-modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.detail-modal-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  word-break: break-word;
+}
+
+.detail-close {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.detail-close:hover {
+  background: var(--color-bg-hover);
+}
+
+.detail-body {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 22px 20px;
+  background: var(--color-bg-primary);
+}
+
+.detail-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+}
+
+.detail-card + .detail-card {
+  margin-top: 12px;
+}
+
+.detail-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-section-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.detail-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding: 2px 16px 14px;
+}
+
+.detail-grid-top {
+  padding-bottom: 10px;
+}
+
+.detail-item-wide {
+  grid-column: span 3;
+}
+
+.detail-item {
+  min-width: 0;
+  padding: 12px 14px 10px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.detail-item span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.detail-item strong {
+  display: block;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+  background: var(--color-bg-secondary);
+}
+
+.detail-table th,
+.detail-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  word-break: break-word;
+}
+
+.detail-table th {
+  color: var(--color-text-secondary);
+  font-weight: 700;
+  background: var(--color-bg-tertiary);
+}
+
+.detail-text-wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.detail-text-block {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-primary);
+}
+
+.detail-text-title {
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detail-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-primary);
+  line-height: 1.7;
+}
+
+.detail-empty {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.detail-note {
+  padding: 14px 16px;
+  color: var(--color-text-primary);
+  line-height: 1.6;
+}
+
+.detail-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+@media (max-width: 820px) {
+  .detail-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .detail-item-wide {
+    grid-column: span 2;
+  }
+
+  .detail-text-wrap {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 620px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-item-wide {
+    grid-column: span 1;
+  }
 }
 </style>

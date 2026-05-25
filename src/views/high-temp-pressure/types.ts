@@ -7,6 +7,10 @@ export interface InstrumentItem {
   dbId?: number
   label: string
   sn: string
+  testType?: string
+  quantity?: number
+  instrumentLength?: string
+  maxDiameter?: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
   scheduleSegments?: InstrumentScheduleSegment[]
@@ -24,8 +28,16 @@ export interface WorkOrder {
   no: string
   entrustNo: string
   applicant: string
+  applicantPhone?: string
   applicantUnit: string
+  applicantUnitManager?: string
   applyDate: string
+  applicationDate?: string
+  researchNumber?: string
+  projectBudgetNumber?: string
+  projectName?: string
+  client?: string
+  plannedTime?: string
   receivingNo: string
   vesselType: string
   type: string
@@ -33,6 +45,12 @@ export interface WorkOrder {
   targetPressure: string
   keepCondition: string
   maxDiameter?: string
+  testType?: string
+  projectMembers?: string
+  equipmentList?: string
+  instrumentCombination?: string
+  testSteps?: string
+  safetyRisks?: string
   remark?: string
   status: string
   statusCode?: number

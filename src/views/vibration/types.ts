@@ -10,6 +10,31 @@ export interface WorkOrder {
   scheduleSegments?: WorkOrderScheduleSegment[]
   planTime?: string | null
   deviceNumber?: string
+  orderType?: string
+  applicationUnit?: string
+  applicationUnitManager?: string
+  applicationDate?: string | null
+  researchNumber?: string
+  projectBudgetNumber?: string
+  projectName?: string
+  client?: string
+  taskNumber?: string | null
+  tableNo?: string | null
+  testType?: string
+  testDate?: string | null
+  vibrationDirection?: string
+  acceleration?: string
+  slope?: string
+  frequency?: string
+  vibrationTimes?: number
+  projectMembers?: string
+  equipmentList?: string
+  instrumentCombination?: string
+  testSteps?: string
+  safetyRisks?: string
+  createdAt?: string
+  updatedAt?: string
+  remark?: string
   type: string
   applicant: string
   phone: string
@@ -33,6 +58,10 @@ export interface VibrationInstrument {
   sn: string
   model?: string
   remark?: string
+  quantity?: number
+  weight?: string
+  length?: string
+  maxDiameter?: string
   status?: number
   statusText?: string
   completed?: boolean
