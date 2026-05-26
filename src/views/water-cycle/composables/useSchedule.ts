@@ -400,11 +400,9 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   
   // 过滤出未排程且符合搜索条件的工单
   const unscheduledOrders = computed(() => {
-    const scheduled = new Set(Object.keys(scheduledEvents.value))
     const kw = searchKeyword.value.trim()
 
     return workOrders.value.filter(o => {
-      if (scheduled.has(o.id)) return false
       if (!kw) return true
 
       const keyword = kw.toLowerCase()
@@ -414,7 +412,11 @@ export function useSchedule(options: UseScheduleOptions = {}) {
         String(o.deviceName).toLowerCase().includes(keyword) ||
         String(o.applicant).toLowerCase().includes(keyword) ||
         String(o.flowProcess).toLowerCase().includes(keyword) ||
-        String(o.testPlatform).toLowerCase().includes(keyword)
+        String(o.testPlatform).toLowerCase().includes(keyword) ||
+        o.instruments.some((item) =>
+          String(item.name).toLowerCase().includes(keyword) ||
+          String(item.sn).toLowerCase().includes(keyword)
+        )
       )
     })
   })

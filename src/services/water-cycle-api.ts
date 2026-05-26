@@ -18,8 +18,16 @@ export type WaterCycleOrderDTO = {
   remark: string
   status: number
   status_text?: string
+  instruments?: WaterCycleOrderInstrumentDTO[]
   created_at: string
   updated_at: string
+}
+
+export type WaterCycleOrderInstrumentDTO = {
+  id?: number
+  instrument_name?: string
+  sn_numbers?: string
+  quantity?: number
 }
 
 export type WaterCycleOrder = {
@@ -41,11 +49,30 @@ export type WaterCycleOrder = {
   remark: string
   status: number
   statusText?: string
+  instruments: WaterCycleOrderInstrument[]
   createdAt: string
   updatedAt: string
 }
 
+export type WaterCycleOrderInstrument = {
+  id: string
+  dbId?: number
+  name: string
+  sn: string
+  quantity?: number
+}
+
 export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
+  const instruments = Array.isArray(dto.instruments)
+    ? dto.instruments.map((item, index) => ({
+        id: `water-ins-${dto.id}-${item.id ?? index}`,
+        dbId: item.id,
+        name: item.instrument_name || dto.device_name || `仪器${index + 1}`,
+        sn: item.sn_numbers || dto.device_number || '-',
+        quantity: item.quantity,
+      }))
+    : []
+
   return {
     id: String(dto.id),
     dbId: dto.id,
@@ -65,6 +92,7 @@ export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
     remark: dto.remark,
     status: dto.status,
     statusText: dto.status_text,
+    instruments,
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
   }
