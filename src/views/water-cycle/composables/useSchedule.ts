@@ -47,6 +47,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
   const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
+  const runningInstrumentIds = ref<Record<string, true>>({})
   
   // 当前在日历中被选中的工单 ID 列表
   const selectedScheduledOrderIds = ref<string[]>([])
@@ -403,6 +404,8 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     const kw = searchKeyword.value.trim()
 
     return workOrders.value.filter(o => {
+      const hasPendingInstrument = o.instruments.length === 0 || o.instruments.some((item) => !item.completed)
+      if (!hasPendingInstrument) return false
       if (!kw) return true
 
       const keyword = kw.toLowerCase()
@@ -422,6 +425,24 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   })
   
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
+  const getActiveInstruments = (order: WaterCycleOrder) => order.instruments.filter((item) => !item.completed)
+  const isInstrumentRunning = (instrumentId: string) => !!runningInstrumentIds.value[instrumentId]
+  const markInstrumentsRunning = (instrumentIds: string[]) => {
+    const next = { ...runningInstrumentIds.value }
+    instrumentIds.forEach((id) => {
+      if (id) next[id] = true
+    })
+    runningInstrumentIds.value = next
+  }
+  const clearRunningInstruments = (instrumentIds?: string[]) => {
+    if (!instrumentIds) {
+      runningInstrumentIds.value = {}
+      return
+    }
+    const next = { ...runningInstrumentIds.value }
+    instrumentIds.forEach((id) => delete next[id])
+    runningInstrumentIds.value = next
+  }
   
   // 获取当前在日历上被选中的排程对象集合
   const selectedScheduledOrders = computed(() => selectedScheduledOrderIds.value.map(id => getOrderById(id)).filter(Boolean) as any[])
@@ -678,6 +699,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     loadPresetSchedule,
     getCellKey, handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop,
     handleUnschedule, selectScheduledOrder, getEvent, startResize, startResizeTop, scheduledLayoutItems, maxLaneCount, scheduleOrder, resizingOrderId, isResizing,
-    getScheduleChangePayload, getScheduleText
+    getScheduleChangePayload, getScheduleText,
+    getActiveInstruments, isInstrumentRunning, markInstrumentsRunning, clearRunningInstruments
   }
 }

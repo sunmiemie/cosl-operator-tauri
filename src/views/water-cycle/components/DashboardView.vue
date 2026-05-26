@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { Icon } from '@iconify/vue'
+import { ElMessage } from 'element-plus'
 import { updateWaterCycleOrder, type WaterCycleOrder } from '@/services/water-cycle-api'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { useAuth } from '@/composables/useAuth'
 
 // 跳出一层目录 (../) 找到逻辑层
 import { useSchedule } from '../composables/useSchedule'
-import { currentView, selectedOrder } from '../composables/useTestStore'
+import { currentView, selectedOrder, selectedWaterCycleInstrumentIds } from '../composables/useTestStore'
 
 // 引入同级组件
 import StartupCheckModal from './StartupCheckModal.vue'
@@ -19,7 +20,8 @@ const {
   searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, getCellKey, getMonday,
   handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
-  workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload
+  workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload,
+  getActiveInstruments, isInstrumentRunning, markInstrumentsRunning
 } = useSchedule()
 
 const timeColWidth = 60
@@ -31,6 +33,8 @@ const gridInnerRef = ref<HTMLElement | null>(null)
 const expandedOrderIds = ref<string[]>([])
 const detailVisible = ref(false)
 const detailOrder = ref<WaterCycleOrder | null>(null)
+const instrumentPickerVisible = ref(false)
+const pickerInstrumentIds = ref<string[]>([])
 const handleWindowFocus = () => {
   if (workOrdersLoading.value) return
   refreshWorkOrders()
@@ -65,13 +69,15 @@ const displayValue = (value: unknown) => {
 }
 
 const getInstrumentCount = (order: WaterCycleOrder) => {
-  if (order.instruments.length) return order.instruments.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0)
+  const active = getActiveInstruments(order)
+  if (active.length) return active.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0)
   return 1
 }
 
 const getOrderDeviceSummary = (order: WaterCycleOrder) => order.deviceName || order.testPlatform || '-'
 
 const getOrderStatusText = (order: WaterCycleOrder) => {
+  if (getActiveInstruments(order).some((item) => isInstrumentRunning(item.id))) return '测试中'
   if (order.status === 2) return '测试中'
   if (order.status === 5 || order.status === 3) return '已完成'
   if (order.status === 6) return '异常'
@@ -85,6 +91,34 @@ const getStatusClass = (statusText: string) => {
   if (statusText === '已完成') return 'status-done'
   if (statusText === '异常') return 'status-error'
   return 'status-pending'
+}
+
+const getInstrumentStatusText = (order: WaterCycleOrder, instrumentId: string) => {
+  if (isInstrumentRunning(instrumentId)) return '测试中'
+  if (order.status === 2) return '待排程'
+  if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
+  return '待排程'
+}
+
+const selectedOrderForPicker = computed(() => selectedScheduledOrders.value[0] as WaterCycleOrder | undefined)
+const pickerRows = computed(() => {
+  const order = selectedOrderForPicker.value
+  return order ? getActiveInstruments(order) : []
+})
+
+function togglePickerInstrument(instrumentId: string, checked: boolean) {
+  const set = new Set(pickerInstrumentIds.value)
+  if (checked) set.add(instrumentId)
+  else set.delete(instrumentId)
+  pickerInstrumentIds.value = Array.from(set)
+}
+
+function selectAllPickerInstruments() {
+  pickerInstrumentIds.value = pickerRows.value.map((item) => item.id)
+}
+
+function clearPickerInstruments() {
+  pickerInstrumentIds.value = []
 }
 
 function openDetail(order: WaterCycleOrder) {
@@ -186,7 +220,24 @@ function gotoDate(e: Event) {
 // 点击开始实验按钮
 async function handleStartTest() {
   if (selectedScheduledOrders.value.length > 0) {
-    const o = selectedScheduledOrders.value[0]
+    const o = selectedScheduledOrders.value[0] as WaterCycleOrder
+    const activeInstruments = getActiveInstruments(o)
+    if (activeInstruments.length === 0) {
+      ElMessage.warning('当前工单没有可开始测试的仪器')
+      return
+    }
+    pickerInstrumentIds.value = activeInstruments.map((item) => item.id)
+    instrumentPickerVisible.value = true
+  }
+}
+
+async function confirmInstrumentSelection() {
+  const o = selectedOrderForPicker.value
+  if (!o) return
+  if (pickerInstrumentIds.value.length === 0) {
+    ElMessage.warning('请先选择本次要测试的仪器')
+    return
+  }
     const p = getScheduleChangePayload(o.id)
     console.log('[water-cycle schedule]', p ? `${p.startAtHour} ~ ${p.endAtHour}` : '', p)
     if (p) {
@@ -219,9 +270,10 @@ async function handleStartTest() {
       }
     }
     // 将当前选中打算测试的工单存入全局状态，供后续页面使用
-    selectedOrder.value = selectedScheduledOrders.value[0]
+    selectedOrder.value = o
+    selectedWaterCycleInstrumentIds.value = pickerInstrumentIds.value.slice()
+    instrumentPickerVisible.value = false
     showStartupCheck.value = true
-  }
 }
 
 // 开机检查完毕，切换视图
@@ -235,6 +287,7 @@ async function onStartupComplete() {
       const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
       if (!ok) return
     } else {
+      markInstrumentsRunning(selectedWaterCycleInstrumentIds.value)
       void refreshWorkOrders()
     }
   }
@@ -321,7 +374,7 @@ async function onStartupComplete() {
                         </div>
                         <span class="instrument-count-pill">{{ getInstrumentCount(order) }} 台</span>
                       </div>
-                      <div v-if="order.instruments.length === 0" class="instrument-list">
+                      <div v-if="getActiveInstruments(order).length === 0" class="instrument-list">
                         <div class="instrument-item">
                           <div class="instrument-main">
                             <span class="instrument-name">{{ order.deviceName || '-' }}</span>
@@ -331,13 +384,13 @@ async function onStartupComplete() {
                         </div>
                       </div>
                       <div v-else class="instrument-list">
-                        <div v-for="instrument in order.instruments" :key="instrument.id" class="instrument-item">
+                        <div v-for="instrument in getActiveInstruments(order)" :key="instrument.id" class="instrument-item">
                           <div class="instrument-main">
                             <span class="instrument-name">{{ instrument.name }}</span>
                             <span class="instrument-sn">{{ instrument.sn }}</span>
                           </div>
                           <span class="instrument-quantity">{{ instrument.quantity || 1 }} 台</span>
-                          <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">{{ getOrderStatusText(order) }}</span>
+                          <span class="status-pill" :class="getStatusClass(getInstrumentStatusText(order, instrument.id))">{{ getInstrumentStatusText(order, instrument.id) }}</span>
                         </div>
                       </div>
                     </div>
@@ -463,7 +516,42 @@ async function onStartupComplete() {
       </div>
     </div>
   </div>
-  
+
+  <div v-if="instrumentPickerVisible" class="product-picker-mask">
+    <div class="product-picker-dialog">
+      <div class="product-picker-header">
+        <div>
+          <h3>选择测试仪器</h3>
+          <p>已排程工单确认开始实验后，在这里选择本次实际开始测试的仪器。</p>
+        </div>
+        <button class="product-picker-close" type="button" @click="instrumentPickerVisible = false">
+          <Icon icon="mdi:close" />
+        </button>
+      </div>
+      <div class="product-picker-actions">
+        <button class="week-cal-nav" type="button" @click="selectAllPickerInstruments">全选</button>
+        <button class="week-cal-nav" type="button" @click="clearPickerInstruments">清空</button>
+        <span>已选择 {{ pickerInstrumentIds.length }} / {{ pickerRows.length }} 台仪器</span>
+      </div>
+      <div class="product-picker-list">
+        <label v-for="instrument in pickerRows" :key="instrument.id" class="product-picker-row">
+          <input
+            type="checkbox"
+            :checked="pickerInstrumentIds.includes(instrument.id)"
+            @change="togglePickerInstrument(instrument.id, ($event.target as HTMLInputElement).checked)"
+          />
+          <span class="product-main">{{ instrument.name }}</span>
+          <span class="product-sub">{{ instrument.sn || '-' }}</span>
+          <span class="product-order">{{ selectedOrderForPicker?.taskNumber }} · {{ selectedOrderForPicker?.applicant }}</span>
+        </label>
+      </div>
+      <div class="product-picker-footer">
+        <button class="week-cal-nav" type="button" @click="instrumentPickerVisible = false">取消</button>
+        <button class="primary-btn" type="button" @click="confirmInstrumentSelection">确认开始实验</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="detailVisible" class="detail-modal-mask" @click.self="closeDetail">
     <div class="detail-modal">
       <div class="detail-modal-header">
@@ -682,6 +770,19 @@ async function onStartupComplete() {
 .primary-btn:hover:not(:disabled) { opacity:.9; transform:translateY(-1px); }
 .primary-btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
 .start-icon { font-size:20px; }
+.product-picker-mask { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(15,23,42,.5); backdrop-filter:blur(4px); }
+.product-picker-dialog { width:min(820px,92vw); max-height:82vh; display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--color-border); border-radius:18px; background:var(--color-bg-secondary); box-shadow:0 24px 80px rgba(15,23,42,.25); }
+.product-picker-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:22px 26px; border-bottom:1px solid var(--color-border); }
+.product-picker-header h3 { margin:0; font-size:20px; font-weight:800; color:var(--color-text-primary); }
+.product-picker-header p { margin:8px 0 0; color:var(--color-text-secondary); font-size:13px; }
+.product-picker-close { width:40px; height:40px; display:flex; align-items:center; justify-content:center; border:none; border-radius:12px; background:var(--color-bg-tertiary); color:var(--color-text-primary); cursor:pointer; }
+.product-picker-actions { display:flex; align-items:center; gap:12px; padding:16px 26px; border-bottom:1px solid var(--color-border); color:var(--color-text-secondary); }
+.product-picker-list { overflow:auto; padding:0 26px; }
+.product-picker-row { display:grid; grid-template-columns:24px minmax(0,1.4fr) minmax(0,1fr) minmax(0,1.6fr); align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--color-border); cursor:pointer; }
+.product-picker-row input { width:16px; height:16px; accent-color:var(--color-primary); }
+.product-main { font-weight:800; color:var(--color-text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.product-sub,.product-order { color:var(--color-text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.product-picker-footer { display:flex; justify-content:flex-end; align-items:center; gap:14px; padding:18px 26px; border-top:1px solid var(--color-border); }
 .detail-modal-mask { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(15,23,42,.48); backdrop-filter:blur(4px); }
 .detail-modal { width:min(920px, 92vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--color-border); border-radius:18px; background:var(--color-bg-secondary); box-shadow:0 24px 80px rgba(15,23,42,.24); }
 .detail-modal-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:22px 26px; border-bottom:1px solid var(--color-border); background:var(--color-bg-secondary); }

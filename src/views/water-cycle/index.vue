@@ -5,10 +5,10 @@ import { ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
-import { updateWaterCycleOrder } from '@/services/water-cycle-api'
+import { finishWaterCycleOrder, updateWaterCycleOrder } from '@/services/water-cycle-api'
 
 import { currentView, markReportSaved, resetTestState } from './composables/useTestStore'
-import { selectedOrder } from './composables/useTestStore'
+import { selectedOrder, selectedWaterCycleInstrumentIds } from './composables/useTestStore'
 
 import DashboardView from './components/DashboardView.vue'
 import TestingView from './components/TestingView.vue'
@@ -74,7 +74,19 @@ async function handleShutdownComplete() {
   const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
   if (orderId !== undefined) {
     await initAuth()
-    const resp = await updateWaterCycleOrder(orderId, { status: 3 }, getAuthHeaders())
+    const selectedInstruments = (order?.instruments || []).filter((instrument) =>
+      selectedWaterCycleInstrumentIds.value.includes(instrument.id)
+    )
+    const resp = await finishWaterCycleOrder(
+      orderId,
+      {
+        completed_instrument_ids: selectedInstruments
+          .map((instrument) => instrument.dbId)
+          .filter((id): id is number => typeof id === 'number'),
+        instrument_sns: selectedInstruments.map((instrument) => instrument.sn).filter(Boolean),
+      },
+      getAuthHeaders()
+    )
     if (!resp.success || !resp.data || resp.data.code !== 0) {
       const ok = confirm('工单状态更新失败，是否仍完成测试流程？')
       if (!ok) return

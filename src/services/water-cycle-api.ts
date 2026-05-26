@@ -28,6 +28,10 @@ export type WaterCycleOrderInstrumentDTO = {
   instrument_name?: string
   sn_numbers?: string
   quantity?: number
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
+  is_completed?: boolean
+  completed_at?: string | null
 }
 
 export type WaterCycleOrder = {
@@ -60,6 +64,10 @@ export type WaterCycleOrderInstrument = {
   name: string
   sn: string
   quantity?: number
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
+  completed?: boolean
+  completedAt?: string | null
 }
 
 export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
@@ -70,6 +78,10 @@ export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
         name: item.instrument_name || dto.device_name || `仪器${index + 1}`,
         sn: item.sn_numbers || dto.device_number || '-',
         quantity: item.quantity,
+        scheduledStartAt: item.scheduled_start_at || null,
+        scheduledEndAt: item.scheduled_end_at || null,
+        completed: item.is_completed === true,
+        completedAt: item.completed_at || null,
       }))
     : []
 
@@ -178,4 +190,29 @@ export async function clearWaterCycleOrderSchedule(
   headers?: Record<string, string>
 ): Promise<ApiResponse<WaterCycleOrderWriteResponse>> {
   return http.delete<WaterCycleOrderWriteResponse>(`/test/water-cycle/order/schedule/${orderId}/`, headers)
+}
+
+export type FinishWaterCycleOrderBody = {
+  completed_instrument_ids?: number[]
+  instrument_sns?: string[]
+}
+
+export type FinishWaterCycleOrderResponse = {
+  code: number
+  msg?: string
+  data?: {
+    order_id?: number
+    before_status?: number
+    after_status?: number
+    completed_instrument_ids?: number[]
+    remaining_count?: number
+  }
+}
+
+export async function finishWaterCycleOrder(
+  orderId: number,
+  data: FinishWaterCycleOrderBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<FinishWaterCycleOrderResponse>> {
+  return http.post<FinishWaterCycleOrderResponse>(`/test/water-cycle/order/finish/${orderId}/`, data, headers)
 }

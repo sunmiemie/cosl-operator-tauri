@@ -35,6 +35,7 @@ export const currentView = ref<WaterCycleView>('dashboard')
 
 // 当前选中的待测试工单信息
 export const selectedOrder = ref<WaterCycleOrder | null>(null)
+export const selectedWaterCycleInstrumentIds = ref<string[]>([])
 
 // OCR 框选区域配置 (Key为通道ID, Value为ROI坐标信息)
 export const roiRegions = ref<Record<string, OcrRegion>>({})
@@ -157,5 +158,6 @@ export function resetTestState() {
   measurementHistory.value = []
   currentReportNo.value = ''
   selectedOrder.value = null
+  selectedWaterCycleInstrumentIds.value = []
   currentView.value = 'dashboard'
 }
