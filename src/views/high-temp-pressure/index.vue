@@ -93,8 +93,7 @@ async function confirmProductSelection() {
   if (selectedScheduleInfos.length) {
     const ok = await initAuth()
     if (!ok) {
-      const cont = confirm('未登录，无法推送第三方排期，是否仍继续开始实验？')
-      if (!cont) return
+      ElMessage.warning('未登录，已跳过第三方排期推送并继续开始实验')
     } else {
       const headers = getAuthHeaders()
       const testTypeResult = await resolveEngineerAssistantTestType('高温高压井', headers)
@@ -119,8 +118,7 @@ async function confirmProductSelection() {
           headers
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
-          const cont = confirm('推送第三方排期失败，是否仍继续开始实验？')
-          if (!cont) return
+          ElMessage.warning(`推送第三方排期失败，已继续开始实验${resp.error ? `：${resp.error}` : ''}`)
         }
       } else {
         const availableTypes = testTypeResult.candidates
@@ -132,8 +130,7 @@ async function confirmProductSelection() {
           testTypeResult.error ? `原因：${testTypeResult.error}` : '',
           availableTypes ? `当前返回类型：${availableTypes}` : '',
         ].filter(Boolean)
-        const cont = confirm(`未匹配到第三方测试类型（高温高压井）${detailLines.length ? `\n${detailLines.join('\n')}` : ''}\n是否仍继续开始实验？`)
-        if (!cont) return
+        ElMessage.warning(`未匹配到第三方测试类型（高温高压井），已跳过第三方排期推送并继续开始实验${detailLines.length ? `：${detailLines.join('；')}` : ''}`)
       }
     }
   }
@@ -223,7 +220,7 @@ async function handleConfirmEnd() {
       ordersToFinish.push(order)
     })
 
-    const finishedOrderNos: string[] = []
+    const readyReportOrderNos: string[] = []
     if (ordersToFinish.length) {
       await initAuth()
       for (const order of ordersToFinish) {
@@ -236,8 +233,8 @@ async function handleConfirmEnd() {
         if (!res.success || res.data?.code !== 0) {
           throw new Error(res.data?.msg || res.error || `工单 ${order.no} 结束测试失败`)
         }
-        if (res.data.data?.after_status === 5) {
-          finishedOrderNos.push(order.no)
+        if ((res.data.data?.remaining_count ?? 0) === 0) {
+          readyReportOrderNos.push(order.no)
         } else {
           partialOrderNos.push(order.no)
         }
@@ -245,17 +242,14 @@ async function handleConfirmEnd() {
     }
 
     currentSelections.forEach((selection) => schedule.markInstrumentCompleted(selection.instrument.id))
-    ordersToFinish
-      .filter((order) => finishedOrderNos.includes(order.no))
-      .forEach((order) => schedule.clearOrderProgress(order.id))
     await schedule.refreshWorkOrders()
 
-    const uniqueFinishedOrderNos = Array.from(new Set(finishedOrderNos))
+    const uniqueReadyReportOrderNos = Array.from(new Set(readyReportOrderNos))
     const pendingOrderNos = Array.from(new Set(partialOrderNos))
-    if (uniqueFinishedOrderNos.length && pendingOrderNos.length) {
-      ElMessage.success(`已完成 ${uniqueFinishedOrderNos.join('、')}；${pendingOrderNos.join('、')} 仍有仪器待测试`)
-    } else if (uniqueFinishedOrderNos.length) {
-      ElMessage.success(`工单 ${uniqueFinishedOrderNos.join('、')} 已完成`)
+    if (uniqueReadyReportOrderNos.length && pendingOrderNos.length) {
+      ElMessage.success(`${uniqueReadyReportOrderNos.join('、')} 已完成测试待提交报告；${pendingOrderNos.join('、')} 仍有仪器待测试`)
+    } else if (uniqueReadyReportOrderNos.length) {
+      ElMessage.success(`工单 ${uniqueReadyReportOrderNos.join('、')} 已完成测试，请提交报告进入待审核`)
     } else {
       ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
     }
@@ -396,6 +390,8 @@ onMounted(async () => {
         :selected-scheduled-orders="completedSelections.length ? completedSelections : schedule.selectedScheduledOrders.value"
         :csv-count="testing.csvCount.value"
         :exported-capture-dir="testing.exportedCaptureDir.value"
+        :curve-chart-image-path="testing.curveChartImagePath.value"
+        :curve-point-count="testing.curveData.timeSec.length"
         @shutdown-complete="handleShutdownComplete"
       />
     </div>

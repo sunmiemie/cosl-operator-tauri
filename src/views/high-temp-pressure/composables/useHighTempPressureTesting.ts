@@ -3,7 +3,7 @@ import * as echarts from 'echarts'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { readFile } from '@tauri-apps/plugin-fs'
+import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
 import type { HighTempPressureModal, HighTempPressurePanel } from '../types'
@@ -19,6 +19,13 @@ export type HighTempPressureVideoMeasurement = HighTempPressureVideoChannel & {
   raw: string
   value: number | null
   confidence: number | null
+}
+
+export type HighTempPressureCurveData = {
+  timeSec: number[]
+  upperTemp: number[]
+  lowerTemp: number[]
+  pressure: number[]
 }
 
 type VideoMeasurementPayload = {
@@ -98,9 +105,16 @@ export function useHighTempPressureTesting() {
   const captureCompleted = ref(false)
   const latestFrameUrl = ref('')
   const exportedCaptureDir = ref('')
+  const curveChartImagePath = ref('')
   const videoMeasurements = ref<HighTempPressureVideoMeasurement[]>([])
   const videoReadings = reactive<Record<string, number>>({})
   const videoConfidence = reactive<Record<string, number>>({})
+  const curveData = reactive<HighTempPressureCurveData>({
+    timeSec: [],
+    upperTemp: [],
+    lowerTemp: [],
+    pressure: [],
+  })
 
   const state = reactive({
     chartData: {
@@ -158,7 +172,19 @@ export function useHighTempPressureTesting() {
     })
   }
 
-  function pushPrimaryPoint(t1?: number, t2?: number, p?: number) {
+  function appendCurvePoint(t1?: number, t2?: number, p?: number, timeSec?: number) {
+    const lastTime = curveData.timeSec[curveData.timeSec.length - 1]
+    const lastT1 = curveData.upperTemp[curveData.upperTemp.length - 1] ?? 0
+    const lastT2 = curveData.lowerTemp[curveData.lowerTemp.length - 1] ?? 0
+    const lastP = curveData.pressure[curveData.pressure.length - 1] ?? 0
+    curveData.timeSec.push(Number.isFinite(timeSec) ? Number(timeSec) : (lastTime ?? -SAMPLE_INTERVAL_SECONDS) + SAMPLE_INTERVAL_SECONDS)
+    curveData.upperTemp.push(t1 ?? lastT1)
+    curveData.lowerTemp.push(t2 ?? lastT2)
+    curveData.pressure.push(p ?? lastP)
+  }
+
+  function pushPrimaryPoint(t1?: number, t2?: number, p?: number, timeSec?: number) {
+    appendCurvePoint(t1, t2, p, timeSec)
     const lastT1 = state.chartData.t1[state.chartData.t1.length - 1] ?? 0
     const lastT2 = state.chartData.t2[state.chartData.t2.length - 1] ?? 0
     const lastP = state.chartData.p[state.chartData.p.length - 1] ?? 0
@@ -169,6 +195,14 @@ export function useHighTempPressureTesting() {
     if (state.chartData.t2.length > MAX_POINTS) state.chartData.t2.shift()
     if (state.chartData.p.length > MAX_POINTS) state.chartData.p.shift()
     updateChart()
+  }
+
+  function resetCurveData() {
+    curveData.timeSec = []
+    curveData.upperTemp = []
+    curveData.lowerTemp = []
+    curveData.pressure = []
+    curveChartImagePath.value = ''
   }
 
   function clearVideoReadings() {
@@ -201,6 +235,7 @@ export function useHighTempPressureTesting() {
     state.chartData.t1 = []
     state.chartData.t2 = []
     state.chartData.p = []
+    resetCurveData()
     csvCount.value = 0
     captureRecordCount.value = 0
     captureProgressPct.value = 0
@@ -255,7 +290,55 @@ export function useHighTempPressureTesting() {
     }
   }
 
-  function applyVideoRecord(record: any) {
+  function extractPrimaryValues(record: any) {
+    const measurements: VideoMeasurementPayload[] = Array.isArray(record?.measurements)
+      ? record.measurements
+      : []
+    const legacySchema = hasLegacyMeasurementSchema(measurements)
+    const values: Partial<Record<string, number>> = {}
+
+    measurements.forEach((item) => {
+      const rawId = String(item?.id || '')
+      const id = normalizeMeasurementId(rawId, legacySchema)
+      const value = item?.value
+      if (!id || typeof value !== 'number' || !Number.isFinite(value)) return
+      values[id] = value
+    })
+
+    return {
+      timeSec: Number(record?.time_sec),
+      upperWaterTemp: values.vessel_250_upper_water_temp ?? values.vessel_480_upper_water_temp,
+      lowerWaterTemp: values.vessel_250_lower_water_temp ?? values.vessel_480_lower_water_temp,
+      pressure: values.vessel_250_pressure ?? values.cylinder_pressure ?? values.high_pressure_pump_outlet_pressure,
+    }
+  }
+
+  function rebuildCurveData(records: any[]) {
+    resetCurveData()
+    state.chartData.t1 = []
+    state.chartData.t2 = []
+    state.chartData.p = []
+    records.forEach((record, index) => {
+      const point = extractPrimaryValues(record)
+      if (
+        point.upperWaterTemp === undefined &&
+        point.lowerWaterTemp === undefined &&
+        point.pressure === undefined
+      ) return
+      appendCurvePoint(
+        point.upperWaterTemp,
+        point.lowerWaterTemp,
+        point.pressure,
+        Number.isFinite(point.timeSec) ? point.timeSec : index * SAMPLE_INTERVAL_SECONDS
+      )
+    })
+    state.chartData.t1 = curveData.upperTemp.slice(-MAX_POINTS)
+    state.chartData.t2 = curveData.lowerTemp.slice(-MAX_POINTS)
+    state.chartData.p = curveData.pressure.slice(-MAX_POINTS)
+    updateChart()
+  }
+
+  function applyVideoRecord(record: any, appendPoint = true) {
     if (!record) return
     const measurements: VideoMeasurementPayload[] = Array.isArray(record.measurements)
       ? record.measurements
@@ -292,15 +375,118 @@ export function useHighTempPressureTesting() {
     })
     videoMeasurements.value = nextMeasurements
 
-    const upperWaterTemp = values.vessel_250_upper_water_temp ?? values.vessel_480_upper_water_temp
-    const lowerWaterTemp = values.vessel_250_lower_water_temp ?? values.vessel_480_lower_water_temp
-    const pressure = values.vessel_250_pressure ?? values.cylinder_pressure ?? values.high_pressure_pump_outlet_pressure
+    const point = extractPrimaryValues(record)
+    const upperWaterTemp = point.upperWaterTemp
+    const lowerWaterTemp = point.lowerWaterTemp
+    const pressure = point.pressure
     if (
-      upperWaterTemp !== undefined ||
-      lowerWaterTemp !== undefined ||
-      pressure !== undefined
+      appendPoint &&
+      (
+        upperWaterTemp !== undefined ||
+        lowerWaterTemp !== undefined ||
+        pressure !== undefined
+      )
     ) {
-      pushPrimaryPoint(upperWaterTemp, lowerWaterTemp, pressure)
+      pushPrimaryPoint(upperWaterTemp, lowerWaterTemp, pressure, point.timeSec)
+    }
+  }
+
+  function formatCurveTime(sec: number) {
+    const safeSec = Math.max(0, Math.round(Number(sec) || 0))
+    const h = Math.floor(safeSec / 3600)
+    const m = Math.floor((safeSec % 3600) / 60)
+    const s = safeSec % 60
+    if (h) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+
+  function dataUrlToBytes(dataUrl: string) {
+    const base64 = dataUrl.split(',')[1] || ''
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  }
+
+  function joinPath(root: string, fileName: string) {
+    return `${root.replace(/[\\/]+$/, '')}/${fileName}`
+  }
+
+  async function exportCurveChartImage(exportDir: string) {
+    if (!curveData.timeSec.length) {
+      throw new Error('未采集到温度/压力曲线数据，无法生成测试曲线图')
+    }
+    const labels = curveData.timeSec.map(formatCurveTime)
+    const phaseIndex1 = Math.max(0, Math.floor(labels.length * 0.25))
+    const phaseIndex2 = Math.max(phaseIndex1, Math.floor(labels.length * 0.75))
+    const phaseAreas = [
+      [{ name: '升温升压', xAxis: labels[0] }, { xAxis: labels[phaseIndex1] || labels[0] }],
+      [{ name: '保温保压', xAxis: labels[phaseIndex1] || labels[0] }, { xAxis: labels[phaseIndex2] || labels[labels.length - 1] }],
+      [{ name: '降温降压', xAxis: labels[phaseIndex2] || labels[0] }, { xAxis: labels[labels.length - 1] }],
+    ]
+    const el = document.createElement('div')
+    el.style.width = '1200px'
+    el.style.height = '720px'
+    el.style.position = 'fixed'
+    el.style.left = '-99999px'
+    el.style.top = '-99999px'
+    document.body.appendChild(el)
+    const chart = echarts.init(el, undefined, { renderer: 'canvas', width: 1200, height: 720 })
+    try {
+      chart.setOption({
+        backgroundColor: '#ffffff',
+        title: {
+          text: '高温高压井测试温度/压力曲线',
+          subtext: '横轴：时间；左轴：温度(°C)；右轴：压力(MPa)',
+          left: 'center',
+          top: 16,
+        },
+        tooltip: { trigger: 'axis' },
+        legend: { top: 72, data: ['上部水温', '下部水温', '容器压力'] },
+        grid: { left: 78, right: 82, top: 128, bottom: 78 },
+        xAxis: { type: 'category', name: '时间', data: labels, axisLabel: { rotate: 35 } },
+        yAxis: [
+          { type: 'value', name: '温度 (°C)' },
+          { type: 'value', name: '压力 (MPa)' },
+        ],
+        series: [
+          {
+            name: '上部水温',
+            type: 'line',
+            smooth: true,
+            showSymbol: false,
+            data: curveData.upperTemp.map((value) => +value.toFixed(2)),
+            markArea: {
+              itemStyle: { opacity: 0.08 },
+              label: { color: '#334155', fontWeight: 700 },
+              data: phaseAreas,
+            },
+          },
+          {
+            name: '下部水温',
+            type: 'line',
+            smooth: true,
+            showSymbol: false,
+            data: curveData.lowerTemp.map((value) => +value.toFixed(2)),
+          },
+          {
+            name: '容器压力',
+            type: 'line',
+            yAxisIndex: 1,
+            smooth: true,
+            showSymbol: false,
+            data: curveData.pressure.map((value) => +value.toFixed(3)),
+          },
+        ],
+      })
+      const dataUrl = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' })
+      const imagePath = joinPath(exportDir, '高温高压测试结果曲线.png')
+      await writeFile(imagePath, dataUrlToBytes(dataUrl))
+      curveChartImagePath.value = imagePath
+      return imagePath
+    } finally {
+      chart.dispose()
+      el.remove()
     }
   }
 
@@ -314,7 +500,10 @@ export function useHighTempPressureTesting() {
     csvCount.value = records.length
     lastSyncedRecordCount = records.length
     if (result?.latest_frame) await updateLatestFrame(String(result.latest_frame))
-    if (records.length) applyVideoRecord(records[records.length - 1])
+    if (records.length) {
+      rebuildCurveData(records)
+      applyVideoRecord(records[records.length - 1], false)
+    }
   }
 
   async function pollCaptureStatus() {
@@ -552,6 +741,7 @@ export function useHighTempPressureTesting() {
       folderName: buildExportFolderName(),
     })
     exportedCaptureDir.value = String(result?.export_dir || selectedDir)
+    await exportCurveChartImage(exportedCaptureDir.value)
     ElMessage.success(`视频识别结果已保存到 ${exportedCaptureDir.value}`)
     return true
   }
@@ -602,6 +792,8 @@ export function useHighTempPressureTesting() {
     captureCompleted,
     latestFrameUrl,
     exportedCaptureDir,
+    curveChartImagePath,
+    curveData,
     videoMeasurements,
     videoReadings,
     videoConfidence,

@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { readFile } from '@tauri-apps/plugin-fs'
 import type { ScheduledSelection } from '../types'
+import { useAuth } from '@/composables/useAuth'
+import {
+  createHighTempPressureReport,
+  createHighTempPressureReportWithFiles,
+  type HighTempPressureReportResult,
+} from '@/services/high-temp-pressure-report-api'
 
 const props = defineProps<{
   currentSelected: ScheduledSelection | null
   selectedScheduledOrders: ScheduledSelection[]
   csvCount: number
   exportedCaptureDir: string
+  curveChartImagePath: string
+  curvePointCount: number
 }>()
 const emit = defineEmits<{
   'shutdown-complete': []
@@ -15,20 +24,40 @@ const emit = defineEmits<{
 
 type FileStatus = 'pending' | 'generating' | 'done'
 type FileKey = 'csv' | 'chart' | 'report'
-type Conclusion = 'pass' | 'fail' | 'pending' | ''
+type InstrumentResultState = {
+  result: HighTempPressureReportResult
+  observation: string
+}
+
+const { initAuth, getAuthHeaders } = useAuth()
 
 const fileStatuses = ref<Record<FileKey, FileStatus>>({
   csv: 'pending',
   chart: 'pending',
   report: 'pending',
 })
-const conclusion = ref<Conclusion>('')
+const instrumentResultMap = ref<Record<string, InstrumentResultState>>({})
 const observation = ref('')
 const operatorName = ref('')
 const reviewerName = ref('')
 const confirmChecks = ref([false, false, false, false])
+const paperReportChecks = ref({
+  onlineTest: false,
+  otherRequirements: '无',
+  testingProtectiveCapProvider: 'applicant' as 'applicant' | 'tester',
+  testingPlugProvider: 'applicant' as 'applicant' | 'tester',
+  noDistorted: true,
+  noLeakage: true,
+  curveStatus: 'normal' as 'normal' | 'abnormal',
+  otherDescriptions: '无',
+  testingCurveCopies: 2,
+  otherCopies: 5,
+})
 const showFileSaveModal = ref(false)
 const uploadCompleted = ref(false)
+const uploadSubmitting = ref(false)
+const submittedReportNo = ref('')
+const clientSubmitId = ref('')
 const shutdownChecks = ref([false, false, false, false, false])
 const shiftHours = ref('')
 const totalHours = computed(() => {
@@ -42,6 +71,7 @@ const reportSelections = computed(() => {
 })
 
 const primaryOrder = computed(() => reportSelections.value[0]?.order ?? null)
+const selectionSignature = computed(() => reportSelections.value.map((item) => `${item.order.dbId ?? item.order.id}:${item.instrument.id}:${item.instrument.sn}`).join('|'))
 const orderNos = computed(() => Array.from(new Set(reportSelections.value.map((item) => item.order.no))).join(' / ') || '-')
 const applicantNames = computed(() => Array.from(new Set(reportSelections.value.map((item) => item.order.applicant).filter(Boolean))).join(' / ') || '-')
 const instruments = computed(() => reportSelections.value.map((item) => `${item.instrument.label} ${item.instrument.sn}`).join(', ') || '-')
@@ -61,6 +91,17 @@ const shutdownItems = [
   '填写并保存本次设备运转结束记录',
 ]
 const shutdownReady = computed(() => shutdownChecks.value.every(Boolean) && !!shiftHours.value && !!taskSummary.value.trim())
+const instrumentRows = computed(() => reportSelections.value.map((selection) => {
+  const key = getInstrumentKey(selection)
+  const state = instrumentResultMap.value[key] || { result: 'pass' as HighTempPressureReportResult, observation: '' }
+  return { key, selection, state }
+}))
+const overallResult = computed<HighTempPressureReportResult>(() => {
+  const results = instrumentRows.value.map((row) => row.state.result)
+  if (results.includes('fail')) return 'fail'
+  if (!results.length || results.includes('pending')) return 'pending'
+  return 'pass'
+})
 
 const statusText = (status: FileStatus) => {
   if (status === 'done') return '✓ 已生成'
@@ -68,7 +109,58 @@ const statusText = (status: FileStatus) => {
   return '待生成'
 }
 
+const resultText = (result: HighTempPressureReportResult) => {
+  if (result === 'pass') return '合格'
+  if (result === 'fail') return '不合格'
+  return '待定'
+}
+
+const todayText = () => {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+const normalizeCopyCount = (value: number, fallback: number, min: number) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(min, Math.floor(numeric))
+}
+
+const createClientSubmitId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `htp-${crypto.randomUUID()}`
+  }
+  return `htp-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+async function buildCurveChartUploadFile() {
+  const bytes = await readFile(props.curveChartImagePath)
+  return {
+    fieldName: 'testing_curve',
+    fileName: '高温高压测试结果曲线.png',
+    blob: new Blob([bytes], { type: 'image/png' }),
+  }
+}
+
+function getInstrumentKey(selection: ScheduledSelection) {
+  return `${selection.order.dbId ?? selection.order.id}:${selection.instrument.id}:${selection.instrument.sn}`
+}
+
+function resetReportStateForSelections() {
+  clientSubmitId.value = createClientSubmitId()
+  submittedReportNo.value = ''
+  uploadCompleted.value = false
+  const next: Record<string, InstrumentResultState> = {}
+  reportSelections.value.forEach((selection) => {
+    const key = getInstrumentKey(selection)
+    next[key] = instrumentResultMap.value[key] || { result: 'pass', observation: '' }
+  })
+  instrumentResultMap.value = next
+}
+
 onMounted(() => {
+  resetReportStateForSelections()
   const steps: Array<[FileKey, number]> = [
     ['csv', 250],
     ['chart', 1300],
@@ -85,9 +177,17 @@ onMounted(() => {
   })
 })
 
+watch(selectionSignature, () => {
+  if (!uploadCompleted.value) resetReportStateForSelections()
+})
+
 const submitReport = () => {
-  if (!conclusion.value) {
-    ElMessage.warning('请选择试验结论')
+  if (!reportSelections.value.length) {
+    ElMessage.warning('未找到本次测试的仪器')
+    return
+  }
+  if (!instrumentRows.value.every((row) => !!row.state.result)) {
+    ElMessage.warning('请选择每台仪器的试验结论')
     return
   }
   if (!observation.value.trim()) {
@@ -102,14 +202,149 @@ const submitReport = () => {
     ElMessage.warning('请勾选所有确认项')
     return
   }
+  if (!props.curveChartImagePath) {
+    ElMessage.warning('未生成温度/压力测试曲线图，不能上传报告')
+    return
+  }
+  const curveCopies = normalizeCopyCount(paperReportChecks.value.testingCurveCopies, 2, 1)
+  const otherCopies = normalizeCopyCount(paperReportChecks.value.otherCopies, 5, 0)
+  if (curveCopies !== paperReportChecks.value.testingCurveCopies) {
+    paperReportChecks.value.testingCurveCopies = curveCopies
+  }
+  if (otherCopies !== paperReportChecks.value.otherCopies) {
+    paperReportChecks.value.otherCopies = otherCopies
+  }
   ElMessage.success('测试报告已生成，请确认保存并上传')
   showFileSaveModal.value = true
 }
 
-const finishReportUpload = () => {
-  showFileSaveModal.value = false
-  uploadCompleted.value = true
-  ElMessage.success('文件已上传至管理服务器，工单已完成')
+const finishReportUpload = async () => {
+  if (uploadSubmitting.value) return
+  const authOk = await initAuth()
+  if (!authOk) {
+    ElMessage.error('未登录或登录已失效，无法上传报告')
+    return
+  }
+  const orderIds = Array.from(new Set(reportSelections.value.map((item) => item.order.dbId).filter((id): id is number => typeof id === 'number')))
+  if (!orderIds.length) {
+    ElMessage.error('未找到工单ID，无法上传报告')
+    return
+  }
+  const testingCurveCopies = normalizeCopyCount(paperReportChecks.value.testingCurveCopies, 2, 1)
+  const otherCopies = normalizeCopyCount(paperReportChecks.value.otherCopies, 5, 0)
+  uploadSubmitting.value = true
+  try {
+    const payload = {
+      task_number: orderNos.value,
+      test_date: todayText(),
+      tester: operatorName.value.trim(),
+      status: 0,
+      overall_result: overallResult.value,
+      order_ids: orderIds,
+      order_numbers: Array.from(new Set(reportSelections.value.map((item) => item.order.no).filter(Boolean))),
+      instrument_results: instrumentRows.value.map(({ selection, state }) => ({
+        order_id: selection.order.dbId,
+        order_no: selection.order.no,
+        instrument_id: selection.instrument.dbId ?? selection.instrument.id,
+        instrument_name: selection.instrument.label,
+        instrument_sn: selection.instrument.sn,
+        result: state.result,
+        result_text: resultText(state.result),
+        observation: state.observation || observation.value,
+        metrics: {
+          target_temp: selection.order.targetTemp,
+          target_pressure: selection.order.targetPressure,
+          keep_condition: selection.order.keepCondition,
+        },
+        attachments: [],
+      })),
+      report_json: {
+        source: 'cosl-operator-tauri',
+        module: 'high-temp-pressure',
+        capture_dir: props.exportedCaptureDir,
+        csv_count: props.csvCount,
+        curve_chart_path: props.curveChartImagePath,
+        curve_point_count: props.curvePointCount,
+        curve_phases: ['升温升压', '保温保压', '降温降压'],
+        operator_name: operatorName.value.trim(),
+        reviewer_name: reviewerName.value.trim(),
+        observation: observation.value.trim(),
+        confirm_checks: confirmChecks.value,
+        paper_report: {
+          ref_no: 'WT3-TCZZ-21-R01',
+          title: 'High Temperature & High Pressure Testing Report',
+          testing_organization: 'COSL',
+          testing_item_information: {
+            name: instruments.value,
+            quantity: reportSelections.value.length,
+            no: orderNos.value,
+          },
+          testing_requirements: {
+            testing_pressure: primaryOrder.value?.targetPressure || '',
+            testing_temperature: primaryOrder.value?.targetTemp || '',
+            hold_time: primaryOrder.value?.keepCondition || '',
+            online_test: paperReportChecks.value.onlineTest,
+            other_requirements: paperReportChecks.value.otherRequirements,
+          },
+          fittings_provided: {
+            testing_protective_cap: paperReportChecks.value.testingProtectiveCapProvider,
+            testing_plug: paperReportChecks.value.testingPlugProvider,
+          },
+          testing_result: {
+            appearance_inspection: {
+              no_distorted: paperReportChecks.value.noDistorted,
+              no_obvious_leakage: paperReportChecks.value.noLeakage,
+            },
+            testing_curve: paperReportChecks.value.curveStatus,
+            other_descriptions: paperReportChecks.value.otherDescriptions,
+          },
+          attachments: {
+            testing_curve: {
+              copies: testingCurveCopies,
+              local_path: props.curveChartImagePath,
+            },
+            others: {
+              copies: otherCopies,
+            },
+          },
+        },
+        submitted_at: new Date().toISOString(),
+      },
+      attachments: [
+        { type: 'capture_dir', name: '视频识别结果目录', local_path: props.exportedCaptureDir },
+      ].filter((item) => item.local_path),
+      remark: observation.value.trim(),
+      client_submit_id: clientSubmitId.value,
+    }
+    let res
+    try {
+      const curveFile = await buildCurveChartUploadFile()
+      res = await createHighTempPressureReportWithFiles(payload, [curveFile], getAuthHeaders())
+    } catch (error) {
+      ElMessage.warning('测试曲线文件读取失败，已改为提交本地路径附件')
+      res = await createHighTempPressureReport(
+        {
+          ...payload,
+          attachments: [
+            ...(payload.attachments || []),
+            { type: 'testing_curve', name: '高温高压测试结果曲线.png', local_path: props.curveChartImagePath, copies: testingCurveCopies },
+          ],
+        },
+        getAuthHeaders()
+      )
+    }
+    if (!res.success || !res.data || res.data.code !== 0) {
+      throw new Error(res.data?.msg || res.error || '报告上传失败')
+    }
+    submittedReportNo.value = res.data.data?.report_no || ''
+    showFileSaveModal.value = false
+    uploadCompleted.value = true
+    ElMessage.success(`报告已提交管理端${submittedReportNo.value ? `：${submittedReportNo.value}` : ''}，等待审核`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '报告上传失败，请稍后重试')
+  } finally {
+    uploadSubmitting.value = false
+  }
 }
 
 const finishShutdown = () => {
@@ -190,22 +425,99 @@ const finishShutdown = () => {
 
           <div class="report-section">
             <div class="report-section-title">试验结果 <span>*</span></div>
-            <div class="form-group">
-              <div class="form-label">试验结论 <span class="req">*</span></div>
-              <div class="radio-group">
-                <button class="radio-option" :class="{ 'selected-pass': conclusion === 'pass' }" @click="conclusion = 'pass'">合格</button>
-                <button class="radio-option" :class="{ 'selected-fail': conclusion === 'fail' }" @click="conclusion = 'fail'">不合格</button>
-                <button class="radio-option" :class="{ 'selected-pending': conclusion === 'pending' }" @click="conclusion = 'pending'">待定</button>
+            <div class="instrument-result-table">
+              <div class="instrument-result-head">
+                <span>工单</span>
+                <span>仪器</span>
+                <span>SN</span>
+                <span>结论</span>
+                <span>单台观察记录</span>
               </div>
+              <div v-for="row in instrumentRows" :key="row.key" class="instrument-result-row">
+                <span>{{ row.selection.order.no }}</span>
+                <span>{{ row.selection.instrument.label }}</span>
+                <span>{{ row.selection.instrument.sn || '-' }}</span>
+                <select v-model="row.state.result" class="form-control result-select">
+                  <option value="pass">合格</option>
+                  <option value="fail">不合格</option>
+                  <option value="pending">待定</option>
+                </select>
+                <input
+                  v-model="row.state.observation"
+                  class="form-control"
+                  placeholder="可填写该仪器异常或补充说明"
+                />
+              </div>
+            </div>
+            <div class="overall-result">
+              总体结论：<b :class="`result-${overallResult}`">{{ resultText(overallResult) }}</b>
             </div>
             <div class="form-group">
               <div class="form-label">试验观察记录 <span class="req">*</span></div>
               <textarea
                 v-model="observation"
                 class="form-control"
-                rows="4"
+              rows="4"
                 placeholder="详细记录测试过程中的观察情况，包括升温升压过程、保温保压阶段、降温降压过程、仪器外观变化、异常情况说明..."
               ></textarea>
+            </div>
+          </div>
+
+          <div class="report-section">
+            <div class="report-section-title">图纸要求检查项 <span>*</span></div>
+            <div class="paper-report-grid">
+              <label class="paper-check">
+                <input v-model="paperReportChecks.onlineTest" type="checkbox" />
+                <span>在线测试 Online Test</span>
+              </label>
+              <label class="paper-check">
+                <input v-model="paperReportChecks.noDistorted" type="checkbox" />
+                <span>外观检查：未变形 No Distorted</span>
+              </label>
+              <label class="paper-check">
+                <input v-model="paperReportChecks.noLeakage" type="checkbox" />
+                <span>外观检查：无明显泄漏 No Obvious Leakage</span>
+              </label>
+              <div class="paper-field">
+                <div class="form-label">试压护帽提供方</div>
+                <select v-model="paperReportChecks.testingProtectiveCapProvider" class="form-control">
+                  <option value="applicant">委托方提供 Provided by Applicant</option>
+                  <option value="tester">检测方提供 Provided by Tester</option>
+                </select>
+              </div>
+              <div class="paper-field">
+                <div class="form-label">试压堵头提供方</div>
+                <select v-model="paperReportChecks.testingPlugProvider" class="form-control">
+                  <option value="applicant">委托方提供 Provided by Applicant</option>
+                  <option value="tester">检测方提供 Provided by Tester</option>
+                </select>
+              </div>
+              <div class="paper-field">
+                <div class="form-label">测试曲线判断</div>
+                <select v-model="paperReportChecks.curveStatus" class="form-control">
+                  <option value="normal">测试曲线正常 Testing Curve Normal</option>
+                  <option value="abnormal">测试曲线异常 Testing Curve Abnormal</option>
+                </select>
+              </div>
+              <div class="paper-field">
+                <div class="form-label">测试曲线附件份数</div>
+                <input v-model.number="paperReportChecks.testingCurveCopies" class="form-control" type="number" min="1" />
+              </div>
+              <div class="paper-field">
+                <div class="form-label">其他附件份数</div>
+                <input v-model.number="paperReportChecks.otherCopies" class="form-control" type="number" min="0" />
+              </div>
+              <div class="paper-field is-wide">
+                <div class="form-label">其他要求</div>
+                <input v-model="paperReportChecks.otherRequirements" class="form-control" placeholder="无" />
+              </div>
+              <div class="paper-field is-wide">
+                <div class="form-label">其他描述</div>
+                <input v-model="paperReportChecks.otherDescriptions" class="form-control" placeholder="无" />
+              </div>
+            </div>
+            <div class="curve-file-hint" :class="{ ok: curveChartImagePath }">
+              温度/压力曲线图：{{ curveChartImagePath || '未生成' }}（采样点 {{ curvePointCount }} 个）
             </div>
           </div>
 
@@ -228,7 +540,7 @@ const finishShutdown = () => {
           </div>
         </div>
         <div class="report-actions">
-          <button class="btn btn-success" :disabled="!allFilesDone" @click="submitReport">✓ 确认生成报告</button>
+          <button class="btn btn-success" :disabled="!allFilesDone || uploadSubmitting" @click="submitReport">✓ 确认生成报告</button>
         </div>
       </div>
     </div>
@@ -242,8 +554,9 @@ const finishShutdown = () => {
         <span class="shutdown-progress">{{ shutdownChecks.filter(Boolean).length }}/{{ shutdownChecks.length }}</span>
       </div>
       <div class="card-body shutdown-scroll-body">
-        <div class="shutdown-success">✅ 测试已完成，请确认设备处于正常关闭状态。</div>
+        <div class="shutdown-success">✅ 报告已提交管理端待审核，请确认设备处于正常关闭状态。</div>
         <div class="shutdown-meta">
+          <span>报告编号: {{ submittedReportNo || '-' }}</span>
           <span>检查日期: {{ new Date().toLocaleDateString() }}</span>
           <span>操作者: {{ operatorName || '-' }}</span>
           <span>复核人: {{ reviewerName || '-' }}</span>
@@ -298,7 +611,9 @@ const finishShutdown = () => {
         </div>
         <div class="modal-footer">
           <button class="btn btn-outline" @click="showFileSaveModal = false">稍后保存</button>
-          <button class="btn btn-success" @click="finishReportUpload">确认保存并上传</button>
+          <button class="btn btn-success" :disabled="uploadSubmitting" @click="finishReportUpload">
+            {{ uploadSubmitting ? '上传中...' : '确认保存并上传' }}
+          </button>
         </div>
       </div>
     </div>
@@ -517,6 +832,130 @@ const finishShutdown = () => {
   color: var(--color-text-secondary);
 }
 
+.instrument-result-table {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.instrument-result-head,
+.instrument-result-row {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr 96px 1.6fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.instrument-result-head {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.instrument-result-row {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.result-select {
+  min-width: 86px;
+}
+
+.overall-result {
+  margin-bottom: 12px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.overall-result b {
+  margin-left: 4px;
+}
+
+.paper-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.paper-check,
+.paper-field {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+}
+
+.paper-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.paper-check input {
+  flex-shrink: 0;
+}
+
+.paper-check:has(input:checked) {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.07);
+  color: var(--color-text-primary);
+}
+
+.paper-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.paper-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.paper-field .form-label {
+  margin-bottom: 0;
+}
+
+.curve-file-hint {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed rgba(245, 127, 23, 0.42);
+  border-radius: 8px;
+  background: rgba(245, 127, 23, 0.08);
+  color: var(--orange);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.curve-file-hint.ok {
+  border-color: rgba(16, 185, 129, 0.36);
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--green-bright);
+}
+
+.result-pass {
+  color: var(--green-bright);
+}
+
+.result-fail {
+  color: var(--red);
+}
+
+.result-pending {
+  color: var(--orange);
+}
+
 .radio-group {
   display: flex;
   gap: 8px;
@@ -719,7 +1158,7 @@ const finishShutdown = () => {
 
 .shutdown-meta {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin-bottom: 12px;
   color: var(--color-text-secondary);
@@ -784,6 +1223,7 @@ const finishShutdown = () => {
 }
 
 @media (max-width: 900px) {
+  .paper-report-grid,
   .shutdown-meta,
   .shutdown-form-grid {
     grid-template-columns: 1fr;
