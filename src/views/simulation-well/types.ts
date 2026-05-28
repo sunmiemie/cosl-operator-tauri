@@ -50,6 +50,7 @@ export interface DownholeDevice {
 
 export interface ScheduledItem {
   deviceId: string
+  eventId?: string
   orderId: string
   deviceName?: string
   deviceNumber?: string

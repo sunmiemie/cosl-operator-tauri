@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
 })
 
 const getScheduledStyle = (item: any) => {
-  const ev = getEvent(item.orderId)
+  const ev = getEvent(item.eventId)
   if (!ev) return {}
   const totalWidth = gridInnerWidth.value || 0
   const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
@@ -457,11 +457,11 @@ async function onStartupComplete() {
                   v-for="it in scheduledLayoutItems
                     .map((x) => ({ ...x, dayIndex: currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
                     .filter((x) => x.dayIndex >= 0)"
-                  :key="it.orderId"
+                  :key="it.eventId"
                   class="scheduled-item"
                   :class="{
                     'is-selected': selectedScheduledOrderIds.includes(it.orderId),
-                    'is-resizing': isResizing && resizingOrderId === it.orderId
+                    'is-resizing': isResizing && resizingOrderId === it.eventId
                   }"
                   :style="getScheduledStyle(it)"
                   @click="selectScheduledOrder(it.orderId)"
@@ -469,13 +469,13 @@ async function onStartupComplete() {
                 >
                   <div class="scheduled-content">
                     <span class="device-name">{{ getOrderById(it.orderId)?.taskNumber }}</span>
-                    <button class="remove-btn" title="删除排程" @click.stop="handleUnschedule(it.cellKey, it.orderId)">
+                    <button class="remove-btn" title="删除排程" @click.stop="handleUnschedule(it.cellKey, it.orderId, it.eventId)">
                       <Icon icon="mdi:close" />
                     </button>
                   </div>
                   <div class="scheduled-tag">{{ getOrderById(it.orderId)?.deviceName }}</div>
-                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.orderId, $event)"></div>
-                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.orderId, $event)"></div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.eventId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.eventId, $event)"></div>
                 </div>
               </div>
 

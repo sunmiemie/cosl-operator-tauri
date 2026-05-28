@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
 import type { HighTempPressureVideoMeasurement } from '../composables/useHighTempPressureTesting'
@@ -28,60 +28,96 @@ const emit = defineEmits<{
   'open-end-modal': []
 }>()
 
-const orderDetailFields = computed(() => {
-  const selected = props.currentSelected
-  if (!selected) return []
+const detailModalVisible = ref(false)
+const detailModuleCount = 6
 
-  const { order, instrument } = selected
+const currentOrder = computed(() => props.currentSelected?.order ?? null)
+const currentInstrument = computed(() => props.currentSelected?.instrument ?? null)
+const currentOrderBadge = computed(() => currentOrder.value?.no || currentOrder.value?.receivingNo || '未选择')
+const captureProgressSafe = computed(() => {
+  const value = Number(props.captureProgressPct)
+  if (!Number.isFinite(value)) return 0
+  return Math.min(100, Math.max(0, value))
+})
+
+const displayValue = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return '-'
+  return String(value)
+}
+
+const splitTextItems = (value?: string) => {
+  if (!value?.trim()) return []
+  return value
+    .split(/\r?\n|[；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+const yesNoText = (value?: 'yes' | 'no' | null) => {
+  if (value === 'yes') return '是'
+  if (value === 'no') return '否'
+  return '-'
+}
+
+const currentOrderMetrics = computed(() => {
+  const order = currentOrder.value
+  if (!order) return []
+
   return [
-    { label: '工单ID', value: order.dbId ?? '-' },
-    { label: '任务编号', value: order.no, code: true },
-    { label: '委托编号', value: order.entrustNo },
-    { label: '申请人', value: order.applicant },
-    { label: '申请单位', value: order.applicantUnit },
-    { label: '申请日期', value: order.applyDate },
-    { label: '接收编号', value: order.receivingNo },
-    { label: '使用设备', value: order.vesselType },
-    { label: '设备类型', value: order.type },
-    { label: '目标温度', value: order.targetTemp, hot: true },
-    { label: '目标压力', value: order.targetPressure, pressure: true },
-    { label: '保温保压时间', value: order.keepCondition },
-    { label: '最大直径', value: order.maxDiameter || '-' },
-    { label: '当前状态', value: order.status },
-    { label: '当前仪器', value: instrument.label },
-    { label: '当前仪器SN', value: instrument.sn },
-    { label: '仪器数量', value: `${order.items.length} 台` },
-    { label: '三新确认日期', value: order.sanxinConfirmDate || '-' },
-    { label: '测试方确认1', value: order.sanxinTesterItem1 || '-' },
-    { label: '测试方确认2', value: order.sanxinTesterItem2 || '-' },
-    { label: '是否三新测试', value: order.sanxinIsSanxin ? '是' : '否' },
-    { label: '管理员签名', value: order.adminSignatureUrl ? '已上传' : '未上传' },
-    { label: '创建时间', value: order.createdAt || '-' },
-    { label: '更新时间', value: order.updatedAt || '-' },
-    { label: '备注', value: order.remark || '-', wide: true },
-    {
-      label: '仪器明细',
-      value: order.items.map((item) => `${item.label} / ${item.sn}`).join('；') || '-',
-      wide: true,
-    },
+    { label: '温度 Temp', value: displayValue(order.targetTemp), tone: 'temp' },
+    { label: '压力 Pressure', value: displayValue(order.targetPressure), tone: 'pressure' },
+    { label: '保温保压时间', value: displayValue(order.keepCondition), tone: 'neutral' },
+    { label: '容器类型/设备容量', value: displayValue(order.vesselType || order.type), tone: 'neutral' },
   ]
 })
+
+const reportInfoCards = computed(() => {
+  const order = currentOrder.value
+  if (!order) return []
+
+  return [
+    { label: '表格编号 Ref No.', value: 'WT3-TC/ZZ-21-R01' },
+    { label: '报告编号 Serial Number', value: displayValue(order.no || order.receivingNo) },
+    { label: '联系电话 Tel', value: displayValue(order.applicantPhone) },
+  ]
+})
+
+const testStepItems = computed(() => splitTextItems(currentOrder.value?.testSteps))
+const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safetyRisks))
 </script>
 
 <template>
   <div class="panel">
     <div class="ocr-bar">
       <div class="ocr-mini on">
-        <div class="ocr-mini-title">🔴 上罐 · 250L容器（当前识别）</div>
-        <div class="ocr-mini-row"><span class="ocr-mini-label">上部水温</span><span class="ocr-val temp">{{ t1[t1.length - 1]?.toFixed(1) || '--.-' }} °C</span></div>
-        <div class="ocr-mini-row"><span class="ocr-mini-label">下部水温</span><span class="ocr-val temp">{{ t2[t2.length - 1]?.toFixed(2) || '--.-' }} °C</span></div>
-        <div class="ocr-mini-row"><span class="ocr-mini-label">容器压力</span><span class="ocr-val press">{{ p[p.length - 1]?.toFixed(3) || '--.--' }} MPa</span></div>
+        <div class="ocr-mini-title">视频 OCR · 当前识别</div>
+        <div class="ocr-mini-row">
+          <span class="ocr-mini-label">上部水温</span>
+          <span class="ocr-val temp">{{ t1[t1.length - 1]?.toFixed(1) || '--.-' }} °C</span>
+        </div>
+        <div class="ocr-mini-row">
+          <span class="ocr-mini-label">下部水温</span>
+          <span class="ocr-val temp">{{ t2[t2.length - 1]?.toFixed(2) || '--.-' }} °C</span>
+        </div>
+        <div class="ocr-mini-row">
+          <span class="ocr-mini-label">容器压力</span>
+          <span class="ocr-val press">{{ p[p.length - 1]?.toFixed(3) || '--.--' }} MPa</span>
+        </div>
       </div>
       <div class="ocr-mini">
-        <div class="ocr-mini-title">⚡ 系统状态</div>
-        <div class="ocr-mini-row"><span class="ocr-mini-label">测试状态</span><span class="badge" :class="testRunning ? 'badge-green' : ''">{{ testRunning ? '● 测试中' : '● 已暂停' }}</span></div>
-        <div class="ocr-mini-row"><span class="ocr-mini-label">已采集</span><span style="font-family:'JetBrains Mono'">{{ csvCount }} 条</span></div>
-        <div class="ocr-mini-row"><span class="ocr-mini-label">视频进度</span><span style="font-family:'JetBrains Mono'">{{ captureProgressPct }}%</span></div>
+        <div class="ocr-mini-title">系统状态</div>
+        <div class="ocr-mini-row">
+          <span class="ocr-mini-label">测试状态</span>
+          <span class="badge" :class="testRunning ? 'badge-green' : ''">{{ testRunning ? '测试中' : '已暂停' }}</span>
+        </div>
+        <div class="ocr-mini-row">
+          <span class="ocr-mini-label">已采集</span>
+          <span class="mono-value">{{ csvCount }} 条</span>
+        </div>
+        <div class="ocr-mini-row">
+          <span class="ocr-mini-label">视频进度</span>
+          <span class="mono-value">{{ captureProgressSafe }}%</span>
+        </div>
       </div>
     </div>
 
@@ -98,8 +134,15 @@ const orderDetailFields = computed(() => {
         </button>
       </div>
 
-      <div class="capture-progress-track" aria-hidden="true">
-        <div class="capture-progress-fill" :style="{ width: `${captureProgressPct}%` }"></div>
+      <div
+        class="capture-progress-track"
+        role="progressbar"
+        aria-label="视频识别采集进度"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        :aria-valuenow="captureProgressSafe"
+      >
+        <div class="capture-progress-fill" :style="{ width: `${captureProgressSafe}%` }"></div>
       </div>
 
       <div class="monitoring-board">
@@ -121,47 +164,41 @@ const orderDetailFields = computed(() => {
             <div id="htp-chart" class="monitoring-chart"></div>
           </div>
         </div>
-        <div class="monitoring-order-card">
-          <div class="monitoring-card-head">
+
+        <div class="monitoring-order-card compact-order-card">
+          <div class="monitoring-card-head compact-order-head">
             <div class="monitoring-card-title">
-              <Icon icon="mdi:clipboard-text-outline" />
+              <Icon icon="mdi:file-document-outline" />
               <span>当前工单</span>
             </div>
-            <span class="monitoring-order-tag">{{ testRunning ? '测试中' : '已暂停' }}</span>
+            <span class="current-order-no">{{ currentOrderBadge }}</span>
           </div>
-          <div v-if="currentSelected" class="monitoring-order-body">
-            <div class="monitoring-order-grid">
+
+          <div v-if="currentSelected" class="compact-order-body">
+            <div class="testing-item-block">
+              <div class="testing-item-kicker">Testing Item</div>
+              <div class="testing-item-name">{{ currentInstrument?.label || '-' }}</div>
+              <div class="testing-item-sn">SN: {{ currentInstrument?.sn || '-' }}</div>
+            </div>
+
+            <div class="metric-card-grid">
               <div
-                v-for="field in orderDetailFields"
-                :key="field.label"
-                class="monitoring-order-item"
-                :class="{ 'is-wide': field.wide }"
+                v-for="metric in currentOrderMetrics"
+                :key="metric.label"
+                class="metric-card"
+                :class="`metric-${metric.tone}`"
               >
-                <div class="monitoring-order-label">{{ field.label }}</div>
-                <div
-                  class="monitoring-order-value"
-                  :class="{
-                    'is-code': field.code,
-                    'is-hot': field.hot,
-                    'is-pressure': field.pressure,
-                    'is-multiline': field.wide,
-                  }"
-                >
-                  {{ field.value }}
-                </div>
+                <div class="metric-label">{{ metric.label }}</div>
+                <div class="metric-value">{{ metric.value }}</div>
               </div>
             </div>
-            <div class="monitoring-order-footer">
-              <div class="monitoring-order-stat">
-                <span>采集状态</span>
-                <strong>{{ testRunning ? '正常' : '暂停' }}</strong>
-              </div>
-              <div class="monitoring-order-stat">
-                <span>已采集数据</span>
-                <strong>{{ csvCount }} 条</strong>
-              </div>
-            </div>
+
+            <button class="full-order-btn" @click="detailModalVisible = true">
+              <span>查看完整工单详情 · {{ detailModuleCount }} 模块</span>
+              <Icon icon="mdi:arrow-right" />
+            </button>
           </div>
+
           <div v-else class="monitoring-order-empty">
             <Icon icon="mdi:clipboard-remove-outline" />
             <span>未选择排程仪器</span>
@@ -171,15 +208,189 @@ const orderDetailFields = computed(() => {
       <div v-if="exportedCaptureDir" class="export-path">已保存：{{ exportedCaptureDir }}</div>
     </div>
 
+    <div v-if="detailModalVisible && currentOrder" class="modal-overlay" @click.self="detailModalVisible = false">
+      <div
+        class="modal hthp-report-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hthp-report-title"
+      >
+        <div class="modal-header hthp-report-header">
+          <div>
+            <div class="report-kicker">COSL · QHSE 管理体系记录表单</div>
+            <div id="hthp-report-title" class="modal-title">高温高压试验报告</div>
+            <div class="report-subtitle">High Temperature &amp; High Pressure Testing Report</div>
+          </div>
+          <div class="report-header-actions">
+            <span class="badge badge-green">{{ currentOrder.status || '当前工单' }}</span>
+            <button class="modal-close-btn" type="button" aria-label="关闭完整工单详情" @click="detailModalVisible = false">
+              <Icon icon="mdi:close" />
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-body hthp-report-body">
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">1</span>
+              报告/表单信息 Report Info
+            </div>
+            <div class="report-info-strip">
+              <div v-for="item in reportInfoCards" :key="item.label" class="report-info-card">
+                <div class="report-info-label">{{ item.label }}</div>
+                <div class="report-info-value">{{ item.value }}</div>
+              </div>
+            </div>
+            <div class="report-org-card">
+              <div class="report-info-label">测试机构 Accredited Testing Organization</div>
+              <div class="report-info-value">制造中心测试中心</div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">2</span>
+              基本工单信息 Work Order Info
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="report-grid">
+                <div class="info-item"><div class="info-key">任务编号</div><div class="info-val">{{ currentOrder.no }}</div></div>
+                <div class="info-item"><div class="info-key">委托编号</div><div class="info-val">{{ displayValue(currentOrder.entrustNo) }}</div></div>
+                <div class="info-item"><div class="info-key">接收编号</div><div class="info-val">{{ displayValue(currentOrder.receivingNo) }}</div></div>
+                <div class="info-item"><div class="info-key">申请人</div><div class="info-val">{{ displayValue(currentOrder.applicant) }}</div></div>
+                <div class="info-item"><div class="info-key">申请单位</div><div class="info-val">{{ displayValue(currentOrder.applicantUnit) }}</div></div>
+                <div class="info-item"><div class="info-key">申请日期</div><div class="info-val">{{ displayValue(currentOrder.applyDate || currentOrder.applicationDate) }}</div></div>
+                <div class="info-item"><div class="info-key">项目名称</div><div class="info-val">{{ displayValue(currentOrder.projectName) }}</div></div>
+                <div class="info-item"><div class="info-key">计划时间</div><div class="info-val">{{ displayValue(currentOrder.plannedTime) }}</div></div>
+                <div class="info-item"><div class="info-key">工单状态</div><div class="info-val">{{ displayValue(currentOrder.status) }}</div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">3</span>
+              试件信息 Testing Item Information
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="report-grid">
+                <div class="info-item"><div class="info-key">当前仪器 Name</div><div class="info-val">{{ currentInstrument?.label || '-' }}</div></div>
+                <div class="info-item"><div class="info-key">SN 编号 NO.</div><div class="info-val">{{ currentInstrument?.sn || '-' }}</div></div>
+                <div class="info-item"><div class="info-key">数量 Quantity</div><div class="info-val">{{ displayValue(currentInstrument?.quantity) }}</div></div>
+                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(currentInstrument?.testType || currentOrder.testType) }}</div></div>
+                <div class="info-item"><div class="info-key">仪器长度</div><div class="info-val">{{ displayValue(currentInstrument?.instrumentLength) }}</div></div>
+                <div class="info-item"><div class="info-key">最大直径</div><div class="info-val">{{ displayValue(currentInstrument?.maxDiameter || currentOrder.maxDiameter) }}</div></div>
+              </div>
+              <div class="instrument-list-card">
+                <div class="report-info-label">工单仪器清单</div>
+                <div class="instrument-pill-row">
+                  <span v-for="item in (currentOrder.items || [])" :key="item.id" class="instrument-pill">
+                    {{ item.label }} / {{ item.sn }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">4</span>
+              试验要求 Testing Requirements
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="requirement-metrics">
+                <div class="requirement-card is-pressure">
+                  <div class="requirement-label">试验压力 Pressure</div>
+                  <div class="requirement-value">{{ displayValue(currentOrder.targetPressure) }}</div>
+                </div>
+                <div class="requirement-card is-temp">
+                  <div class="requirement-label">试验温度 Temperature</div>
+                  <div class="requirement-value">{{ displayValue(currentOrder.targetTemp) }}</div>
+                </div>
+                <div class="requirement-card">
+                  <div class="requirement-label">保持时间 Hold Time</div>
+                  <div class="requirement-value">{{ displayValue(currentOrder.keepCondition) }}</div>
+                </div>
+              </div>
+              <div class="report-grid two-cols">
+                <div class="info-item"><div class="info-key">使用设备</div><div class="info-val">{{ displayValue(currentOrder.vesselType) }}</div></div>
+                <div class="info-item"><div class="info-key">设备类型</div><div class="info-val">{{ displayValue(currentOrder.type) }}</div></div>
+                <div class="info-item"><div class="info-key">在线测试</div><div class="info-val">{{ currentOrder.sanxinIsSanxin ? '是' : '否' }}</div></div>
+                <div class="info-item"><div class="info-key">其它要求</div><div class="info-val">{{ displayValue(currentOrder.remark) }}</div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">5</span>
+              配件来源 / 测试步骤 Fittings &amp; Steps
+            </div>
+            <div class="hthp-rpt-card stacked-card">
+              <div class="report-grid two-cols">
+                <div class="info-item"><div class="info-key">设备清单</div><div class="info-val">{{ displayValue(currentOrder.equipmentList) }}</div></div>
+                <div class="info-item"><div class="info-key">仪器组合</div><div class="info-val">{{ displayValue(currentOrder.instrumentCombination) }}</div></div>
+              </div>
+              <div class="text-block">
+                <div class="text-block-title">测试步骤</div>
+                <ol v-if="testStepItems.length" class="report-list">
+                  <li v-for="(item, idx) in testStepItems" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="text-muted">暂无测试步骤</div>
+              </div>
+              <div class="text-block">
+                <div class="text-block-title">安全风险及预防措施</div>
+                <ol v-if="safetyRiskItems.length" class="report-list">
+                  <li v-for="(item, idx) in safetyRiskItems" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="text-muted">暂无安全风险说明</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">6</span>
+              签字附件 Attachments &amp; Signatures
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="report-grid two-cols">
+                <div class="info-item"><div class="info-key">三新确认日期</div><div class="info-val">{{ displayValue(currentOrder.sanxinConfirmDate) }}</div></div>
+                <div class="info-item"><div class="info-key">是否三新测试</div><div class="info-val">{{ currentOrder.sanxinIsSanxin ? '是' : '否' }}</div></div>
+                <div class="info-item"><div class="info-key">测试方确认 1</div><div class="info-val">{{ yesNoText(currentOrder.sanxinTesterItem1) }}</div></div>
+                <div class="info-item"><div class="info-key">测试方确认 2</div><div class="info-val">{{ yesNoText(currentOrder.sanxinTesterItem2) }}</div></div>
+              </div>
+              <div class="signature-grid">
+                <div class="signature-card">
+                  <div class="signature-label">申请方签字 Applicant</div>
+                  <div class="signature-name">{{ displayValue(currentOrder.applicant) }}</div>
+                </div>
+                <div class="signature-card">
+                  <div class="signature-label">测试方签字（管理员）Reviewer</div>
+                  <img v-if="currentOrder.adminSignatureUrl" class="signature-img" :src="currentOrder.adminSignatureUrl" alt="管理员签名" />
+                  <div v-else class="signature-empty">尚未上传签名</div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="modal-footer hthp-report-footer">
+          <div>报告编号：{{ currentOrder.no || '-' }} · {{ currentOrder.applyDate || '-' }}</div>
+          <button class="btn btn-primary" @click="detailModalVisible = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
     <div class="test-controls">
-      <button class="control-action control-action-pause" v-if="testRunning" @click="emit('pause')">
+      <button v-if="testRunning" class="control-action control-action-pause" @click="emit('pause')">
         <span class="control-icon"><Icon icon="mdi:pause" /></span>
         <span class="control-copy">
           <strong>测试暂停</strong>
           <small>暂停采集进程</small>
         </span>
       </button>
-      <button class="control-action control-action-pause" v-else @click="emit('resume')">
+      <button v-else class="control-action control-action-pause" @click="emit('resume')">
         <span class="control-icon"><Icon icon="mdi:play" /></span>
         <span class="control-copy">
           <strong>继续测试</strong>
@@ -211,7 +422,7 @@ const orderDetailFields = computed(() => {
   --capture-muted: #64748b;
   --capture-line: rgba(148, 163, 184, 0.32);
   --capture-amber: #2563eb;
-  --capture-green: #2563eb;
+  --capture-green: var(--color-accent-green, #10b981);
   --capture-red: #dc2626;
 }
 
@@ -279,6 +490,10 @@ const orderDetailFields = computed(() => {
   box-shadow: 0 16px 30px rgba(37, 99, 235, 0.28);
 }
 
+.mono-value {
+  font-family: 'JetBrains Mono', monospace;
+}
+
 .capture-progress-track {
   height: 8px;
   overflow: hidden;
@@ -304,7 +519,7 @@ const orderDetailFields = computed(() => {
 
 .monitoring-board {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) 360px;
   gap: 14px;
   margin-top: 16px;
 }
@@ -352,8 +567,7 @@ const orderDetailFields = computed(() => {
 
 .monitoring-series,
 .monitoring-status,
-.monitoring-count,
-.monitoring-order-tag {
+.monitoring-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -406,11 +620,6 @@ const orderDetailFields = computed(() => {
   background: rgba(148, 163, 184, 0.12);
 }
 
-.monitoring-order-tag {
-  color: var(--color-accent-blue);
-  background: rgba(37, 99, 235, 0.08);
-}
-
 .monitoring-chart-body {
   padding: 8px 14px 14px;
 }
@@ -421,86 +630,138 @@ const orderDetailFields = computed(() => {
   min-height: 420px;
 }
 
-.monitoring-order-body {
+.compact-order-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92)),
+    radial-gradient(circle at 88% 2%, rgba(16, 185, 129, 0.1), transparent 36%);
+}
+
+.compact-order-head {
+  padding: 13px 14px;
+}
+
+.current-order-no {
+  display: inline-flex;
+  align-items: center;
+  max-width: 160px;
+  min-height: 24px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--capture-green);
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-order-body {
   padding: 14px;
 }
 
-.monitoring-order-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px 14px;
-}
-
-.monitoring-order-item {
-  min-width: 0;
-  padding: 12px;
+.testing-item-block {
+  padding: 13px 14px;
   border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.86));
+  background: var(--color-bg-tertiary);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
-.monitoring-order-item.is-wide {
-  grid-column: 1 / -1;
-}
-
-.monitoring-order-label {
-  font-size: 12px;
+.testing-item-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--capture-muted);
 }
 
-.monitoring-order-value {
+.testing-item-name {
   margin-top: 7px;
-  font-size: 14px;
-  font-weight: 700;
   color: var(--capture-ink);
+  font-size: 15px;
+  font-weight: 800;
   line-height: 1.35;
+}
+
+.testing-item-sn {
+  margin-top: 4px;
+  color: var(--capture-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.metric-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.metric-card {
+  min-width: 0;
+  min-height: 82px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.metric-label {
+  color: var(--capture-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.metric-value {
+  margin-top: 9px;
+  color: var(--capture-ink);
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.1;
   word-break: break-word;
 }
 
-.monitoring-order-value.is-code {
-  font-size: 13px;
-  color: var(--color-accent-blue);
+.metric-temp {
+  background: rgba(239, 68, 68, 0.07);
+  border-color: rgba(239, 68, 68, 0.15);
 }
 
-.monitoring-order-value.is-hot {
+.metric-temp .metric-value {
   color: #dc2626;
 }
 
-.monitoring-order-value.is-pressure {
+.metric-pressure {
+  background: rgba(14, 165, 233, 0.08);
+  border-color: rgba(14, 165, 233, 0.16);
+}
+
+.metric-pressure .metric-value {
   color: #0284c7;
 }
 
-.monitoring-order-value.is-multiline {
-  white-space: pre-wrap;
-  line-height: 1.55;
-}
-
-.monitoring-order-footer {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.monitoring-order-stat {
-  padding: 12px;
+.full-order-btn {
+  width: 100%;
+  margin-top: 13px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
   border-radius: 14px;
-  background: rgba(37, 99, 235, 0.06);
-  border: 1px solid rgba(37, 99, 235, 0.12);
-}
-
-.monitoring-order-stat span {
-  display: block;
-  font-size: 12px;
-  color: var(--capture-muted);
-}
-
-.monitoring-order-stat strong {
-  display: block;
-  margin-top: 7px;
-  font-size: 18px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--color-accent-blue);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  font-size: 13px;
   font-weight: 800;
-  color: var(--capture-ink);
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.full-order-btn:hover {
+  background: rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
 }
 
 .monitoring-order-empty {
@@ -518,6 +779,297 @@ const orderDetailFields = computed(() => {
 .monitoring-order-empty svg {
   font-size: 28px;
   color: #94a3b8;
+}
+
+.hthp-report-modal {
+  width: 820px;
+  max-width: 94vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.hthp-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px 12px;
+}
+
+.report-kicker,
+.report-subtitle,
+.report-info-label {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.report-kicker {
+  margin-bottom: 3px;
+}
+
+.report-subtitle {
+  margin-top: 2px;
+}
+
+.report-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.modal-close-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hthp-report-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.hthp-report-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.hthp-report-body::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+}
+
+.hthp-rpt-sec {
+  margin-bottom: 14px;
+}
+
+.hthp-rpt-sec:last-child {
+  margin-bottom: 0;
+}
+
+.hthp-rpt-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.hthp-rpt-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-accent-blue);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.hthp-rpt-card,
+.report-org-card,
+.report-info-card {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.hthp-rpt-card {
+  padding: 12px 14px;
+}
+
+.report-info-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.report-info-card,
+.report-org-card {
+  padding: 9px 12px;
+  background: var(--color-bg-tertiary);
+}
+
+.report-info-value {
+  margin-top: 3px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.report-grid.two-cols {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.report-grid .info-item {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+}
+
+.instrument-list-card,
+.text-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+}
+
+.instrument-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.instrument-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--color-accent-blue);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.requirement-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.requirement-card {
+  padding: 10px 8px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  text-align: center;
+}
+
+.requirement-card.is-pressure {
+  background: rgba(14, 165, 233, 0.07);
+  border: 1px solid rgba(14, 165, 233, 0.16);
+}
+
+.requirement-card.is-temp {
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.16);
+}
+
+.requirement-label,
+.text-block-title,
+.signature-label {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.requirement-value {
+  margin-top: 5px;
+  color: var(--color-text-primary);
+  font-size: 21px;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.requirement-card.is-pressure .requirement-value {
+  color: #0284c7;
+}
+
+.requirement-card.is-temp .requirement-value {
+  color: #dc2626;
+}
+
+.stacked-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.text-block {
+  margin-top: 0;
+}
+
+.report-list {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.signature-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.signature-card {
+  min-height: 84px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  text-align: center;
+}
+
+.signature-name {
+  margin-top: 14px;
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.signature-img {
+  max-height: 54px;
+  max-width: 160px;
+  object-fit: contain;
+  display: block;
+  margin: 8px auto 0;
+}
+
+.signature-empty {
+  width: 104px;
+  height: 38px;
+  margin: 9px auto 0;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.hthp-report-footer {
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-text-secondary);
+  font-size: 11px;
 }
 
 .test-controls {
@@ -593,100 +1145,8 @@ const orderDetailFields = computed(() => {
   background: rgba(37, 99, 235, 0.13);
 }
 
-.live-measurement-panel {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--capture-line);
-}
-
-.live-measurement-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.live-measurement-title {
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--capture-ink);
-}
-
-.live-measurement-subtitle {
-  margin-top: 3px;
-  color: var(--capture-muted);
-  font-size: 12px;
-}
-
-.live-measurement-head span {
-  flex-shrink: 0;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
-  color: var(--capture-muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.live-measurement-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.live-measurement-item {
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.72);
-  padding: 10px 12px;
-  min-width: 0;
-}
-
-.live-measurement-name {
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.live-measurement-value {
-  margin-top: 5px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.live-measurement-confidence {
-  margin-top: 4px;
-  color: var(--color-text-tertiary);
-  font-size: 10px;
-}
-
-.channel-unit {
-  margin-left: 2px;
-  color: var(--color-text-tertiary);
-  font-size: 11px;
-}
-
-.live-measurement-empty {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  padding: 12px;
-  border: 1px dashed var(--capture-line);
-  border-radius: 12px;
-  color: var(--capture-muted);
-  font-size: 12px;
-}
-
 @media (max-width: 1100px) {
-  .test-controls {
-    grid-template-columns: 1fr;
-  }
-
+  .test-controls,
   .monitoring-board {
     grid-template-columns: 1fr;
   }
@@ -698,7 +1158,10 @@ const orderDetailFields = computed(() => {
 }
 
 @media (max-width: 768px) {
-  .monitoring-card-head {
+  .video-capture-head,
+  .monitoring-card-head,
+  .hthp-report-header,
+  .hthp-report-footer {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -707,9 +1170,18 @@ const orderDetailFields = computed(() => {
     justify-content: flex-start;
   }
 
-  .monitoring-order-grid,
-  .monitoring-order-footer {
+  .ocr-bar,
+  .metric-card-grid,
+  .report-info-strip,
+  .report-grid,
+  .report-grid.two-cols,
+  .requirement-metrics,
+  .signature-grid {
     grid-template-columns: 1fr;
+  }
+
+  .select-video-btn {
+    width: 100%;
   }
 }
 </style>

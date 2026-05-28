@@ -3,7 +3,7 @@ import * as echarts from 'echarts'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { readFile, writeFile } from '@tauri-apps/plugin-fs'
+import { readFile } from '@tauri-apps/plugin-fs'
 import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
 import type { HighTempPressureModal, HighTempPressurePanel } from '../types'
@@ -481,13 +481,27 @@ export function useHighTempPressureTesting() {
       })
       const dataUrl = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' })
       const imagePath = joinPath(exportDir, '高温高压测试结果曲线.png')
-      await writeFile(imagePath, dataUrlToBytes(dataUrl))
-      curveChartImagePath.value = imagePath
-      return imagePath
+      const result = await invoke<any>('write_high_temp_pressure_curve_chart', {
+        exportDir,
+        imageBytes: Array.from(dataUrlToBytes(dataUrl)),
+      })
+      const savedPath = String(result?.image_path || imagePath)
+      curveChartImagePath.value = savedPath
+      return savedPath
     } finally {
       chart.dispose()
       el.remove()
     }
+  }
+
+  async function ensureCurveChartImage() {
+    if (curveChartImagePath.value) return curveChartImagePath.value
+    await syncCaptureResultFromOutputDir().catch(() => undefined)
+    const outputDir = exportedCaptureDir.value || captureOutputDir.value
+    if (!outputDir) {
+      throw new Error('未找到视频识别结果目录，无法生成温度/压力测试曲线图')
+    }
+    return exportCurveChartImage(outputDir)
   }
 
   async function syncCaptureResultFromOutputDir() {
@@ -606,6 +620,12 @@ export function useHighTempPressureTesting() {
       testRunning.value = false
       stopCapturePolling()
       captureStatusText.value = String(payload?.message || '视频识别失败')
+      if (captureRecordCount.value > 0) {
+        captureStatusText.value = `视频识别已停止，已保留 ${captureRecordCount.value} 条采集数据`
+        void syncCaptureResultFromOutputDir().catch(() => undefined)
+        ElMessage.warning(captureStatusText.value)
+        return
+      }
       ElMessage.error(captureStatusText.value)
     }
   }
@@ -735,14 +755,21 @@ export function useHighTempPressureTesting() {
       return false
     }
 
-    const result = await invoke<any>('export_high_temp_pressure_capture_output', {
-      sourceOutputDir: captureOutputDir.value,
-      targetDir: selectedDir,
-      folderName: buildExportFolderName(),
-    })
-    exportedCaptureDir.value = String(result?.export_dir || selectedDir)
-    await exportCurveChartImage(exportedCaptureDir.value)
-    ElMessage.success(`视频识别结果已保存到 ${exportedCaptureDir.value}`)
+    try {
+      const result = await invoke<any>('export_high_temp_pressure_capture_output', {
+        sourceOutputDir: captureOutputDir.value,
+        targetDir: selectedDir,
+        folderName: buildExportFolderName(),
+      })
+      exportedCaptureDir.value = String(result?.export_dir || selectedDir)
+      await exportCurveChartImage(exportedCaptureDir.value)
+      ElMessage.success(`视频识别结果已保存到 ${exportedCaptureDir.value}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error || '视频识别结果导出失败')
+      console.warn('[high-temp-pressure] export capture output failed:', error)
+      captureStatusText.value = message
+      ElMessage.warning(`视频识别结果导出失败，已继续结束测试：${message}`)
+    }
     return true
   }
 
@@ -810,6 +837,7 @@ export function useHighTempPressureTesting() {
     resumeTest,
     stopTest,
     finalizeVideoCapture,
+    ensureCurveChartImage,
     endTest,
   }
 }

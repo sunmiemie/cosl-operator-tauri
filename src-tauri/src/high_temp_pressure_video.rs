@@ -578,3 +578,20 @@ pub fn export_high_temp_pressure_capture_output(
         "source_dir": source.to_string_lossy(),
     }))
 }
+
+#[tauri::command]
+pub fn write_high_temp_pressure_curve_chart(
+    export_dir: String,
+    image_bytes: Vec<u8>,
+) -> Result<serde_json::Value, String> {
+    ensure_exists(&export_dir, "导出目录")?;
+    let export_path = PathBuf::from(&export_dir);
+    fs::create_dir_all(&export_path).map_err(|e| format!("创建导出目录失败: {}", e))?;
+
+    let image_path = export_path.join("高温高压测试结果曲线.png");
+    fs::write(&image_path, image_bytes).map_err(|e| format!("写入温度/压力测试曲线图失败: {}", e))?;
+
+    Ok(serde_json::json!({
+        "image_path": image_path.to_string_lossy(),
+    }))
+}

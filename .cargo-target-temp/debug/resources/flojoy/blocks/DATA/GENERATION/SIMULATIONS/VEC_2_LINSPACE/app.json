@@ -1,0 +1,263 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "width": 216,
+                "height": 233,
+                "id": "VEC_2_LINSPACE-328c0f00-2689-4e04-bafd-5dca4e9faab3",
+                "type": "DATA",
+                "data": {
+                    "id": "VEC_2_LINSPACE-328c0f00-2689-4e04-bafd-5dca4e9faab3",
+                    "label": "VEC 2 LINSPACE",
+                    "func": "VEC_2_LINSPACE",
+                    "type": "DATA",
+                    "ctrls": {
+                        "start": {
+                            "type": "float",
+                            "default": -10,
+                            "desc": "The start point of the data.",
+                            "overload": null,
+                            "functionName": "VEC_2_LINSPACE",
+                            "param": "start",
+                            "value": -10
+                        },
+                        "end": {
+                            "type": "float",
+                            "default": 10,
+                            "desc": "The end point of the data.",
+                            "overload": null,
+                            "functionName": "VEC_2_LINSPACE",
+                            "param": "end",
+                            "value": 10
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Scalar|Vector",
+                            "desc": "Length of resulting linspace vector.",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector",
+                            "desc": "v: the vector between 'start' and 'end' with a 'step' number of points."
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/VEC_2_LINSPACE/VEC_2_LINSPACE.py",
+                    "selected": false
+                },
+                "position": {
+                    "x": -117.55247726597622,
+                    "y": -228.85943553460868
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -117.55247726597622,
+                    "y": -228.85943553460868
+                },
+                "dragging": false
+            },
+            {
+                "width": 216,
+                "height": 197,
+                "id": "VECTOR-5a422069-2a18-461a-ad80-ada8b0b4474a",
+                "type": "DATA",
+                "data": {
+                    "id": "VECTOR-5a422069-2a18-461a-ad80-ada8b0b4474a",
+                    "label": "VECTOR",
+                    "func": "VECTOR",
+                    "type": "DATA",
+                    "ctrls": {
+                        "elements": {
+                            "type": "str",
+                            "default": "",
+                            "desc": "The elements that should be in the vector",
+                            "overload": null,
+                            "functionName": "VECTOR",
+                            "param": "elements",
+                            "value": "1,2,3,5,8,13,21,44"
+                        },
+                        "elements_type": {
+                            "type": "select",
+                            "options": [
+                                "boolean",
+                                "numeric"
+                            ],
+                            "default": "boolean",
+                            "desc": null,
+                            "overload": null,
+                            "functionName": "VECTOR",
+                            "param": "elements_type",
+                            "value": "numeric"
+                        }
+                    },
+                    "initCtrls": {},
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector",
+                            "desc": "The vector consists of the elements."
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/VECTOR/VECTOR.py",
+                    "selected": false
+                },
+                "position": {
+                    "x": -499.7708374006639,
+                    "y": -18.794419057177265
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -499.7708374006639,
+                    "y": -18.794419057177265
+                },
+                "dragging": false
+            },
+            {
+                "width": 225,
+                "height": 225,
+                "id": "BAR-0453d463-5da2-42a2-a847-709805d66330",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "BAR-0453d463-5da2-42a2-a847-709805d66330",
+                    "label": "BAR",
+                    "func": "BAR",
+                    "type": "VISUALIZATION",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedPair|DataFrame|Matrix|Vector",
+                            "desc": "the DataContainer to be visualized in a bar chart",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly Bar chart visualization"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/BAR/BAR.py",
+                    "selected": false
+                },
+                "position": {
+                    "x": 642.3297252372458,
+                    "y": -80.86784203824953
+                },
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 642.3297252372458,
+                    "y": -80.86784203824953
+                },
+                "dragging": false
+            },
+            {
+                "id": "VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4",
+                "type": "TYPE_CASTING",
+                "data": {
+                    "id": "VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4",
+                    "label": "VECTOR 2 ORDERED PAIR",
+                    "func": "VECTOR_2_ORDERED_PAIR",
+                    "type": "TYPE_CASTING",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector",
+                            "desc": "The input vector that will be the x axis of OrderedPair.",
+                            "multiple": false
+                        },
+                        {
+                            "name": "y",
+                            "id": "y",
+                            "type": "Vector",
+                            "desc": "The input vector that will be the y axis of OrderedPair.",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedPair",
+                            "desc": "The OrderedPair that is generated from the input vectors"
+                        }
+                    ],
+                    "path": "ETL/TRANSFORM/TYPE_CASTING/VECTOR_2_ORDERED_PAIR/VECTOR_2_ORDERED_PAIR.py"
+                },
+                "position": {
+                    "x": 244.80120861304897,
+                    "y": -42.43599870689127
+                },
+                "width": 183,
+                "height": 154,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 244.80120861304897,
+                    "y": -42.43599870689127
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "VECTOR-5a422069-2a18-461a-ad80-ada8b0b4474a->VEC_2_LINSPACE-328c0f00-2689-4e04-bafd-5dca4e9faab3_24ced406-4a40-4e7e-bd36-ef1f7fd6a17b",
+                "source": "VECTOR-5a422069-2a18-461a-ad80-ada8b0b4474a",
+                "target": "VEC_2_LINSPACE-328c0f00-2689-4e04-bafd-5dca4e9faab3",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Vector"
+                }
+            },
+            {
+                "id": "VEC_2_LINSPACE-328c0f00-2689-4e04-bafd-5dca4e9faab3->VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4_69ecafe3-8f86-4850-8e4f-78de5300c3f2",
+                "source": "VEC_2_LINSPACE-328c0f00-2689-4e04-bafd-5dca4e9faab3",
+                "target": "VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Vector"
+                }
+            },
+            {
+                "id": "VECTOR-5a422069-2a18-461a-ad80-ada8b0b4474a->VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4_6e59fcd0-ce2e-4629-a313-c3b688031656",
+                "source": "VECTOR-5a422069-2a18-461a-ad80-ada8b0b4474a",
+                "target": "VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4",
+                "sourceHandle": "default",
+                "targetHandle": "y",
+                "data": {
+                    "outputType": "Vector"
+                }
+            },
+            {
+                "id": "VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4->BAR-0453d463-5da2-42a2-a847-709805d66330_f7b77082-14f8-42e3-b72f-4ca2ddd4b3af",
+                "source": "VECTOR_2_ORDERED_PAIR-a3f15643-93c1-4f85-aff2-7ec84132d9d4",
+                "target": "BAR-0453d463-5da2-42a2-a847-709805d66330",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "OrderedPair"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}

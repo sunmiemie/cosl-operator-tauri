@@ -24,6 +24,25 @@ export type ScheduleChangePayload = {
   end_time: string
   scheduledStartAt: string
   scheduledEndAt: string
+  scheduleSegments: Array<{
+    scheduled_start_at: string
+    scheduled_end_at: string
+  }>
+  segments: Array<{
+    eventId: string
+    orderId: string
+    dateStr: string
+    startTimeKey: string
+    endTimeKey: string
+    span: number
+    startAtHour: string
+    endAtHour: string
+    test_date: string
+    start_time: string
+    end_time: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+  }>
 }
 
 export type UseScheduleOptions = {
@@ -31,7 +50,7 @@ export type UseScheduleOptions = {
 }
 
 export function useSchedule(options: UseScheduleOptions = {}) {
-  const { initAuth, getAuthHeaders } = useAuth()
+  const { initAuth, validateToken, getAuthHeaders } = useAuth()
   // ============ 基础状态 ============
   const searchKeyword = ref('') // 待排程工单的搜索关键字
   
@@ -39,14 +58,15 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const isDragging = ref(false)
 
   type ScheduledEvent = {
+    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
     span: number
   }
 
-  const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
-  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
+  const scheduledEvents = ref<Record<string, ScheduledEvent[]>>({})
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent[] | null>>({})
   const runningInstrumentIds = ref<Record<string, true>>({})
   
   // 当前在日历中被选中的工单 ID 列表
@@ -59,10 +79,59 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const workOrdersError = ref<string | null>(null)
   const visibleOrderStatuses = [1, 2]
 
-  function markPendingSchedule(orderId: string, event: ScheduledEvent | null) {
+  function createScheduleEventId(orderId: string) {
+    return `${orderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  function normalizeScheduledEventList(events?: ScheduledEvent[] | ScheduledEvent | null) {
+    if (!events) return []
+    return Array.isArray(events) ? events : [events]
+  }
+
+  function cloneScheduledEventList(events?: ScheduledEvent[] | ScheduledEvent | null) {
+    return normalizeScheduledEventList(events).map((event) => ({ ...event }))
+  }
+
+  function cloneScheduledEventMap(source: Record<string, ScheduledEvent[] | ScheduledEvent> = scheduledEvents.value) {
+    const next: Record<string, ScheduledEvent[]> = {}
+    Object.entries(source).forEach(([orderId, events]) => {
+      next[orderId] = cloneScheduledEventList(events)
+    })
+    return next
+  }
+
+  function sortScheduledEvents(events: ScheduledEvent[]) {
+    return [...events].sort((a, b) => {
+      if (a.dateStr !== b.dateStr) return a.dateStr.localeCompare(b.dateStr)
+      if (a.startTimeKey !== b.startTimeKey) return a.startTimeKey.localeCompare(b.startTimeKey)
+      return a.eventId.localeCompare(b.eventId)
+    })
+  }
+
+  function getOrderEvents(orderId: string) {
+    return normalizeScheduledEventList(scheduledEvents.value[orderId])
+  }
+
+  function setOrderEvents(orderId: string, events: ScheduledEvent[]) {
+    const next = { ...scheduledEvents.value }
+    const normalized = sortScheduledEvents(cloneScheduledEventList(events))
+    if (normalized.length) next[orderId] = normalized
+    else delete next[orderId]
+    scheduledEvents.value = next
+  }
+
+  function findEventById(eventId: string) {
+    for (const [orderId, events] of Object.entries(scheduledEvents.value)) {
+      const index = events.findIndex((event) => event.eventId === eventId)
+      if (index !== -1) return { orderId, index, event: events[index] }
+    }
+    return null
+  }
+
+  function markPendingSchedule(orderId: string, events: ScheduledEvent[] | null) {
     pendingScheduleEvents.value = {
       ...pendingScheduleEvents.value,
-      [orderId]: event ? { ...event } : null,
+      [orderId]: events ? cloneScheduledEventList(events) : null,
     }
   }
 
@@ -79,29 +148,41 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     return Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
-  function eventFromOrder(order: WaterCycleOrder): ScheduledEvent | null {
-    const start = parseBackendDateTime(order.scheduledStartAt)
-    const end = parseBackendDateTime(order.scheduledEndAt)
-    if (!start || !end || end <= start) return null
-    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
-    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
-    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
-    return {
-      orderId: order.id,
-      dateStr: fmtDate(start),
-      startTimeKey,
-      span,
-    }
+  function eventsFromOrder(order: WaterCycleOrder): ScheduledEvent[] {
+    const segments = order.scheduleSegments?.length
+      ? order.scheduleSegments
+      : order.scheduledStartAt && order.scheduledEndAt
+        ? [{ scheduledStartAt: order.scheduledStartAt, scheduledEndAt: order.scheduledEndAt }]
+        : []
+
+    return segments
+      .map((segment, index) => {
+        const start = parseBackendDateTime(segment.scheduledStartAt)
+        const end = parseBackendDateTime(segment.scheduledEndAt)
+        if (!start || !end || end <= start) return null
+        const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+        if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+        const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+        return {
+          eventId: `${order.id}-${index}-${start.getTime()}-${end.getTime()}`,
+          orderId: order.id,
+          dateStr: fmtDate(start),
+          startTimeKey,
+          span,
+        }
+      })
+      .filter(Boolean) as ScheduledEvent[]
   }
 
   function restoreScheduledEvents(orders: WaterCycleOrder[]) {
-    const next: Record<string, ScheduledEvent> = {}
+    const next: Record<string, ScheduledEvent[]> = {}
     orders.forEach((order) => {
-      const ev = eventFromOrder(order)
-      if (ev) next[order.id] = ev
+      const events = eventsFromOrder(order)
+      if (events.length) next[order.id] = events
     })
-    Object.entries(pendingScheduleEvents.value).forEach(([orderId, event]) => {
-      if (event) next[orderId] = event
+    Object.entries(pendingScheduleEvents.value).forEach(([orderId, events]) => {
+      const normalized = cloneScheduledEventList(events)
+      if (normalized.length) next[orderId] = normalized
       else delete next[orderId]
     })
     scheduledEvents.value = next
@@ -244,7 +325,8 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   }
 
   const getScheduleChangePayload = (orderId: string): ScheduleChangePayload | null => {
-    const ev = scheduledEvents.value[orderId]
+    const events = getOrderEvents(orderId)
+    const ev = events[0]
     if (!ev) return null
     const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
     if (!endTimeKey) return null
@@ -262,44 +344,76 @@ export function useSchedule(options: UseScheduleOptions = {}) {
       start_time: timeKeyToTimeString(ev.startTimeKey),
       end_time: timeKeyToTimeString(endTimeKey),
       scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
-      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`
+      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+      scheduleSegments: events.map((event) => {
+        const eventEndTimeKey = getEndTimeKey(event.startTimeKey, event.span)
+        const eventStartHh = timeKeyToHour(event.startTimeKey)
+        const eventEndHh = timeKeyToHour(eventEndTimeKey)
+        return {
+          scheduled_start_at: `${event.dateStr} ${eventStartHh}:00:00`,
+          scheduled_end_at: `${event.dateStr} ${eventEndHh}:00:00`,
+        }
+      }).filter((segment) => segment.scheduled_start_at && segment.scheduled_end_at),
+      segments: events.map((event) => {
+        const eventEndTimeKey = getEndTimeKey(event.startTimeKey, event.span)
+        const eventStartHh = timeKeyToHour(event.startTimeKey)
+        const eventEndHh = timeKeyToHour(eventEndTimeKey)
+        return {
+          eventId: event.eventId,
+          orderId: event.orderId,
+          dateStr: event.dateStr,
+          startTimeKey: event.startTimeKey,
+          endTimeKey: eventEndTimeKey,
+          span: event.span,
+          startAtHour: `${event.dateStr} ${eventStartHh}`,
+          endAtHour: `${event.dateStr} ${eventEndHh}`,
+          test_date: event.dateStr,
+          start_time: timeKeyToTimeString(event.startTimeKey),
+          end_time: timeKeyToTimeString(eventEndTimeKey),
+          scheduledStartAt: `${event.dateStr} ${eventStartHh}:00:00`,
+          scheduledEndAt: `${event.dateStr} ${eventEndHh}:00:00`,
+        }
+      })
     }
   }
 
-  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent) {
+  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent[]) {
     const order = getOrderById(orderId)
     const schedule = getScheduleChangePayload(orderId)
-    if (!order?.dbId || !schedule) return true
+    if (!order?.dbId) return true
 
-    markPendingSchedule(orderId, scheduledEvents.value[orderId] || null)
+    markPendingSchedule(orderId, getOrderEvents(orderId))
     try {
       const authOk = await initAuth()
-      if (!authOk) {
-        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
+      const tokenOk = authOk && await validateToken()
+      if (!tokenOk) {
+        if (fallback !== undefined) setOrderEvents(orderId, fallback)
         ElMessage.error('登录状态失效，请重新登录后再保存排期')
         return false
       }
-      const resp = await saveWaterCycleOrderSchedule(
-        order.dbId,
-        {
-          scheduled_start_at: schedule.scheduledStartAt,
-          scheduled_end_at: schedule.scheduledEndAt,
-        },
-        getAuthHeaders()
-      )
+      const resp = schedule
+        ? await saveWaterCycleOrderSchedule(
+            order.dbId,
+            {
+              scheduled_start_at: schedule.scheduledStartAt,
+              scheduled_end_at: schedule.scheduledEndAt,
+              schedule_segments: schedule.scheduleSegments,
+            },
+            getAuthHeaders()
+          )
+        : await clearWaterCycleOrderSchedule(order.dbId, getAuthHeaders())
       if (!resp.success || !resp.data || resp.data.code !== 0) {
-        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: fallback }
+        if (fallback !== undefined) setOrderEvents(orderId, fallback)
         ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
         return false
       }
       const saved = resp.data.data
       if (saved) {
         const updated = mapWaterCycleOrder(saved)
-        const savedEvent = eventFromOrder(updated)
         workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
-        if (savedEvent) scheduledEvents.value = { ...scheduledEvents.value, [updated.id]: savedEvent }
+        setOrderEvents(updated.id, eventsFromOrder(updated))
       }
-      await options.onScheduleChange?.(schedule, order)
+      if (schedule) await options.onScheduleChange?.(schedule, order)
       return true
     } finally {
       clearPendingSchedule(orderId)
@@ -314,15 +428,18 @@ export function useSchedule(options: UseScheduleOptions = {}) {
 
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
-    Object.values(scheduledEvents.value).forEach((ev) => {
-      const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
-      if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.orderId)
+    Object.values(scheduledEvents.value).forEach((events) => {
+      normalizeScheduledEventList(events).forEach((ev) => {
+        const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
+        if (!map[cellKey]) map[cellKey] = []
+        map[cellKey].push(ev.orderId)
+      })
     })
     return map
   })
 
   type ScheduledLayoutItem = {
+    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
@@ -335,9 +452,11 @@ export function useSchedule(options: UseScheduleOptions = {}) {
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
     const dayMap: Record<string, ScheduledEvent[]> = {}
-    Object.values(scheduledEvents.value).forEach((ev) => {
-      if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
-      dayMap[ev.dateStr].push(ev)
+    Object.values(scheduledEvents.value).forEach((events) => {
+      normalizeScheduledEventList(events).forEach((ev) => {
+        if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
+        dayMap[ev.dateStr].push(ev)
+      })
     })
 
     const out: ScheduledLayoutItem[] = []
@@ -350,7 +469,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
         })
         .filter((x) => x.startIdx >= 0)
         .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
-        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.eventId.localeCompare(b.ev.eventId))
 
       const counts = new Array(timeSlots.value.length + 1).fill(0)
       mapped.forEach((x) => {
@@ -360,7 +479,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
       for (let i = 1; i < counts.length; i++) counts[i] += counts[i - 1]
 
       const laneEnds: number[] = []
-      const laneByOrderId: Record<string, number> = {}
+      const laneByEventId: Record<string, number> = {}
       mapped.forEach((x) => {
         let lane = laneEnds.findIndex((le) => le <= x.startIdx)
         if (lane === -1) {
@@ -369,7 +488,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
         } else {
           laneEnds[lane] = x.endIdx
         }
-        laneByOrderId[x.ev.orderId] = lane
+        laneByEventId[x.ev.eventId] = lane
       })
 
       mapped.forEach((x) => {
@@ -379,12 +498,13 @@ export function useSchedule(options: UseScheduleOptions = {}) {
           laneCount = Math.max(laneCount, counts[i] || 0)
         }
         out.push({
+          eventId: x.ev.eventId,
           orderId: x.ev.orderId,
           dateStr,
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
           span: x.span,
-          lane: laneByOrderId[x.ev.orderId] ?? 0,
+          lane: laneByEventId[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey
         })
@@ -501,20 +621,21 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const scheduleOrder = async (orderId: string, dateStr: string, timeKey: string, isPast: boolean) => {
     if (isPast) return
     if (timeKey === timeSlots.value[timeSlots.value.length - 1]?.key) return
-    if (scheduledEvents.value[orderId]) return
-    const previousEvents = { ...scheduledEvents.value }
+    const currentEvents = getOrderEvents(orderId)
+    if (currentEvents.some((event) => event.dateStr === dateStr && event.startTimeKey === timeKey)) return
+    const previousEvents = cloneScheduledEventMap()
     const previousSelected = [...selectedScheduledOrderIds.value]
-    scheduledEvents.value = {
-      ...scheduledEvents.value,
-      [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: 1 }
-    }
+    setOrderEvents(orderId, [
+      ...currentEvents,
+      { eventId: createScheduleEventId(orderId), orderId, dateStr, startTimeKey: timeKey, span: 1 }
+    ])
     selectedScheduledOrderIds.value = [orderId]
     if (isDragging.value) {
       isDragging.value = false
       draggedOrder.value = null
     }
     try {
-      const saved = await persistScheduledEvent(orderId)
+      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
       if (!saved) {
         scheduledEvents.value = previousEvents
         selectedScheduledOrderIds.value = previousSelected
@@ -538,41 +659,36 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   }
 
   // 从日历中移除已排程的工单
-  async function handleUnschedule(_cellKey: string, orderId: string) {
-    const removed = scheduledEvents.value[orderId]
+  async function handleUnschedule(_cellKey: string, orderId: string, eventId?: string) {
+    const previousEvents = cloneScheduledEventMap()
     const previousSelected = [...selectedScheduledOrderIds.value]
-    const next = { ...scheduledEvents.value }
-    delete next[orderId]
-    scheduledEvents.value = next
+    const targetEventId = eventId || getOrderEvents(orderId)[0]?.eventId
+    if (!targetEventId) return
+    const nextEvents = getOrderEvents(orderId).filter((event) => event.eventId !== targetEventId)
+    setOrderEvents(orderId, nextEvents)
     
     // 如果移除的刚好是选中的工单，则清空选中状态
-    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
+    if (!nextEvents.length) selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => id !== orderId)
     const order = getOrderById(orderId)
     if (!order?.dbId) return
-    markPendingSchedule(orderId, null)
 
     const rollback = () => {
-      if (removed) scheduledEvents.value = { ...scheduledEvents.value, [orderId]: removed }
+      scheduledEvents.value = previousEvents
       selectedScheduledOrderIds.value = previousSelected
     }
 
     try {
       const authOk = await initAuth()
-      if (!authOk) {
+      const tokenOk = authOk && await validateToken()
+      if (!tokenOk) {
         rollback()
         ElMessage.error('登录状态失效，请重新登录后再取消排期')
         return
       }
-      const resp = await clearWaterCycleOrderSchedule(order.dbId, getAuthHeaders())
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
+      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
+      if (!saved) {
         rollback()
-        ElMessage.error(resp.data?.msg || resp.error || '取消排期失败')
         return
-      }
-      const saved = resp.data.data
-      if (saved) {
-        const updated = mapWaterCycleOrder(saved)
-        workOrders.value = workOrders.value.map(item => item.id === updated.id ? updated : item)
       }
     } catch (error) {
       rollback()
@@ -589,42 +705,48 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     selectedScheduledOrderIds.value = arr.includes(orderId) ? arr.filter(id => id !== orderId) : [...arr, orderId]
   }
 
-  const resizing = ref<{ orderId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
-  const resizingOrderId = computed(() => resizing.value?.orderId || null)
+  const resizing = ref<{ eventId: string; orderId: string; startY: number; originSpan: number; originStartIdx: number; mode: 'bottom' | 'top' } | null>(null)
+  const resizingOrderId = computed(() => resizing.value?.eventId || null)
   const isResizing = computed(() => !!resizing.value)
 
-  const getEvent = (orderId: string) => scheduledEvents.value[orderId]
+  const getEvent = (eventId: string) => findEventById(eventId)?.event
 
-  const setEventSpan = (orderId: string, span: number) => {
-    const ev = scheduledEvents.value[orderId]
-    if (!ev) return
+  const setEventSpan = (eventId: string, span: number) => {
+    const located = findEventById(eventId)
+    const ev = located?.event
+    if (!located || !ev) return
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
-    scheduledEvents.value = { ...scheduledEvents.value, [orderId]: { ...ev, span: nextSpan } }
+    setOrderEvents(located.orderId, getOrderEvents(located.orderId).map((event) =>
+      event.eventId === eventId ? { ...event, span: nextSpan } : event
+    ))
   }
 
-  const setEventStartAndSpan = (orderId: string, startIdx: number, span: number) => {
-    const ev = scheduledEvents.value[orderId]
-    if (!ev) return
+  const setEventStartAndSpan = (eventId: string, startIdx: number, span: number) => {
+    const located = findEventById(eventId)
+    const ev = located?.event
+    if (!located || !ev) return
     const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
     const nextStartIdx = Math.max(0, Math.min(maxStartIdx, startIdx))
     const nextStartKey = timeSlots.value[nextStartIdx]?.key
     if (!nextStartKey) return
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
-    scheduledEvents.value = { ...scheduledEvents.value, [orderId]: { ...ev, startTimeKey: nextStartKey, span: nextSpan } }
+    setOrderEvents(located.orderId, getOrderEvents(located.orderId).map((event) =>
+      event.eventId === eventId ? { ...event, startTimeKey: nextStartKey, span: nextSpan } : event
+    ))
   }
 
-  const startResize = (orderId: string, e: MouseEvent) => {
-    const ev = scheduledEvents.value[orderId]
+  const startResize = (eventId: string, e: MouseEvent) => {
+    const ev = getEvent(eventId)
     if (!ev) return
     const previous = { ...ev }
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
-    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+    resizing.value = { eventId, orderId: ev.orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -632,20 +754,23 @@ export function useSchedule(options: UseScheduleOptions = {}) {
       const delta = me.clientY - ctx.startY
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       if (ctx.mode === 'bottom') {
-        setEventSpan(ctx.orderId, ctx.originSpan + deltaSlots)
+        setEventSpan(ctx.eventId, ctx.originSpan + deltaSlots)
         return
       }
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.orderId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
-      void persistScheduledEvent(orderId, previous).catch((error) => {
-        scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+      const previousOrderEvents = getOrderEvents(previous.orderId).map((event) =>
+        event.eventId === eventId ? previous : event
+      )
+      void persistScheduledEvent(previous.orderId, previousOrderEvents).catch((error) => {
+        setOrderEvents(previous.orderId, previousOrderEvents)
         ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
       })
     }
@@ -654,13 +779,13 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     window.addEventListener('mouseup', onUp)
   }
 
-  const startResizeTop = (orderId: string, e: MouseEvent) => {
-    const ev = scheduledEvents.value[orderId]
+  const startResizeTop = (eventId: string, e: MouseEvent) => {
+    const ev = getEvent(eventId)
     if (!ev) return
     const previous = { ...ev }
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
-    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+    resizing.value = { eventId, orderId: ev.orderId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -669,15 +794,18 @@ export function useSchedule(options: UseScheduleOptions = {}) {
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.orderId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
-      void persistScheduledEvent(orderId, previous).catch((error) => {
-        scheduledEvents.value = { ...scheduledEvents.value, [orderId]: previous }
+      const previousOrderEvents = getOrderEvents(previous.orderId).map((event) =>
+        event.eventId === eventId ? previous : event
+      )
+      void persistScheduledEvent(previous.orderId, previousOrderEvents).catch((error) => {
+        setOrderEvents(previous.orderId, previousOrderEvents)
         ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
       })
     }

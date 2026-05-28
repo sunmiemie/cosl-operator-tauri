@@ -1,0 +1,10 @@
+D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\deps\nokhwa_core-55592c58e31a6304.d: C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\lib.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\buffer.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\error.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\pixel_format.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\traits.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\types.rs
+
+D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\deps\libnokhwa_core-55592c58e31a6304.rmeta: C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\lib.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\buffer.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\error.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\pixel_format.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\traits.rs C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\types.rs
+
+C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\lib.rs:
+C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\buffer.rs:
+C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\error.rs:
+C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\pixel_format.rs:
+C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\traits.rs:
+C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nokhwa-core-0.1.8\src\types.rs:

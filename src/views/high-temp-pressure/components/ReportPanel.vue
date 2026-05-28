@@ -17,6 +17,7 @@ const props = defineProps<{
   exportedCaptureDir: string
   curveChartImagePath: string
   curvePointCount: number
+  ensureCurveChartImage?: () => Promise<string>
 }>()
 const emit = defineEmits<{
   'shutdown-complete': []
@@ -65,6 +66,8 @@ const totalHours = computed(() => {
   return Number.isFinite(value) && value > 0 ? (475.18 + value).toFixed(2) : '475.18'
 })
 const taskSummary = ref('')
+const generatedCurveChartImagePath = ref('')
+const activeCurveChartImagePath = computed(() => props.curveChartImagePath || generatedCurveChartImagePath.value)
 
 const reportSelections = computed(() => {
   return props.selectedScheduledOrders.length ? props.selectedScheduledOrders : props.currentSelected ? [props.currentSelected] : []
@@ -135,7 +138,7 @@ const createClientSubmitId = () => {
 }
 
 async function buildCurveChartUploadFile() {
-  const bytes = await readFile(props.curveChartImagePath)
+  const bytes = await readFile(activeCurveChartImagePath.value)
   return {
     fieldName: 'testing_curve',
     fileName: '高温高压测试结果曲线.png',
@@ -181,7 +184,7 @@ watch(selectionSignature, () => {
   if (!uploadCompleted.value) resetReportStateForSelections()
 })
 
-const submitReport = () => {
+const submitReport = async () => {
   if (!reportSelections.value.length) {
     ElMessage.warning('未找到本次测试的仪器')
     return
@@ -202,9 +205,18 @@ const submitReport = () => {
     ElMessage.warning('请勾选所有确认项')
     return
   }
-  if (!props.curveChartImagePath) {
-    ElMessage.warning('未生成温度/压力测试曲线图，不能上传报告')
-    return
+  if (!activeCurveChartImagePath.value) {
+    if (!props.ensureCurveChartImage) {
+      ElMessage.warning('未生成温度/压力测试曲线图，不能上传报告')
+      return
+    }
+    try {
+      generatedCurveChartImagePath.value = await props.ensureCurveChartImage()
+      ElMessage.success('已生成温度/压力测试曲线图')
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? error.message : '未生成温度/压力测试曲线图，不能上传报告')
+      return
+    }
   }
   const curveCopies = normalizeCopyCount(paperReportChecks.value.testingCurveCopies, 2, 1)
   const otherCopies = normalizeCopyCount(paperReportChecks.value.otherCopies, 5, 0)
@@ -263,7 +275,7 @@ const finishReportUpload = async () => {
         module: 'high-temp-pressure',
         capture_dir: props.exportedCaptureDir,
         csv_count: props.csvCount,
-        curve_chart_path: props.curveChartImagePath,
+        curve_chart_path: activeCurveChartImagePath.value,
         curve_point_count: props.curvePointCount,
         curve_phases: ['升温升压', '保温保压', '降温降压'],
         operator_name: operatorName.value.trim(),
@@ -301,7 +313,7 @@ const finishReportUpload = async () => {
           attachments: {
             testing_curve: {
               copies: testingCurveCopies,
-              local_path: props.curveChartImagePath,
+              local_path: activeCurveChartImagePath.value,
             },
             others: {
               copies: otherCopies,
@@ -327,7 +339,7 @@ const finishReportUpload = async () => {
           ...payload,
           attachments: [
             ...(payload.attachments || []),
-            { type: 'testing_curve', name: '高温高压测试结果曲线.png', local_path: props.curveChartImagePath, copies: testingCurveCopies },
+            { type: 'testing_curve', name: '高温高压测试结果曲线.png', local_path: activeCurveChartImagePath.value, copies: testingCurveCopies },
           ],
         },
         getAuthHeaders()
@@ -516,8 +528,8 @@ const finishShutdown = () => {
                 <input v-model="paperReportChecks.otherDescriptions" class="form-control" placeholder="无" />
               </div>
             </div>
-            <div class="curve-file-hint" :class="{ ok: curveChartImagePath }">
-              温度/压力曲线图：{{ curveChartImagePath || '未生成' }}（采样点 {{ curvePointCount }} 个）
+            <div class="curve-file-hint" :class="{ ok: activeCurveChartImagePath }">
+              温度/压力曲线图：{{ activeCurveChartImagePath || '未生成' }}（采样点 {{ curvePointCount }} 个）
             </div>
           </div>
 

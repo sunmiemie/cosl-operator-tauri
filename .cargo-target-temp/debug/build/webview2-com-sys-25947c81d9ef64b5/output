@@ -1,0 +1,2 @@
+cargo:rustc-link-search=native=D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\build\webview2-com-sys-25947c81d9ef64b5\out\x64
+cargo:rustc-link-lib=advapi32

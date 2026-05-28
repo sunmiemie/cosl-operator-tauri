@@ -1,0 +1,113 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "id": "MATRIX-723dde80-7ec8-448e-875e-eb6e6221c1ba",
+                "type": "DATA",
+                "data": {
+                    "id": "MATRIX-723dde80-7ec8-448e-875e-eb6e6221c1ba",
+                    "label": "MATRIX",
+                    "func": "MATRIX",
+                    "type": "DATA",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "row",
+                            "id": "row",
+                            "type": "Scalar",
+                            "desc": "number of rows",
+                            "multiple": false
+                        },
+                        {
+                            "name": "column",
+                            "id": "column",
+                            "type": "Scalar",
+                            "desc": "number of columns",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Matrix",
+                            "desc": "Randomly generated matrix"
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/MATRIX/MATRIX.py"
+                },
+                "position": {
+                    "x": 221.82448792328427,
+                    "y": 145.0356900669569
+                },
+                "width": 216,
+                "height": 198,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 221.82448792328427,
+                    "y": 145.0356900669569
+                },
+                "dragging": false
+            },
+            {
+                "id": "MATRIX_VIEW-8fae1347-c91e-4428-a786-30cc3d1b92be",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "MATRIX_VIEW-8fae1347-c91e-4428-a786-30cc3d1b92be",
+                    "label": "MATRIX VIEW",
+                    "func": "MATRIX_VIEW",
+                    "type": "VISUALIZATION",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedPair|Matrix",
+                            "desc": "the DataContainer to be visualized in matrix format.",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing visualization of the input in matrix format"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/DATA_STRUCTURE/MATRIX_VIEW/MATRIX_VIEW.py"
+                },
+                "position": {
+                    "x": 646.4836350074157,
+                    "y": 107.91472471734963
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 646.4836350074157,
+                    "y": 107.91472471734963
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "MATRIX-723dde80-7ec8-448e-875e-eb6e6221c1ba->MATRIX_VIEW-8fae1347-c91e-4428-a786-30cc3d1b92be_9cc2abdd-f8b5-4eb3-97eb-4d4c275b8335",
+                "source": "MATRIX-723dde80-7ec8-448e-875e-eb6e6221c1ba",
+                "target": "MATRIX_VIEW-8fae1347-c91e-4428-a786-30cc3d1b92be",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Matrix"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}

@@ -1,0 +1,241 @@
+{
+    "rfInstance": {
+        "nodes": [
+            {
+                "id": "LINSPACE-967d853a-52b4-4afd-aaab-8f95efe0c7bd",
+                "type": "DATA",
+                "data": {
+                    "id": "LINSPACE-967d853a-52b4-4afd-aaab-8f95efe0c7bd",
+                    "label": "LINSPACE",
+                    "func": "LINSPACE",
+                    "type": "DATA",
+                    "ctrls": {
+                        "start": {
+                            "type": "float",
+                            "default": 10,
+                            "desc": "The start point of the data.",
+                            "overload": null,
+                            "functionName": "LINSPACE",
+                            "param": "start",
+                            "value": 10
+                        },
+                        "end": {
+                            "type": "float",
+                            "default": 0,
+                            "desc": "The end point of the data.",
+                            "overload": null,
+                            "functionName": "LINSPACE",
+                            "param": "end",
+                            "value": 0
+                        },
+                        "step": {
+                            "type": "int",
+                            "default": 1000,
+                            "desc": "The number of points in the vector.",
+                            "overload": null,
+                            "functionName": "LINSPACE",
+                            "param": "step",
+                            "value": 1000
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector|OrderedPair",
+                            "desc": "Optional input in case LINSPACE is used in a loop. Not used.",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector",
+                            "desc": "v: the vector between 'start' and 'end' with a 'step' number of points."
+                        }
+                    ],
+                    "path": "DATA/GENERATION/SIMULATIONS/LINSPACE/LINSPACE.py"
+                },
+                "position": {
+                    "x": -389.9055251124001,
+                    "y": -6.5775139766062125
+                },
+                "width": 216,
+                "height": 197,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -389.9055251124001,
+                    "y": -6.5775139766062125
+                },
+                "dragging": false
+            },
+            {
+                "id": "VECTOR_LENGTH-0fc5d47b-e752-4c45-bc20-3f61bfb439f3",
+                "type": "TRANSFORM",
+                "data": {
+                    "id": "VECTOR_LENGTH-0fc5d47b-e752-4c45-bc20-3f61bfb439f3",
+                    "label": "VECTOR LENGTH",
+                    "func": "VECTOR_LENGTH",
+                    "type": "TRANSFORM",
+                    "ctrls": {},
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Vector",
+                            "desc": null,
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Scalar",
+                            "desc": "The length of the input vector."
+                        }
+                    ],
+                    "path": "ETL/TRANSFORM/VECTOR_MANIPULATION/VECTOR_LENGTH/VECTOR_LENGTH.py"
+                },
+                "position": {
+                    "x": -34.16871731297083,
+                    "y": -39.63935062638757
+                },
+                "width": 216,
+                "height": 296,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": -34.16871731297083,
+                    "y": -39.63935062638757
+                },
+                "dragging": false
+            },
+            {
+                "id": "BIG_NUMBER-809d31bb-508e-4614-8b93-acec0c325736",
+                "type": "VISUALIZATION",
+                "data": {
+                    "id": "BIG_NUMBER-809d31bb-508e-4614-8b93-acec0c325736",
+                    "label": "BIG NUMBER",
+                    "func": "BIG_NUMBER",
+                    "type": "VISUALIZATION",
+                    "ctrls": {
+                        "suffix": {
+                            "type": "str",
+                            "default": null,
+                            "desc": "any suffix to show with big number",
+                            "overload": null,
+                            "functionName": "BIG_NUMBER",
+                            "param": "suffix",
+                            "value": ""
+                        },
+                        "prefix": {
+                            "type": "str",
+                            "default": null,
+                            "desc": "any prefix to show with big number",
+                            "overload": null,
+                            "functionName": "BIG_NUMBER",
+                            "param": "prefix",
+                            "value": ""
+                        },
+                        "title": {
+                            "type": "str",
+                            "default": null,
+                            "desc": "title of the plot, default = \"BIG_NUMBER\"",
+                            "overload": null,
+                            "functionName": "BIG_NUMBER",
+                            "param": "title",
+                            "value": ""
+                        },
+                        "dec_places": {
+                            "type": "int",
+                            "default": 0,
+                            "desc": "Number of decimal places. Use 0 to not round. default = \"BIG_NUMBER\"",
+                            "overload": null,
+                            "functionName": "BIG_NUMBER",
+                            "param": "dec_places",
+                            "value": 0
+                        },
+                        "relative_delta": {
+                            "type": "bool",
+                            "default": true,
+                            "desc": "whether or not to show the relative delta from the last run along with big number",
+                            "overload": null,
+                            "functionName": "BIG_NUMBER",
+                            "param": "relative_delta",
+                            "value": true
+                        },
+                        "scientific_notation": {
+                            "type": "bool",
+                            "default": false,
+                            "desc": "Use scientific notation? Defaults to 4 decimal places.",
+                            "overload": null,
+                            "functionName": "BIG_NUMBER",
+                            "param": "scientific_notation",
+                            "value": false
+                        }
+                    },
+                    "initCtrls": {},
+                    "inputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "OrderedPair|Scalar|Vector",
+                            "desc": "the DataContainer to be visualized",
+                            "multiple": false
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "default",
+                            "id": "default",
+                            "type": "Plotly",
+                            "desc": "the DataContainer containing the Plotly big number visualization"
+                        }
+                    ],
+                    "path": "DATA/VISUALIZATION/PLOTLY/BIG_NUMBER/BIG_NUMBER.py"
+                },
+                "position": {
+                    "x": 347.2683493685765,
+                    "y": -49.332512023693255
+                },
+                "width": 225,
+                "height": 225,
+                "selected": false,
+                "positionAbsolute": {
+                    "x": 347.2683493685765,
+                    "y": -49.332512023693255
+                },
+                "dragging": false
+            }
+        ],
+        "edges": [
+            {
+                "id": "LINSPACE-967d853a-52b4-4afd-aaab-8f95efe0c7bd->VECTOR_LENGTH-0fc5d47b-e752-4c45-bc20-3f61bfb439f3_e265ca57-62cc-414c-b478-073aa9c141d2",
+                "source": "LINSPACE-967d853a-52b4-4afd-aaab-8f95efe0c7bd",
+                "target": "VECTOR_LENGTH-0fc5d47b-e752-4c45-bc20-3f61bfb439f3",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Vector"
+                }
+            },
+            {
+                "id": "VECTOR_LENGTH-0fc5d47b-e752-4c45-bc20-3f61bfb439f3->BIG_NUMBER-809d31bb-508e-4614-8b93-acec0c325736_4ea18cce-3c90-462a-b197-3847797e0ec8",
+                "source": "VECTOR_LENGTH-0fc5d47b-e752-4c45-bc20-3f61bfb439f3",
+                "target": "BIG_NUMBER-809d31bb-508e-4614-8b93-acec0c325736",
+                "sourceHandle": "default",
+                "targetHandle": "default",
+                "data": {
+                    "outputType": "Scalar"
+                }
+            }
+        ]
+    },
+    "textNodes": [],
+    "controlNodes": [],
+    "controlVisualizationNodes": [],
+    "controlTextNodes": []
+}

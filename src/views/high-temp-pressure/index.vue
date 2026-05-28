@@ -161,6 +161,11 @@ async function handleConfirmStart() {
   }
 
   if (!ordersNeedingStart.length) {
+    const authOk = await initAuth()
+    if (!authOk) {
+      ElMessage.error('登录已失效，请重新登录后再开始实验')
+      return
+    }
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
     schedule.markInstrumentsRunning(runningInstrumentIds)
     testing.confirmStart()
@@ -222,7 +227,10 @@ async function handleConfirmEnd() {
 
     const readyReportOrderNos: string[] = []
     if (ordersToFinish.length) {
-      await initAuth()
+      const authOk = await initAuth()
+      if (!authOk) {
+        throw new Error('登录已失效，请重新登录后再结束测试')
+      }
       for (const order of ordersToFinish) {
         if (typeof order.dbId !== 'number') {
           throw new Error(`工单 ${order.no} 未找到工单ID`)
@@ -392,6 +400,7 @@ onMounted(async () => {
         :exported-capture-dir="testing.exportedCaptureDir.value"
         :curve-chart-image-path="testing.curveChartImagePath.value"
         :curve-point-count="testing.curveData.timeSec.length"
+        :ensure-curve-chart-image="testing.ensureCurveChartImage"
         @shutdown-complete="handleShutdownComplete"
       />
     </div>

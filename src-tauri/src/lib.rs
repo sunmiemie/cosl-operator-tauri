@@ -134,6 +134,7 @@ pub fn run() {
             high_temp_pressure_video::get_high_temp_pressure_capture_status,
             high_temp_pressure_video::get_high_temp_pressure_capture_result,
             high_temp_pressure_video::export_high_temp_pressure_capture_output,
+            high_temp_pressure_video::write_high_temp_pressure_curve_chart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

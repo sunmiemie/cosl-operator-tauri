@@ -48,16 +48,13 @@ const emit = defineEmits<{
 
 const timeColWidth = 60
 const cellPadding = 3
-const maxLanesBeforeExpand = 2
 const gridScrollRef = ref<HTMLElement | null>(null)
 const gridViewportWidth = ref(0)
 const gridInnerRef = ref<HTMLElement | null>(null)
 let ro: ResizeObserver | null = null
 
-const widthFactor = computed(() => Math.max(1, Math.ceil((props.maxLaneCount || 1) / maxLanesBeforeExpand)))
 const gridInnerWidth = computed(() => {
-  const base = Math.max(0, gridViewportWidth.value - timeColWidth)
-  return timeColWidth + base * widthFactor.value
+  return Math.max(0, gridViewportWidth.value)
 })
 
 onMounted(() => {
@@ -82,12 +79,19 @@ const layoutWithDayIndex = computed(() => {
 })
 
 const selectedOrderRows = computed(() => {
-  return props.selectedScheduledDeviceIds
+  const orderIds = new Set(
+    props.scheduledLayoutItems
+      .filter((item) => props.selectedScheduledDeviceIds.includes(item.deviceId))
+      .map((item) => item.orderId)
+  )
+  return Array.from(orderIds)
     .map((id) => props.getWorkOrderById(id))
     .filter(Boolean) as WorkOrder[]
 })
 
 const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
+const getOrderStatusText = (order: WorkOrder) => scheduledOrderIdSet.value.has(order.id) ? '已排程' : '待排程'
+const getOrderStatusClass = (order: WorkOrder) => scheduledOrderIdSet.value.has(order.id) ? 'scheduled' : 'pending'
 
 const expandedOrderIds = ref<string[]>([])
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
@@ -187,6 +191,7 @@ const handleGridDrop = (e: DragEvent) => {
                 <th>计划时间</th>
                 <th>测试工单内容</th>
                 <th>操作</th>
+                <th>状态</th>
               </tr>
             </thead>
             <tbody>
@@ -212,9 +217,10 @@ const handleGridDrop = (e: DragEvent) => {
                   <td style="text-align: center">
                     <button class="op-btn view" @click.stop="emit('view-order-detail', order.id)">详情</button>
                   </td>
+                  <td><span class="status-pill" :class="getOrderStatusClass(order)">{{ getOrderStatusText(order) }}</span></td>
                 </tr>
                 <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
-                  <td class="expanded-cell" colspan="6">
+                  <td class="expanded-cell" colspan="7">
                     <div class="instrument-panel">
                       <div class="instrument-panel-head">
                         <div>
@@ -234,6 +240,7 @@ const handleGridDrop = (e: DragEvent) => {
                         >
                           <span class="instrument-name">{{ d.name }}</span>
                           <span class="instrument-sn">{{ d.code || d.sn }}</span>
+                          <span class="status-pill" :class="getOrderStatusClass(order)">{{ getOrderStatusText(order) }}</span>
                         </div>
                       </div>
                     </div>
@@ -329,9 +336,7 @@ const handleGridDrop = (e: DragEvent) => {
                   :key="getCellKey(day.dateStr, slot.key)"
                   class="grid-cell"
                   :class="{ 'is-weekend': day.isWeekend, 'is-past': day.isPast }"
-                  @dragover.capture="emit('drag-over', $event, day.isPast)"
                   @dragleave="emit('drag-leave')"
-                  @drop.capture="emit('drop', $event, day.dateStr, slot.key, day.isPast)"
                 >
                   <div class="empty-slot-hint">+</div>
                 </div>

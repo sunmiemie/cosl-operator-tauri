@@ -8,6 +8,7 @@ export type WaterCycleOrderDTO = {
   end_time: string
   scheduled_start_at?: string | null
   scheduled_end_at?: string | null
+  schedule_segments?: WaterCycleOrderScheduleSegmentDTO[] | null
   device_name: string
   device_number: string
   task_number: string
@@ -21,6 +22,11 @@ export type WaterCycleOrderDTO = {
   instruments?: WaterCycleOrderInstrumentDTO[]
   created_at: string
   updated_at: string
+}
+
+export type WaterCycleOrderScheduleSegmentDTO = {
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
 }
 
 export type WaterCycleOrderInstrumentDTO = {
@@ -41,6 +47,7 @@ export type WaterCycleOrder = {
   applicant: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  scheduleSegments: WaterCycleOrderScheduleSegment[]
   deviceName: string
   deviceNumber: string
   flowProcess: string
@@ -58,6 +65,11 @@ export type WaterCycleOrder = {
   updatedAt: string
 }
 
+export type WaterCycleOrderScheduleSegment = {
+  scheduledStartAt: string
+  scheduledEndAt: string
+}
+
 export type WaterCycleOrderInstrument = {
   id: string
   dbId?: number
@@ -71,6 +83,17 @@ export type WaterCycleOrderInstrument = {
 }
 
 export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
+  const scheduleSegments: WaterCycleOrderScheduleSegment[] = Array.isArray(dto.schedule_segments)
+    ? dto.schedule_segments
+        .map((segment) => {
+          const scheduledStartAt = segment?.scheduled_start_at || ''
+          const scheduledEndAt = segment?.scheduled_end_at || ''
+          if (!scheduledStartAt || !scheduledEndAt) return null
+          return { scheduledStartAt, scheduledEndAt }
+        })
+        .filter(Boolean) as WaterCycleOrderScheduleSegment[]
+    : []
+
   const instruments = Array.isArray(dto.instruments)
     ? dto.instruments.map((item, index) => ({
         id: `water-ins-${dto.id}-${item.id ?? index}`,
@@ -92,6 +115,7 @@ export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
     applicant: dto.applicant,
     scheduledStartAt: dto.scheduled_start_at || null,
     scheduledEndAt: dto.scheduled_end_at || null,
+    scheduleSegments,
     deviceName: dto.device_name,
     deviceNumber: dto.device_number,
     flowProcess: dto.flow_process,
@@ -175,6 +199,10 @@ export async function updateWaterCycleOrder(
 export type WaterCycleOrderScheduleBody = {
   scheduled_start_at: string
   scheduled_end_at: string
+  schedule_segments?: Array<{
+    scheduled_start_at: string
+    scheduled_end_at: string
+  }>
 }
 
 export async function saveWaterCycleOrderSchedule(

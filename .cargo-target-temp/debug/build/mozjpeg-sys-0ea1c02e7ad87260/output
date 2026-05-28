@@ -1,0 +1,178 @@
+cargo:rerun-if-changed=C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mozjpeg-sys-2.2.3\vendor
+cargo:include=D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\build\mozjpeg-sys-0ea1c02e7ad87260\out\include;C:\Users\14640\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\mozjpeg-sys-2.2.3\vendor
+cargo:lib_version=62
+cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH
+cargo:warning=NASM not installed. Mozjpeg's SIMD won't be enabled: program not found
+OUT_DIR = Some(D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\build\mozjpeg-sys-0ea1c02e7ad87260\out)
+OPT_LEVEL = Some(0)
+TARGET = Some(x86_64-pc-windows-msvc)
+CARGO_ENCODED_RUSTFLAGS = Some()
+cargo:rerun-if-env-changed=VCINSTALLDIR
+VCINSTALLDIR = None
+cargo:rerun-if-env-changed=VSTEL_MSBuildProjectFullPath
+VSTEL_MSBuildProjectFullPath = None
+cargo:rerun-if-env-changed=VCToolsVersion
+VCToolsVersion = None
+cargo:rerun-if-env-changed=VSCMD_ARG_VCVARS_SPECTRE
+VSCMD_ARG_VCVARS_SPECTRE = None
+cargo:rerun-if-env-changed=WindowsSdkDir
+WindowsSdkDir = None
+cargo:rerun-if-env-changed=WindowsSDKVersion
+WindowsSDKVersion = None
+cargo:rerun-if-env-changed=LIB
+LIB = None
+PATH = Some(D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\deps;C:\Users\14640\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\Users\14640\.codex\tmp\arg0\codex-arg08TQYlI;C:\Program Files\Vagrant\bin;C:\Windows\System64;C:\dev\python;C:\dev\python\Scripts;C:\ProgramData\Oracle\Java\javapath;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;D:\Program Files\nodejs\node_global\node_modules;D:\Program Files\nodejs\node_global\node_modules\yarn\bin;C:\Program Files\Microsoft SQL Server\150\Tools\Binn\;C:\Program Files\dotnet\;D:\Windows Kits\10\Windows Performance Toolkit\;D:\Microsoft VS Code\bin;D:\CourseSource\mysql\bin;D:\CourseSource\maven\bin;D:\CourseSource\Java\jdk1.8.0_161\bin;D:\CourseSource\Java\jdk1.8.0_161\jre\bin;C:\dev\NetSarang\Xshell 7\;C:\dev\NetSarang\Xftp 7\;D:\Program Files\nodejs\;D:\CourseSource\Git\cmd;D:\CourseSource\;C:\Program Files\Docker\Docker\resources\bin;C:\Users\14640\.local\bin;C:\Users\14640\.cargo\bin;d:\CourseSource\Trae\bin;d:\CourseSource\Trae CN\bin;C:\dev\Scripts\;C:\dev\;C:\Users\14640\AppData\Local\Microsoft\WindowsApps;d:\Program Files\JetBrains\WebStorm 2023.1\bin;D:\Program Files\nodejs\node_global;C:\Users\14640\.dotnet\tools;D:\Program Files (x86)\Microsoft VS Code\bin;C:\Users\14640\AppData\Roaming\npm;D:\CourseSource\cursor\resources\app\bin;C:\Users\14640\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd;C:\Program Files\WindowsApps\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\app\resources;C:\Users\14640\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin)
+cargo:rerun-if-env-changed=INCLUDE
+INCLUDE = None
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
+CC_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=CC_x86_64_pc_windows_msvc
+CC_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some(cmpxchg16b,fxsr,sse,sse2,sse3)
+DEBUG = Some(true)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+CFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+CFLAGS_x86_64-pc-windows-msvc = None
+OUT_DIR = Some(D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\build\mozjpeg-sys-0ea1c02e7ad87260\out)
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+TARGET = Some(x86_64-pc-windows-msvc)
+CARGO_CFG_TARGET_FEATURE = Some(cmpxchg16b,fxsr,sse,sse2,sse3)
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+CFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+CFLAGS_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+jcapimin.c
+jcapistd.c
+jccolor.c
+jccoefct.c
+jcext.c
+jcdctmgr.c
+jchuff.c
+jcinit.c
+jcmainct.c
+jcmarker.c
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+jcomapi.c
+jcmaster.c
+jcparam.c
+jcphuff.c
+jcprepct.c
+jcsample.c
+jctrans.c
+jdapimin.c
+jdapistd.c
+jdatadst.c
+jdatasrc.c
+jdcoefct.c
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+jdinput.c
+jdcolor.c
+jddctmgr.c
+jdhuff.c
+jdmainct.c
+jdmarker.c
+jdmaster.c
+jdmerge.c
+jdphuff.c
+jdpostct.c
+jdsample.c
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+jdtrans.c
+jerror.c
+jfdctflt.c
+jfdctfst.c
+jidctflt.c
+jfdctint.c
+jidctfst.c
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+jidctint.c
+jidctred.c
+jmemmgr.c
+jmemnobs.c
+jquant1.c
+jquant2.c
+jutils.c
+jsimd_none.c
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+exit code: 0
+cargo:rerun-if-env-changed=AR_x86_64-pc-windows-msvc
+AR_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=AR_x86_64_pc_windows_msvc
+AR_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=HOST_AR
+HOST_AR = None
+cargo:rerun-if-env-changed=AR
+AR = None
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=HOST_ARFLAGS
+HOST_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64_pc_windows_msvc
+ARFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64-pc-windows-msvc
+ARFLAGS_x86_64-pc-windows-msvc = None
+cargo:rustc-link-search=native=d:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
+cargo:rustc-link-lib=static=mozjpeg62
+cargo:rustc-link-search=native=D:\Users\Desktop\cosl-operator-tauri\.cargo-target-temp\debug\build\mozjpeg-sys-0ea1c02e7ad87260\out
