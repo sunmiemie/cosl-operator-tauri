@@ -33,6 +33,7 @@ export interface HighTempBoxInstrument {
   name: string
   sn: string
   quantity?: number
+  status?: number
   completed?: boolean
 }
 
@@ -160,7 +161,6 @@ export function useHighTempBox() {
 
   const buildFallbackInstrument = (order: HighTempBoxOrder | WorkOrder): HighTempBoxInstrument => ({
     id: `${order.id}-instrument-1`,
-    dbId: (order as WorkOrder).dbId,
     name: order.deviceName || '高温箱测试仪器',
     sn: order.deviceNumber || order.taskNumber || order.id,
     quantity: 1,
@@ -170,13 +170,13 @@ export function useHighTempBox() {
     ...order,
     instruments: (order.instruments.length ? order.instruments : [buildFallbackInstrument(order)]).map((instrument) => ({
       ...instrument,
-      completed: !!completedInstrumentIds.value[instrument.id],
+      completed: instrument.completed === true || instrument.status === 2 || !!completedInstrumentIds.value[instrument.id],
     })),
   })
 
   const mapOrderWithInstruments = (order: HighTempBoxOrder): WorkOrder => ({
     ...order,
-    instruments: [buildFallbackInstrument(order)],
+    instruments: order.instruments.length ? order.instruments : [buildFallbackInstrument(order)],
   })
 
   async function refreshWorkOrders() {
@@ -386,8 +386,15 @@ export function useHighTempBox() {
 
   const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
-  const getActiveInstruments = (order: WorkOrder) => order.instruments.filter((instrument) => !completedInstrumentIds.value[instrument.id])
-  const isInstrumentRunning = (instrumentId: string) => !!runningInstrumentIds.value[instrumentId]
+  const getActiveInstruments = (order: WorkOrder) => order.instruments.filter((instrument) =>
+    instrument.completed !== true &&
+    instrument.status !== 2 &&
+    !completedInstrumentIds.value[instrument.id]
+  )
+  const isInstrumentRunning = (instrumentId: string) => {
+    const instrument = workOrders.value.flatMap((order) => order.instruments).find((item) => item.id === instrumentId)
+    return instrument?.status === 1 || !!runningInstrumentIds.value[instrumentId]
+  }
   const markInstrumentsRunning = (instrumentIds: string[]) => {
     const next = { ...runningInstrumentIds.value }
     instrumentIds.forEach((id) => {
@@ -798,7 +805,15 @@ export function useHighTempBox() {
     orderStatusMutating.value = true
     try {
       if (selected.dbId > 0) {
-        const resp = await changeHighTempBoxOrderStatus(selected.dbId, 2)
+        const runningInstrumentIds = selectedInstruments
+          .map((instrument) => instrument.dbId)
+          .filter((id): id is number | string => id !== undefined)
+        const resp = await changeHighTempBoxOrderStatus(
+          selected.dbId,
+          2,
+          undefined,
+          { runningInstrumentIds }
+        )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return
@@ -972,14 +987,22 @@ export function useHighTempBox() {
   async function finishCompletedFlow() {
     const order = currentWorkOrder.value
     const selectedInstrumentIds = (order?.selectedInstruments || []).map((instrument) => instrument.id)
+    const completedInstrumentDbIds = (order?.selectedInstruments || [])
+      .map((instrument) => instrument.dbId)
+      .filter((id): id is number | string => id !== undefined)
     const freshOrder = order ? getOrderById(order.id) : null
     const selectedSet = new Set(selectedInstrumentIds)
     const willCompleteOrder = !!freshOrder && getActiveInstruments(freshOrder).every((instrument) => selectedSet.has(instrument.id))
-    const orderId = typeof order?.dbId === 'number' && order.dbId > 0 && willCompleteOrder ? order.dbId : undefined
+    const orderId = typeof order?.dbId === 'number' && order.dbId > 0 ? order.dbId : undefined
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await changeHighTempBoxOrderStatus(orderId, 3)
+        const resp = await changeHighTempBoxOrderStatus(
+          orderId,
+          willCompleteOrder ? 3 : 1,
+          undefined,
+          { completedInstrumentIds: completedInstrumentDbIds }
+        )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return

@@ -153,7 +153,7 @@ async function handleConfirmStart() {
   const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
   completedSelections.value = []
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
-  const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
+  const ordersNeedingStart = uniqueOrders
   const missingDbOrder = ordersNeedingStart.find((order) => typeof order.dbId !== 'number')
   if (missingDbOrder) {
     ElMessage.error('未找到工单ID')
@@ -176,7 +176,13 @@ async function handleConfirmStart() {
     await initAuth()
     for (const order of ordersNeedingStart) {
       if (typeof order.dbId !== 'number') return
-      const res = await startHighTempPressureOrder(order.dbId, getAuthHeaders())
+      const orderInstrumentSns = Array.from(new Set(
+        selections
+          .filter((selection) => selection.order.id === order.id)
+          .map((selection) => selection.instrument.sn)
+          .filter(Boolean)
+      ))
+      const res = await startHighTempPressureOrder(order.dbId, { instrument_sns: orderInstrumentSns }, getAuthHeaders())
       if (!res.success || res.data?.code !== 0) {
         ElMessage.error(res.data?.msg || res.error || `工单 ${order.no} 开始测试失败`)
         return

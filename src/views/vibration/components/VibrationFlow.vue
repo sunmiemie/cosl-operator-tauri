@@ -79,11 +79,25 @@ const emit = defineEmits<{
 
 const uploadDragging = ref(false)
 const woDetailOpen = ref(false)
+const detailModuleCount = 6
 
 const currentTestInstruments = () =>
   props.currentWorkOrder?.selectedInstruments?.length
     ? props.currentWorkOrder.selectedInstruments
     : props.currentWorkOrder?.instruments || []
+
+const currentInstrumentNames = () => {
+  const names = currentTestInstruments()
+    .map((instrument) => instrument.name)
+    .filter(Boolean)
+  return names.length ? names.join('、') : displayValue(props.currentWorkOrder?.device)
+}
+
+const currentInstrumentQuantity = () => {
+  const instruments = currentTestInstruments()
+  const total = instruments.reduce((sum, instrument) => sum + (Number(instrument.quantity) || 1), 0)
+  return total ? `${total} 台` : '-'
+}
 
 const displayValue = (value: unknown) => {
   if (value === undefined || value === null || value === '') return '-'
@@ -96,6 +110,21 @@ const maskPhone = (phone?: string) => {
 }
 
 const durationText = (duration?: number) => duration ? `${duration} 分钟` : '-'
+
+const compactOrderRows = () => {
+  const wo = props.currentWorkOrder
+  if (!wo) return []
+  return [
+    ['工单编号', displayValue(wo.id)],
+    ['申请人', displayValue(wo.applicant)],
+    ['联系电话', displayValue(wo.phone)],
+    ['振动量级', displayValue(wo.level)],
+    ['振动时长', durationText(wo.duration)],
+    ['测试类型', displayValue(wo.testType || wo.type)],
+    ['待测仪器', currentInstrumentNames()],
+    ['数量', currentInstrumentQuantity()],
+  ]
+}
 
 const openWODetail = () => {
   if (!props.currentWorkOrder) return
@@ -308,19 +337,21 @@ function handleUploadDrop(event: DragEvent) {
             <div class="card">
               <div class="card-header"><h3 class="card-title">工单详细信息</h3></div>
               <div class="info-body">
-                <div class="info-sec-title">基本信息</div>
-                <div class="kv-row"><span class="k">工单编号</span><span class="v">{{ currentWorkOrder?.id }}</span></div>
-                <div class="kv-row"><span class="k">申请人</span><span class="v">{{ currentWorkOrder?.applicant }}</span></div>
-                <div class="kv-row"><span class="k">联系电话</span><span class="v">{{ currentWorkOrder?.phone }}</span></div>
-                <div class="info-sec-title mt-4">测试参数</div>
-                <div class="kv-row"><span class="k">振动量级</span><span class="v highlight">{{ currentWorkOrder?.level }}</span></div>
-                <div class="kv-row"><span class="k">振动时长</span><span class="v highlight">{{ currentWorkOrder?.duration }} 分钟</span></div>
-                <div class="kv-row"><span class="k">测试类型</span><span class="v">{{ currentWorkOrder?.type }}</span></div>
-                <div class="kv-row"><span class="k">振动方向</span><span class="v">Z轴</span></div>
-                <div class="kv-row"><span class="k">频率范围</span><span class="v">5~2000Hz</span></div>
-                <div class="info-sec-title mt-4">设备信息</div>
-                <div class="kv-row"><span class="k">设备名称</span><span class="v">{{ currentWorkOrder?.device }}</span></div>
-                <div class="kv-row"><span class="k">数量</span><span class="v">1 台</span></div>
+                <div class="order-info-section">
+                  <div class="info-sec-title">关键信息</div>
+                  <div
+                    v-for="[label, value] in compactOrderRows()"
+                    :key="label"
+                    class="kv-row"
+                  >
+                    <span class="k">{{ label }}</span>
+                    <span class="v">{{ value }}</span>
+                  </div>
+                </div>
+                <button class="wo-detail-action wo-detail-action-blue" type="button" @click="openWODetail">
+                  查看完整工单详情 · {{ detailModuleCount }} 模块
+                  <Icon icon="mdi:arrow-right" />
+                </button>
                 <div class="alert warning small mt-4">
                   <Icon icon="mdi:alert" class="alert-icon small" />
                   <span>请核对振级参数设置</span>
@@ -369,10 +400,21 @@ function handleUploadDrop(event: DragEvent) {
                   <Icon icon="mdi:alert" class="alert-icon small" />
                   <span>请核对时长设置</span>
                 </div>
-                <div class="info-sec-title mt-4">其他参数参考</div>
-                <div class="kv-row"><span class="k">振动量级</span><span class="v">{{ currentWorkOrder?.level }}</span></div>
-                <div class="kv-row"><span class="k">振动方向</span><span class="v">Z轴</span></div>
-                <div class="kv-row"><span class="k">设备名称</span><span class="v">{{ currentWorkOrder?.device }}</span></div>
+                <div class="order-info-section mt-4">
+                  <div class="info-sec-title">关键信息</div>
+                  <div
+                    v-for="[label, value] in compactOrderRows()"
+                    :key="label"
+                    class="kv-row"
+                  >
+                    <span class="k">{{ label }}</span>
+                    <span class="v">{{ value }}</span>
+                  </div>
+                </div>
+                <button class="wo-detail-action wo-detail-action-blue" type="button" @click="openWODetail">
+                  查看完整工单详情 · {{ detailModuleCount }} 模块
+                  <Icon icon="mdi:arrow-right" />
+                </button>
               </div>
             </div>
           </div>

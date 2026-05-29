@@ -7,6 +7,7 @@ export interface HighTempPressureOrderDTO {
   device_name: string
   device_number: string
   task_number: string
+  table_no?: string | null
   target_temp: number
   target_pressure: number
   applicant: string
@@ -59,6 +60,7 @@ export interface HighTempPressureOrderInstrumentDTO {
     scheduled_start_at?: string | null
     scheduled_end_at?: string | null
   }>
+  instrument_status?: number
   is_completed?: boolean
   completed_at?: string | null
 }
@@ -98,6 +100,10 @@ export interface FinishHighTempPressureOrderPayload {
   instrument_sns?: string[]
 }
 
+export interface StartHighTempPressureOrderPayload {
+  instrument_sns?: string[]
+}
+
 export async function listHighTempPressureOrders(
   params: ListHighTempPressureOrdersParams,
   headers?: Record<string, string>
@@ -117,11 +123,12 @@ export async function listHighTempPressureOrders(
 
 export async function startHighTempPressureOrder(
   orderId: number,
+  payload: StartHighTempPressureOrderPayload = {},
   headers?: Record<string, string>
 ): Promise<ApiResponse<MutationResponse>> {
   return http.post<MutationResponse>(
     `/test/high-temp-pressure/order/start/${orderId}/`,
-    {},
+    payload,
     headers
   )
 }

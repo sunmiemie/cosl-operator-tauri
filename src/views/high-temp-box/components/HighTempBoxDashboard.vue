@@ -86,7 +86,9 @@ const getOrderStatusText = (order: WorkOrder) => {
 }
 
 const getInstrumentStatusText = (order: WorkOrder, instrumentId: string) => {
-  if (isInstrumentRunning(instrumentId)) return '测试中'
+  const instrument = order.instruments.find((item) => item.id === instrumentId)
+  if (instrument?.completed || instrument?.status === 2) return '已完成'
+  if (instrument?.status === 1 || isInstrumentRunning(instrumentId)) return '测试中'
   if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
   return '待排程'
 }
@@ -249,7 +251,6 @@ async function confirmInstrumentSelection() {
             <colgroup>
               <col class="col-applicant" />
               <col class="col-task" />
-              <col class="col-device" />
               <col class="col-action" />
               <col class="col-status" />
             </colgroup>
@@ -257,7 +258,6 @@ async function confirmInstrumentSelection() {
               <tr>
                 <th>申请人</th>
                 <th>任务编号</th>
-                <th>使用设备</th>
                 <th>操作</th>
                 <th>状态</th>
               </tr>
@@ -273,13 +273,12 @@ async function confirmInstrumentSelection() {
                   @dragend="handleDragEnd"
                 >
                   <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
-                  <td class="cell-id" :title="order.taskNumber">{{ order.taskNumber }}</td>
-                  <td class="cell-device" :title="getOrderDeviceSummary(order)">
-                    <div class="cell-detail">
+                  <td class="cell-id" :title="order.taskNumber">
+                    <div class="cell-detail cell-task-detail">
                       <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
                         <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                       </span>
-                      <span class="device-summary">{{ getOrderDeviceSummary(order) }}</span>
+                      <span class="device-summary" :title="order.taskNumber">{{ order.taskNumber }}</span>
                     </div>
                   </td>
                   <td class="cell-action">
@@ -292,7 +291,7 @@ async function confirmInstrumentSelection() {
                   </td>
                 </tr>
                 <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
-                  <td class="expanded-cell" colspan="5">
+                  <td class="expanded-cell" colspan="4">
                     <div class="instrument-panel">
                       <div class="instrument-panel-head">
                         <div>
@@ -533,10 +532,9 @@ async function confirmInstrumentSelection() {
 .data-table { width:100%; border-collapse:collapse; font-size:13px; }
 .compact-order-table { table-layout:fixed; }
 .compact-order-table .col-applicant { width:18%; }
-.compact-order-table .col-task { width:24%; }
-.compact-order-table .col-device { width:26%; }
-.compact-order-table .col-action { width:15%; }
-.compact-order-table .col-status { width:17%; }
+.compact-order-table .col-task { width:42%; }
+.compact-order-table .col-action { width:18%; }
+.compact-order-table .col-status { width:22%; }
 .data-table thead { position:sticky; top:0; z-index:1; }
 .data-table th { padding:12px 16px; text-align:left; font-weight:600; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }
 .data-table tbody tr { transition:background-color 0.15s; }
@@ -551,8 +549,10 @@ async function confirmInstrumentSelection() {
 .cell-device, .cell-applicant, .cell-id { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cell-applicant, .cell-param { color:var(--color-text-secondary); }
 .cell-detail { display:flex; align-items:center; gap:4px; min-width:0; }
+.cell-task-detail { align-items:flex-start; }
 .expand-icon { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; flex:0 0 auto; color:var(--color-text-secondary); cursor:pointer; }
 .device-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cell-task-detail .device-summary { overflow:visible; text-overflow:clip; white-space:normal; word-break:break-word; overflow-wrap:anywhere; line-height:1.35; }
 .op-btn { border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg-primary); color:var(--color-text-primary); cursor:pointer; font-size:12px; padding:4px 8px; white-space:nowrap; }
 .op-btn:hover { background:var(--color-bg-hover); }
 .status-pill { display:inline-flex; align-items:center; justify-content:center; max-width:100%; padding:3px 7px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }

@@ -76,7 +76,7 @@ const reportInfoCards = computed(() => {
   if (!order) return []
 
   return [
-    { label: '表格编号 Ref No.', value: 'WT3-TC/ZZ-21-R01' },
+    { label: '表格编号 Ref No.', value: displayValue(order.tableNo) },
     { label: '报告编号 Serial Number', value: displayValue(order.no || order.receivingNo) },
     { label: '联系电话 Tel', value: displayValue(order.applicantPhone) },
   ]
@@ -84,6 +84,16 @@ const reportInfoCards = computed(() => {
 
 const testStepItems = computed(() => splitTextItems(currentOrder.value?.testSteps))
 const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safetyRisks))
+const testPurposeText = computed(() => {
+  const order = currentOrder.value
+  if (!order) return '-'
+  const explicitPurpose = [order.projectName, order.remark].find((item) => item && item.trim() && item.trim() !== '-')
+  if (explicitPurpose) return explicitPurpose
+  const targetText = [order.targetTemp, order.targetPressure, order.keepCondition].filter(Boolean).join('、')
+  return targetText
+    ? `验证试件在${targetText}条件下的耐温、耐压及密封稳定性。`
+    : '验证试件在高温高压测试条件下的耐温、耐压及密封稳定性。'
+})
 </script>
 
 <template>
@@ -233,69 +243,7 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
           <section class="hthp-rpt-sec">
             <div class="hthp-rpt-sec-title">
               <span class="hthp-rpt-num">1</span>
-              报告/表单信息 Report Info
-            </div>
-            <div class="report-info-strip">
-              <div v-for="item in reportInfoCards" :key="item.label" class="report-info-card">
-                <div class="report-info-label">{{ item.label }}</div>
-                <div class="report-info-value">{{ item.value }}</div>
-              </div>
-            </div>
-            <div class="report-org-card">
-              <div class="report-info-label">测试机构 Accredited Testing Organization</div>
-              <div class="report-info-value">制造中心测试中心</div>
-            </div>
-          </section>
-
-          <section class="hthp-rpt-sec">
-            <div class="hthp-rpt-sec-title">
-              <span class="hthp-rpt-num">2</span>
-              基本工单信息 Work Order Info
-            </div>
-            <div class="hthp-rpt-card">
-              <div class="report-grid">
-                <div class="info-item"><div class="info-key">任务编号</div><div class="info-val">{{ currentOrder.no }}</div></div>
-                <div class="info-item"><div class="info-key">委托编号</div><div class="info-val">{{ displayValue(currentOrder.entrustNo) }}</div></div>
-                <div class="info-item"><div class="info-key">接收编号</div><div class="info-val">{{ displayValue(currentOrder.receivingNo) }}</div></div>
-                <div class="info-item"><div class="info-key">申请人</div><div class="info-val">{{ displayValue(currentOrder.applicant) }}</div></div>
-                <div class="info-item"><div class="info-key">申请单位</div><div class="info-val">{{ displayValue(currentOrder.applicantUnit) }}</div></div>
-                <div class="info-item"><div class="info-key">申请日期</div><div class="info-val">{{ displayValue(currentOrder.applyDate || currentOrder.applicationDate) }}</div></div>
-                <div class="info-item"><div class="info-key">项目名称</div><div class="info-val">{{ displayValue(currentOrder.projectName) }}</div></div>
-                <div class="info-item"><div class="info-key">计划时间</div><div class="info-val">{{ displayValue(currentOrder.plannedTime) }}</div></div>
-                <div class="info-item"><div class="info-key">工单状态</div><div class="info-val">{{ displayValue(currentOrder.status) }}</div></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="hthp-rpt-sec">
-            <div class="hthp-rpt-sec-title">
-              <span class="hthp-rpt-num">3</span>
-              试件信息 Testing Item Information
-            </div>
-            <div class="hthp-rpt-card">
-              <div class="report-grid">
-                <div class="info-item"><div class="info-key">当前仪器 Name</div><div class="info-val">{{ currentInstrument?.label || '-' }}</div></div>
-                <div class="info-item"><div class="info-key">SN 编号 NO.</div><div class="info-val">{{ currentInstrument?.sn || '-' }}</div></div>
-                <div class="info-item"><div class="info-key">数量 Quantity</div><div class="info-val">{{ displayValue(currentInstrument?.quantity) }}</div></div>
-                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(currentInstrument?.testType || currentOrder.testType) }}</div></div>
-                <div class="info-item"><div class="info-key">仪器长度</div><div class="info-val">{{ displayValue(currentInstrument?.instrumentLength) }}</div></div>
-                <div class="info-item"><div class="info-key">最大直径</div><div class="info-val">{{ displayValue(currentInstrument?.maxDiameter || currentOrder.maxDiameter) }}</div></div>
-              </div>
-              <div class="instrument-list-card">
-                <div class="report-info-label">工单仪器清单</div>
-                <div class="instrument-pill-row">
-                  <span v-for="item in (currentOrder.items || [])" :key="item.id" class="instrument-pill">
-                    {{ item.label }} / {{ item.sn }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="hthp-rpt-sec">
-            <div class="hthp-rpt-sec-title">
-              <span class="hthp-rpt-num">4</span>
-              试验要求 Testing Requirements
+              测试参数 Test Parameters
             </div>
             <div class="hthp-rpt-card">
               <div class="requirement-metrics">
@@ -323,8 +271,106 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 
           <section class="hthp-rpt-sec">
             <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">2</span>
+              测试步骤 Test Steps
+            </div>
+            <div class="hthp-rpt-card">
+              <ol v-if="testStepItems.length" class="report-list report-list-plain">
+                <li v-for="(item, idx) in testStepItems" :key="idx">{{ item }}</li>
+              </ol>
+              <div v-else class="text-muted">暂无测试步骤</div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">3</span>
+              测试目的 Test Purpose
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="purpose-copy purpose-copy-direct">{{ testPurposeText }}</div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">4</span>
+              安全风险 Safety Risks
+            </div>
+            <div class="hthp-rpt-card">
+              <ol v-if="safetyRiskItems.length" class="report-list report-list-plain">
+                <li v-for="(item, idx) in safetyRiskItems" :key="idx">{{ item }}</li>
+              </ol>
+              <div v-else class="text-muted">暂无安全风险说明</div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
               <span class="hthp-rpt-num">5</span>
-              配件来源 / 测试步骤 Fittings &amp; Steps
+              报告/表单信息 Report Info
+            </div>
+            <div class="report-info-strip">
+              <div v-for="item in reportInfoCards" :key="item.label" class="report-info-card">
+                <div class="report-info-label">{{ item.label }}</div>
+                <div class="report-info-value">{{ item.value }}</div>
+              </div>
+            </div>
+            <div class="report-org-card">
+              <div class="report-info-label">测试机构 Accredited Testing Organization</div>
+              <div class="report-info-value">制造中心测试中心</div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">6</span>
+              基本工单信息 Work Order Info
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="report-grid">
+                <div class="info-item"><div class="info-key">任务编号</div><div class="info-val">{{ currentOrder.no }}</div></div>
+                <div class="info-item"><div class="info-key">委托编号</div><div class="info-val">{{ displayValue(currentOrder.entrustNo) }}</div></div>
+                <div class="info-item"><div class="info-key">接收编号</div><div class="info-val">{{ displayValue(currentOrder.receivingNo) }}</div></div>
+                <div class="info-item"><div class="info-key">申请人</div><div class="info-val">{{ displayValue(currentOrder.applicant) }}</div></div>
+                <div class="info-item"><div class="info-key">申请单位</div><div class="info-val">{{ displayValue(currentOrder.applicantUnit) }}</div></div>
+                <div class="info-item"><div class="info-key">申请日期</div><div class="info-val">{{ displayValue(currentOrder.applyDate || currentOrder.applicationDate) }}</div></div>
+                <div class="info-item"><div class="info-key">项目名称</div><div class="info-val">{{ displayValue(currentOrder.projectName) }}</div></div>
+                <div class="info-item"><div class="info-key">计划时间</div><div class="info-val">{{ displayValue(currentOrder.plannedTime) }}</div></div>
+                <div class="info-item"><div class="info-key">工单状态</div><div class="info-val">{{ displayValue(currentOrder.status) }}</div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">7</span>
+              试件信息 Testing Item Information
+            </div>
+            <div class="hthp-rpt-card">
+              <div class="report-grid">
+                <div class="info-item"><div class="info-key">当前仪器 Name</div><div class="info-val">{{ currentInstrument?.label || '-' }}</div></div>
+                <div class="info-item"><div class="info-key">SN 编号 NO.</div><div class="info-val">{{ currentInstrument?.sn || '-' }}</div></div>
+                <div class="info-item"><div class="info-key">数量 Quantity</div><div class="info-val">{{ displayValue(currentInstrument?.quantity) }}</div></div>
+                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(currentInstrument?.testType || currentOrder.testType) }}</div></div>
+                <div class="info-item"><div class="info-key">仪器长度</div><div class="info-val">{{ displayValue(currentInstrument?.instrumentLength) }}</div></div>
+                <div class="info-item"><div class="info-key">最大直径</div><div class="info-val">{{ displayValue(currentInstrument?.maxDiameter || currentOrder.maxDiameter) }}</div></div>
+              </div>
+              <div class="instrument-list-card">
+                <div class="report-info-label">工单仪器清单</div>
+                <div class="instrument-pill-row">
+                  <span v-for="item in (currentOrder.items || [])" :key="item.id" class="instrument-pill">
+                    {{ item.label }} / {{ item.sn }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="hthp-rpt-sec">
+            <div class="hthp-rpt-sec-title">
+              <span class="hthp-rpt-num">8</span>
+              配件来源 / 附加说明 Fittings &amp; Notes
             </div>
             <div class="hthp-rpt-card stacked-card">
               <div class="report-grid two-cols">
@@ -332,25 +378,15 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
                 <div class="info-item"><div class="info-key">仪器组合</div><div class="info-val">{{ displayValue(currentOrder.instrumentCombination) }}</div></div>
               </div>
               <div class="text-block">
-                <div class="text-block-title">测试步骤</div>
-                <ol v-if="testStepItems.length" class="report-list">
-                  <li v-for="(item, idx) in testStepItems" :key="idx">{{ item }}</li>
-                </ol>
-                <div v-else class="text-muted">暂无测试步骤</div>
-              </div>
-              <div class="text-block">
-                <div class="text-block-title">安全风险及预防措施</div>
-                <ol v-if="safetyRiskItems.length" class="report-list">
-                  <li v-for="(item, idx) in safetyRiskItems" :key="idx">{{ item }}</li>
-                </ol>
-                <div v-else class="text-muted">暂无安全风险说明</div>
+                <div class="text-block-title">备注说明</div>
+                <div class="purpose-copy">{{ displayValue(currentOrder.remark) }}</div>
               </div>
             </div>
           </section>
 
           <section class="hthp-rpt-sec">
             <div class="hthp-rpt-sec-title">
-              <span class="hthp-rpt-num">6</span>
+              <span class="hthp-rpt-num">9</span>
               签字附件 Attachments &amp; Signatures
             </div>
             <div class="hthp-rpt-card">
@@ -782,7 +818,7 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 }
 
 .hthp-report-modal {
-  width: 820px;
+  width: 780px;
   max-width: 94vw;
   max-height: 88vh;
   display: flex;
@@ -793,35 +829,48 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px 12px;
+  gap: 12px;
+  padding: 12px 16px 10px;
+}
+
+.hthp-report-header .modal-title {
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+}
+
+.hthp-report-header .badge {
+  padding: 4px 10px;
+  font-size: 11px;
 }
 
 .report-kicker,
 .report-subtitle,
 .report-info-label {
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .report-kicker {
-  margin-bottom: 3px;
+  margin-bottom: 2px;
+  font-weight: 700;
 }
 
 .report-subtitle {
-  margin-top: 2px;
+  margin-top: 1px;
+  font-weight: 600;
 }
 
 .report-header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .modal-close-btn {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--color-border);
   border-radius: 999px;
   background: var(--color-bg-primary);
@@ -835,7 +884,7 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 .hthp-report-body {
   flex: 1;
   overflow: auto;
-  padding: 16px 20px;
+  padding: 14px 16px;
 }
 
 .hthp-report-body::-webkit-scrollbar {
@@ -848,7 +897,7 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 }
 
 .hthp-rpt-sec {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .hthp-rpt-sec:last-child {
@@ -858,10 +907,10 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 .hthp-rpt-sec-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 9px;
+  gap: 7px;
+  margin-bottom: 8px;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -871,8 +920,8 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
   background: var(--color-accent-blue);
   color: #fff;
@@ -886,11 +935,11 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 .report-info-card {
   background: #fff;
   border: 1px solid var(--color-border);
-  border-radius: 10px;
+  border-radius: 9px;
 }
 
 .hthp-rpt-card {
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 .report-info-strip {
@@ -925,9 +974,20 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 
 .report-grid .info-item {
   min-width: 0;
-  padding: 9px 10px;
+  padding: 8px 10px;
   border-radius: 8px;
   background: var(--color-bg-tertiary);
+}
+
+.hthp-report-body .info-key {
+  font-size: 10px;
+}
+
+.hthp-report-body .info-val {
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .instrument-list-card,
@@ -959,15 +1019,19 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 .requirement-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
-  margin-bottom: 9px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .requirement-card {
-  padding: 10px 8px;
+  min-height: 58px;
+  padding: 8px 10px;
   border-radius: 8px;
   background: var(--color-bg-tertiary);
-  text-align: center;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .requirement-card.is-pressure {
@@ -984,16 +1048,16 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
 .text-block-title,
 .signature-label {
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
 .requirement-value {
-  margin-top: 5px;
+  margin-top: 4px;
   color: var(--color-text-primary);
-  font-size: 21px;
-  font-weight: 900;
-  line-height: 1.1;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .requirement-card.is-pressure .requirement-value {
@@ -1020,6 +1084,22 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
   color: var(--color-text-primary);
   font-size: 13px;
   line-height: 1.7;
+}
+
+.report-list-plain {
+  margin-top: 0;
+}
+
+.purpose-copy {
+  margin-top: 6px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.purpose-copy-direct {
+  margin-top: 0;
 }
 
 .signature-grid {
@@ -1070,6 +1150,13 @@ const safetyRiskItems = computed(() => splitTextItems(currentOrder.value?.safety
   justify-content: space-between;
   color: var(--color-text-secondary);
   font-size: 11px;
+}
+
+.hthp-report-footer .btn {
+  min-height: 34px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-size: 13px;
 }
 
 .test-controls {

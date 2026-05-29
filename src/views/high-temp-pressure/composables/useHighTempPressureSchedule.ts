@@ -138,7 +138,8 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
       scheduledStartAt: it.scheduled_start_at || null,
       scheduledEndAt: it.scheduled_end_at || null,
       scheduleSegments,
-      completed: it.is_completed === true,
+      status: Number(it.instrument_status ?? (it.is_completed ? 2 : 0)),
+      completed: it.is_completed === true || Number(it.instrument_status) === 2,
     }
   })
   const rawSig = dto.admin_signature_url?.trim()
@@ -154,6 +155,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     id: `wo-${dto.id}`,
     dbId: dto.id,
     no: taskNumber,
+    tableNo: dto.table_no?.trim() || '',
     entrustNo: taskNumber,
     applicant: dto.applicant?.trim() || '-',
     applicantPhone: dto.applicant_phone || '',
@@ -1216,7 +1218,8 @@ export function useHighTempPressureSchedule() {
   }
 
   const isInstrumentRunning = (instrumentId: string) => {
-    return isInstrumentPending(instrumentId) && !!runningInstrumentIds.value[instrumentId]
+    const instrument = getInstrumentById(instrumentId)
+    return isInstrumentPending(instrumentId) && (instrument?.status === 1 || !!runningInstrumentIds.value[instrumentId])
   }
 
   const markOrderStarted = (orderId: string) => {

@@ -97,9 +97,9 @@ export function useVibrationSchedule() {
           weight: item.weight,
           length: item.length,
           maxDiameter: item.max_diameter,
-          status: item.status,
+          status: item.instrument_status ?? item.status,
           statusText: item.status_text || item.statusText,
-          completed: item.is_completed === true,
+          completed: item.is_completed === true || item.instrument_status === 2,
         }
       })
     }
@@ -742,6 +742,7 @@ export function useVibrationSchedule() {
   function isInstrumentCompleted(_order: WorkOrder, instrument: VibrationInstrument) {
     return (
       instrument.completed === true ||
+      instrument.status === 2 ||
       instrument.status === 5
     )
   }
@@ -755,7 +756,7 @@ export function useVibrationSchedule() {
     const isRunning = instrument
       ? getInstrumentRuntimeKeys(order.id, instrument).some((key) => runningInstrumentIds.value[key])
       : Boolean(runningInstrumentIds.value[instrumentId])
-    if (isRunning || instrument?.status === 2) return '测试中'
+    if (isRunning || instrument?.status === 1) return '测试中'
     if (instrument && isInstrumentCompleted(order, instrument)) return '已完成'
     if (instrument?.status === 6) return '异常'
     if (getOrderEvents(order.id).length > 0) return '已排程'

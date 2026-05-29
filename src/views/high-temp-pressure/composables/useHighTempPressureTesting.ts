@@ -763,7 +763,6 @@ export function useHighTempPressureTesting() {
       })
       exportedCaptureDir.value = String(result?.export_dir || selectedDir)
       await exportCurveChartImage(exportedCaptureDir.value)
-      ElMessage.success(`视频识别结果已保存到 ${exportedCaptureDir.value}`)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || '视频识别结果导出失败')
       console.warn('[high-temp-pressure] export capture output failed:', error)

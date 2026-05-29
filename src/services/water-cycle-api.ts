@@ -36,6 +36,7 @@ export type WaterCycleOrderInstrumentDTO = {
   quantity?: number
   scheduled_start_at?: string | null
   scheduled_end_at?: string | null
+  instrument_status?: number
   is_completed?: boolean
   completed_at?: string | null
 }
@@ -78,6 +79,7 @@ export type WaterCycleOrderInstrument = {
   quantity?: number
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  status?: number
   completed?: boolean
   completedAt?: string | null
 }
@@ -103,7 +105,8 @@ export function mapWaterCycleOrder(dto: WaterCycleOrderDTO): WaterCycleOrder {
         quantity: item.quantity,
         scheduledStartAt: item.scheduled_start_at || null,
         scheduledEndAt: item.scheduled_end_at || null,
-        completed: item.is_completed === true,
+        status: item.instrument_status ?? (item.is_completed ? 2 : 0),
+        completed: item.is_completed === true || item.instrument_status === 2,
         completedAt: item.completed_at || null,
       }))
     : []
@@ -186,7 +189,9 @@ export type UpdateWaterCycleOrderBody = Partial<
     | 'remark'
     | 'status'
   >
->
+> & {
+  running_instrument_ids?: number[]
+}
 
 export async function updateWaterCycleOrder(
   orderId: number,

@@ -160,8 +160,8 @@ const getOrderStatusMeta = (order: WorkOrder) => {
   return { label: '待排程', className: 'status-pending' }
 }
 
-const getOrderDeviceSummary = (order: WorkOrder) => {
-  return order.type?.trim() || order.vesselType?.trim() || '-'
+const getOrderTestTypeSummary = (order: WorkOrder) => {
+  return order.testType?.trim() || order.type?.trim() || '-'
 }
 
 const canDragOrder = (order: WorkOrder) => {
@@ -267,7 +267,7 @@ const handleGridDrop = (e: DragEvent) => {
                 <tr>
                   <th>申请人</th>
                   <th>任务编号</th>
-                  <th>使用设备</th>
+                  <th>测试类型</th>
                   <th>操作</th>
                   <th>状态</th>
                 </tr>
@@ -287,11 +287,11 @@ const handleGridDrop = (e: DragEvent) => {
                   >
                     <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
                     <td class="cell-id" :title="order.no">{{ order.no }}</td>
-                    <td class="cell-detail" :title="getOrderDeviceSummary(order)">
+                    <td class="cell-detail" :title="getOrderTestTypeSummary(order)">
                       <span class="expand-icon" @click.stop="order.expanded = !order.expanded">
                         <Icon :icon="order.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                       </span>
-                      <span class="device-summary" :title="getOrderDeviceSummary(order)">{{ getOrderDeviceSummary(order) }}</span>
+                      <span class="device-summary" :title="getOrderTestTypeSummary(order)">{{ getOrderTestTypeSummary(order) }}</span>
                     </td>
                     <td class="cell-action">
                       <button class="op-btn view" @click.stop="openDetail(order)">详情</button>

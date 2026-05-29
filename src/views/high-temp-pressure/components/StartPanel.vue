@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
+import WorkOrderDetailModal from './WorkOrderDetailModal.vue'
 
-defineProps<{
+const props = defineProps<{
   currentSelected: ScheduledSelection | null
 }>()
 
@@ -10,6 +12,18 @@ const emit = defineEmits<{
   'back-to-startup-check': []
   'confirm-start': []
 }>()
+
+const detailModalVisible = ref(false)
+const detailModuleCount = 6
+
+const safetyRiskItems = computed(() => {
+  const risks = props.currentSelected?.order.safetyRisks?.trim()
+  if (!risks) return []
+  return risks
+    .split(/\r?\n|[；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+})
 </script>
 
 <template>
@@ -36,14 +50,12 @@ const emit = defineEmits<{
                 <Icon icon="mdi:alert-circle-outline" class="alert-icon" />
                 <span>启动前请逐项确认</span>
               </div>
-              <ul class="start-checklist">
-                <li>测试台已完成启动前检查，当前状态允许执行实验。</li>
-                <li>工单对应器皿、密封结构和连接件已安装到位。</li>
-                <li>温度、压力、保温保压参数已按工单配置完成。</li>
-                <li>采集、监测与报警链路连接正常，急停按钮可用。</li>
-                <li>实验开始后请勿中途断电或擅自停止测试程序。</li>
-                <li>如出现异常，请立即执行急停并按流程处理。</li>
+              <ul v-if="safetyRiskItems.length" class="start-checklist">
+                <li v-for="(item, index) in safetyRiskItems" :key="index">{{ item }}</li>
               </ul>
+              <div v-else class="start-empty-risk">
+                当前工单未填写安全风险及预防措施。
+              </div>
             </div>
 
             <div class="start-tip">
@@ -134,11 +146,21 @@ const emit = defineEmits<{
             <div class="start-order-note">
               请核对以上工单参数与当前测试台设置是否一致，确认无误后再开始实验。
             </div>
+            <button class="full-order-btn" type="button" @click="detailModalVisible = true">
+              <span>查看完整工单详情 · {{ detailModuleCount }} 模块</span>
+              <Icon icon="mdi:arrow-right" />
+            </button>
           </template>
           <div v-else class="text-muted start-empty">未选择排程工单</div>
         </div>
       </div>
     </div>
+
+    <WorkOrderDetailModal
+      :visible="detailModalVisible"
+      :order="currentSelected?.order || null"
+      @close="detailModalVisible = false"
+    />
   </div>
 </template>
 
@@ -209,6 +231,12 @@ const emit = defineEmits<{
   padding-left: 18px;
   font-size: 13px;
   line-height: 1.85;
+}
+
+.start-empty-risk {
+  color: #b26b00;
+  font-size: 13px;
+  line-height: 1.8;
 }
 
 .start-tip {
@@ -287,6 +315,29 @@ const emit = defineEmits<{
   color: var(--color-text-primary);
   font-size: 13px;
   line-height: 1.8;
+}
+
+.full-order-btn {
+  width: 100%;
+  margin-top: 13px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 14px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--color-accent-blue);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  font-size: 13px;
+  font-weight: 800;
+  transition: transform 0.16s ease, background 0.16s ease;
+}
+
+.full-order-btn:hover {
+  background: rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
 }
 
 .start-blue {

@@ -18,6 +18,7 @@ export type VibrationTableOrderInstrumentDTO = {
   model?: string
   remark?: string
   status?: number
+  instrument_status?: number
   status_text?: string
   statusText?: string
   quantity?: number
@@ -126,6 +127,7 @@ export type VibrationTableOrderStatusMutationResponse = {
 }
 
 export type ChangeVibrationTableOrderStatusOptions = {
+  runningInstrumentIds?: Array<number | string>
   completedInstrumentIds?: Array<number | string>
 }
 
@@ -162,6 +164,7 @@ export async function changeVibrationTableOrderStatus(
     `/test/vibration-table/order/status/${orderId}/`,
     {
       status,
+      running_instrument_ids: options.runningInstrumentIds,
       completed_instrument_ids: options.completedInstrumentIds,
     },
     headers

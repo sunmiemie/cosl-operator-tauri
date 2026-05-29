@@ -33,6 +33,17 @@ const displayValue = (value: unknown) => {
   return String(value)
 }
 
+const testPurposeText = computed(() => {
+  const order = props.order
+  if (!order) return '-'
+  const explicitPurpose = [order.projectName, order.remark].find((item) => item && item.trim() && item.trim() !== '-')
+  if (explicitPurpose) return explicitPurpose
+  const targetText = [order.targetTemp, order.targetPressure, order.keepCondition].filter(Boolean).join('、')
+  return targetText
+    ? `验证试件在${targetText}条件下的耐温、耐压及密封稳定性。`
+    : '验证试件在高温高压测试条件下的耐温、耐压及密封稳定性。'
+})
+
 const multilineItems = (value?: string) => {
   if (!value?.trim()) return []
   return value
@@ -41,21 +52,72 @@ const multilineItems = (value?: string) => {
     .filter(Boolean)
 }
 
-const instrumentStatus = (completed?: boolean) => completed ? '已完成' : '待排程'
+const instrumentStatus = (status?: number, completed?: boolean) => {
+  if (completed || status === 2) return '已完成'
+  if (status === 1) return '测试中'
+  return '待排程'
+}
+
+const instrumentStatusClass = (status?: number, completed?: boolean) => {
+  if (completed || status === 2) return 'status-done'
+  if (status === 1) return 'status-running'
+  return 'status-pending'
+}
 </script>
 
 <template>
   <div class="modal-overlay" v-if="visible" @click.self="emit('close')">
     <div class="modal htp-detail-modal">
-      <div class="modal-header">
-        <div class="modal-title">工单详情</div>
+      <div class="modal-header htp-detail-header">
+        <div>
+          <div class="detail-kicker">COSL · QHSE 管理体系记录表单</div>
+          <div class="modal-title">高温高压工单详情</div>
+          <div class="detail-subtitle">High Temperature &amp; High Pressure Work Order Detail</div>
+        </div>
+        <button class="detail-close-btn" type="button" aria-label="关闭工单详情" @click="emit('close')">×</button>
       </div>
       <div class="modal-body htp-detail-body">
-        <div class="card" style="margin-bottom: 12px">
-          <div class="card-header">
-            <div class="card-title">工单信息</div>
-          </div>
+        <div class="card detail-report-card" style="margin-bottom: 12px">
           <div class="card-body" v-if="order">
+            <div class="detail-section">
+              <div class="detail-section-title">测试参数</div>
+              <div class="detail-grid">
+                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(order.testType) }}</div></div>
+                <div class="info-item"><div class="info-key">目标温度</div><div class="info-val">{{ order.targetTemp }}</div></div>
+                <div class="info-item"><div class="info-key">目标压力</div><div class="info-val">{{ order.targetPressure }}</div></div>
+                <div class="info-item"><div class="info-key">保温保压时间</div><div class="info-val">{{ order.keepCondition }}</div></div>
+                <div class="info-item"><div class="info-key">最大直径</div><div class="info-val">{{ displayValue(order.maxDiameter) }}</div></div>
+                <div class="info-item"><div class="info-key">接收/设备编号</div><div class="info-val">{{ displayValue(order.receivingNo) }}</div></div>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="detail-section-title">测试步骤</div>
+              <div class="detail-text-block">
+                <ol v-if="multilineItems(order.testSteps).length" class="detail-list">
+                  <li v-for="(item, idx) in multilineItems(order.testSteps)" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="text-muted">暂无测试步骤</div>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="detail-section-title">测试目的</div>
+              <div class="detail-text-block">
+                <div>{{ testPurposeText }}</div>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="detail-section-title">安全风险</div>
+              <div class="detail-text-block">
+                <ol v-if="multilineItems(order.safetyRisks).length" class="detail-list">
+                  <li v-for="(item, idx) in multilineItems(order.safetyRisks)" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="text-muted">暂无安全风险说明</div>
+              </div>
+            </div>
+
             <div class="detail-section">
               <div class="detail-section-title">基础信息</div>
               <div class="detail-grid">
@@ -81,40 +143,7 @@ const instrumentStatus = (completed?: boolean) => completed ? '已完成' : '待
                 <div class="info-item"><div class="info-key">预算编号</div><div class="info-val">{{ displayValue(order.projectBudgetNumber) }}</div></div>
                 <div class="info-item wide"><div class="info-key">项目名称</div><div class="info-val">{{ displayValue(order.projectName) }}</div></div>
                 <div class="info-item wide"><div class="info-key">项目成员</div><div class="info-val">{{ displayValue(order.projectMembers) }}</div></div>
-              </div>
-            </div>
-
-            <div class="detail-section">
-              <div class="detail-section-title">试验参数</div>
-              <div class="detail-grid">
-                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(order.testType) }}</div></div>
-                <div class="info-item"><div class="info-key">目标温度</div><div class="info-val">{{ order.targetTemp }}</div></div>
-                <div class="info-item"><div class="info-key">目标压力</div><div class="info-val">{{ order.targetPressure }}</div></div>
-                <div class="info-item"><div class="info-key">保温保压时间</div><div class="info-val">{{ order.keepCondition }}</div></div>
-                <div class="info-item"><div class="info-key">最大直径</div><div class="info-val">{{ displayValue(order.maxDiameter) }}</div></div>
-                <div class="info-item"><div class="info-key">接收/设备编号</div><div class="info-val">{{ displayValue(order.receivingNo) }}</div></div>
-              </div>
-            </div>
-
-            <div class="detail-section">
-              <div class="detail-section-title">测试方案与风险</div>
-              <div class="detail-text-block">
-                <div class="detail-text-title">测试步骤</div>
-                <ol v-if="multilineItems(order.testSteps).length" class="detail-list">
-                  <li v-for="(item, idx) in multilineItems(order.testSteps)" :key="idx">{{ item }}</li>
-                </ol>
-                <div v-else class="text-muted">暂无测试步骤</div>
-              </div>
-              <div class="detail-text-block">
-                <div class="detail-text-title">安全风险及预防措施</div>
-                <ol v-if="multilineItems(order.safetyRisks).length" class="detail-list">
-                  <li v-for="(item, idx) in multilineItems(order.safetyRisks)" :key="idx">{{ item }}</li>
-                </ol>
-                <div v-else class="text-muted">暂无安全风险说明</div>
-              </div>
-              <div class="detail-text-block">
-                <div class="detail-text-title">备注</div>
-                <div>{{ displayValue(order.remark) }}</div>
+                <div class="info-item wide"><div class="info-key">备注</div><div class="info-val">{{ displayValue(order.remark) }}</div></div>
               </div>
             </div>
 
@@ -145,8 +174,8 @@ const instrumentStatus = (completed?: boolean) => completed ? '已完成' : '待
                     <td>{{ displayValue(i.instrumentLength) }}</td>
                     <td>{{ displayValue(i.maxDiameter) }}</td>
                     <td>
-                      <span class="status-tag" :class="i.completed ? 'status-done' : 'status-pending'">
-                        {{ instrumentStatus(i.completed) }}
+                      <span class="status-tag" :class="instrumentStatusClass(i.status, i.completed)">
+                        {{ instrumentStatus(i.status, i.completed) }}
                       </span>
                     </td>
                   </tr>
@@ -235,16 +264,62 @@ const instrumentStatus = (completed?: boolean) => completed ? '已完成' : '待
 <style scoped src="./high-temp-pressure.shared.css"></style>
 <style scoped>
 .htp-detail-modal {
-  width: 960px;
-  max-width: 92vw;
-  max-height: 86vh;
+  width: 860px;
+  max-width: 94vw;
+  max-height: 88vh;
   display: flex;
   flex-direction: column;
+}
+
+.htp-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px 10px;
+}
+
+.htp-detail-header .modal-title {
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+}
+
+.detail-kicker,
+.detail-subtitle {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.detail-kicker {
+  margin-bottom: 2px;
+}
+
+.detail-subtitle {
+  margin-top: 1px;
+  font-weight: 600;
+}
+
+.detail-close-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  line-height: 1;
 }
 
 .htp-detail-body {
   flex: 1;
   overflow: auto;
+  padding: 14px 16px;
 }
 
 .htp-detail-body::-webkit-scrollbar {
@@ -273,9 +348,21 @@ const instrumentStatus = (completed?: boolean) => completed ? '已完成' : '待
   padding: 9px 10px;
 }
 
+.detail-report-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.detail-report-card > .card-body {
+  padding: 0;
+  counter-reset: detail-section;
+}
+
 .detail-section {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 12px;
+  padding: 0;
+  border-bottom: 0;
 }
 
 .detail-section:first-child {
@@ -285,34 +372,82 @@ const instrumentStatus = (completed?: boolean) => completed ? '已完成' : '待
 .detail-section:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+  margin-bottom: 0;
 }
 
 .detail-section-title {
-  margin-bottom: 12px;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.detail-section-title::before {
+  counter-increment: detail-section;
+  content: counter(detail-section);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--color-accent-blue);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
 }
 
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: #fff;
 }
 
 .detail-grid.compact {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .info-item.wide {
   grid-column: 1 / -1;
 }
 
+.htp-detail-body .info-item {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+}
+
+.htp-detail-body .info-key {
+  font-size: 10px;
+}
+
+.htp-detail-body .info-val {
+  margin-top: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .detail-text-block {
   padding: 10px 12px;
   border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-bg-primary);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.7;
 }
 
 .detail-text-block + .detail-text-block {

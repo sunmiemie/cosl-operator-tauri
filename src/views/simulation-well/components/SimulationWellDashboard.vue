@@ -187,7 +187,7 @@ const handleGridDrop = (e: DragEvent) => {
               <tr>
                 <th>工单号</th>
                 <th>客户</th>
-                <th>设备</th>
+                <th>设备明细</th>
                 <th>计划时间</th>
                 <th>测试工单内容</th>
                 <th>操作</th>

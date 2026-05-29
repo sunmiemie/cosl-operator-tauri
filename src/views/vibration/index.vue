@@ -239,10 +239,18 @@ async function confirmInstrumentSelection() {
     }
   }
 
-  if (selected.status !== 2) {
+  {
     orderStatusMutating.value = true
     try {
-      const resp = await changeVibrationTableOrderStatus(selected.dbId!, 2, authHeaders)
+      const runningInstrumentIds = selectedInstruments
+        .map((instrument) => instrument.dbId)
+        .filter((id): id is number | string => id !== undefined)
+      const resp = await changeVibrationTableOrderStatus(
+        selected.dbId!,
+        2,
+        authHeaders,
+        { runningInstrumentIds }
+      )
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
         return

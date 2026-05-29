@@ -546,7 +546,10 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
   const getActiveInstruments = (order: WaterCycleOrder) => order.instruments.filter((item) => !item.completed)
-  const isInstrumentRunning = (instrumentId: string) => !!runningInstrumentIds.value[instrumentId]
+  const isInstrumentRunning = (instrumentId: string) => {
+    const instrument = workOrders.value.flatMap((order) => order.instruments).find((item) => item.id === instrumentId)
+    return instrument?.status === 1 || !!runningInstrumentIds.value[instrumentId]
+  }
   const markInstrumentsRunning = (instrumentIds: string[]) => {
     const next = { ...runningInstrumentIds.value }
     instrumentIds.forEach((id) => {

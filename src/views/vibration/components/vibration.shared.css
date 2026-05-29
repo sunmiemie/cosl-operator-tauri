@@ -347,6 +347,21 @@
   transform: translateY(-1px);
 }
 
+.wo-detail-action-blue {
+  border-color: rgba(37, 99, 235, 0.25);
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--color-accent-blue);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.wo-detail-action-blue:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
 .wo-detail-overlay {
   position: fixed;
   inset: 0;
@@ -2118,9 +2133,28 @@
 .kv-row {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 6px;
   font-size: 12px;
 }
+
+.kv-row .k {
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.kv-row .v {
+  color: var(--color-text-primary);
+  font-weight: 700;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.order-info-section + .order-info-section {
+  margin-top: 14px;
+}
+
 .kv-row .v.highlight {
   color: var(--color-accent-blue);
   font-weight: 700;

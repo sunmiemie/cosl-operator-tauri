@@ -94,7 +94,9 @@ const getStatusClass = (statusText: string) => {
 }
 
 const getInstrumentStatusText = (order: WaterCycleOrder, instrumentId: string) => {
-  if (isInstrumentRunning(instrumentId)) return '测试中'
+  const instrument = order.instruments.find((item) => item.id === instrumentId)
+  if (instrument?.status === 2 || instrument?.completed) return '已完成'
+  if (instrument?.status === 1 || isInstrumentRunning(instrumentId)) return '测试中'
   if (order.status === 2) return '待排程'
   if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
   return '待排程'
@@ -282,7 +284,11 @@ async function onStartupComplete() {
   const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
   if (orderId !== undefined) {
     await initAuth()
-    const resp = await updateWaterCycleOrder(orderId, { status: 2 }, getAuthHeaders())
+    const runningInstrumentIds = (order?.instruments || [])
+      .filter((instrument) => selectedWaterCycleInstrumentIds.value.includes(instrument.id))
+      .map((instrument) => instrument.dbId)
+      .filter((id): id is number => typeof id === 'number')
+    const resp = await updateWaterCycleOrder(orderId, { status: 2, running_instrument_ids: runningInstrumentIds }, getAuthHeaders())
     if (!resp.success || !resp.data || resp.data.code !== 0) {
       const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
       if (!ok) return
@@ -322,7 +328,6 @@ async function onStartupComplete() {
             <colgroup>
               <col class="col-applicant" />
               <col class="col-task" />
-              <col class="col-device" />
               <col class="col-action" />
               <col class="col-status" />
             </colgroup>
@@ -330,7 +335,6 @@ async function onStartupComplete() {
               <tr>
                 <th>申请人</th>
                 <th>任务编号</th>
-                <th>使用设备</th>
                 <th>操作</th>
                 <th>状态</th>
               </tr>
@@ -346,13 +350,12 @@ async function onStartupComplete() {
                   @dragend="handleDragEnd"
                 >
                   <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
-                  <td class="cell-id" :title="order.taskNumber">{{ order.taskNumber }}</td>
-                  <td class="cell-device" :title="getOrderDeviceSummary(order)">
-                    <div class="cell-detail">
+                  <td class="cell-id" :title="order.taskNumber">
+                    <div class="cell-detail cell-task-detail">
                       <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
                         <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                       </span>
-                      <span class="device-summary">{{ getOrderDeviceSummary(order) }}</span>
+                      <span class="device-summary" :title="order.taskNumber">{{ order.taskNumber }}</span>
                     </div>
                   </td>
                   <td class="cell-action">
@@ -365,7 +368,7 @@ async function onStartupComplete() {
                   </td>
                 </tr>
                 <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
-                  <td class="expanded-cell" colspan="5">
+                  <td class="expanded-cell" colspan="4">
                     <div class="instrument-panel">
                       <div class="instrument-panel-head">
                         <div>
@@ -657,10 +660,9 @@ async function onStartupComplete() {
 .data-table { display:none; }
 .water-order-table { width:100%; min-width:0; border-collapse:collapse; table-layout:fixed; font-size:13px; }
 .water-order-table .col-applicant { width:15%; }
-.water-order-table .col-task { width:26%; }
-.water-order-table .col-device { width:24%; }
-.water-order-table .col-action { width:15%; }
-.water-order-table .col-status { width:20%; }
+.water-order-table .col-task { width:42%; }
+.water-order-table .col-action { width:18%; }
+.water-order-table .col-status { width:25%; }
 .water-order-table thead { position:sticky; top:0; z-index:2; }
 .water-order-table th { padding:12px 6px; text-align:left; font-weight:700; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }
 .water-order-table td { padding:13px 6px; vertical-align:middle; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -675,8 +677,10 @@ async function onStartupComplete() {
 .order-row.is-expanded td:first-child,
 .order-row.is-scheduled td:first-child { border-left-color:var(--color-accent-blue); }
 .cell-detail { display:flex; align-items:center; gap:4px; min-width:0; }
+.cell-task-detail { align-items:flex-start; }
 .expand-icon { width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; color:var(--color-text-secondary); }
 .device-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cell-task-detail .device-summary { overflow:visible; text-overflow:clip; white-space:normal; word-break:break-word; overflow-wrap:anywhere; line-height:1.35; }
 .cell-action,.cell-status { text-align:center; }
 .op-btn { min-width:48px; height:26px; padding:0 8px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; transition:all .18s ease; }
 .op-btn.view { color:#006be6; border:1px solid rgba(37,99,235,.25); background:rgba(59,130,246,.1); }
@@ -811,7 +815,7 @@ async function onStartupComplete() {
   .layout-container { gap:12px; }
   .sidebar { width:460px; min-width:420px; }
   .water-order-table .col-applicant { width:14%; }
-  .water-order-table .col-device { width:24%; }
+  .water-order-table .col-task { width:43%; }
 }
 
 @media (max-width: 920px) {

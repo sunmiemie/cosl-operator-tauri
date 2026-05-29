@@ -231,7 +231,6 @@ const getScheduledStyle = (item: any) => {
             <colgroup>
               <col class="col-applicant" />
               <col class="col-task" />
-              <col class="col-device" />
               <col class="col-action" />
               <col class="col-status" />
             </colgroup>
@@ -239,7 +238,6 @@ const getScheduledStyle = (item: any) => {
               <tr>
                 <th>申请人</th>
                 <th>任务编号</th>
-                <th>使用设备</th>
                 <th>操作</th>
                 <th>状态</th>
               </tr>
@@ -255,13 +253,12 @@ const getScheduledStyle = (item: any) => {
                   @dragend="emit('drag-end', $event)"
                 >
                   <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
-                  <td class="cell-id" :title="order.id">{{ order.id }}</td>
-                  <td class="cell-device" :title="order.device || '-'">
-                    <div class="cell-detail">
+                  <td class="cell-id" :title="order.id">
+                    <div class="cell-detail cell-task-detail">
                       <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
                         <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
                       </span>
-                      <span class="device-summary" :title="order.device || '-'">{{ order.device || '-' }}</span>
+                      <span class="device-summary" :title="order.id">{{ order.id }}</span>
                     </div>
                   </td>
                   <td class="cell-action">
@@ -274,7 +271,7 @@ const getScheduledStyle = (item: any) => {
                   </td>
                 </tr>
                 <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
-                  <td class="expanded-cell" colspan="5">
+                  <td class="expanded-cell" colspan="4">
                     <div class="instrument-panel">
                       <div class="instrument-panel-head">
                         <div>
@@ -606,8 +603,7 @@ const getScheduledStyle = (item: any) => {
 }
 
 .col-applicant { width: 64px; }
-.col-task { width: 132px; }
-.col-device { width: 86px; }
+.col-task { width: 190px; }
 .col-action { width: 58px; }
 .col-status { width: 68px; }
 
@@ -697,6 +693,10 @@ const getScheduledStyle = (item: any) => {
   min-width: 0;
 }
 
+.cell-task-detail {
+  align-items: flex-start;
+}
+
 .device-summary {
   display: inline-flex;
   align-items: center;
@@ -705,6 +705,16 @@ const getScheduledStyle = (item: any) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cell-task-detail .device-summary {
+  max-width: none;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .expand-icon {

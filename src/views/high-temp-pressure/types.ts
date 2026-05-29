@@ -14,6 +14,7 @@ export interface InstrumentItem {
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
   scheduleSegments?: InstrumentScheduleSegment[]
+  status?: number
   completed?: boolean
 }
 
@@ -26,6 +27,7 @@ export interface WorkOrder {
   id: string
   dbId?: number
   no: string
+  tableNo?: string
   entrustNo: string
   applicant: string
   applicantPhone?: string
