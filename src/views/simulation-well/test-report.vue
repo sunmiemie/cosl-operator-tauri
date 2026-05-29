@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import {
   createSimulatedWellReport,
-  deleteSimulatedWellReport,
+  createSimulatedWellReportWithFiles,
   listSimulatedWellReports,
+  updateSimulatedWellReport,
   type SimulatedWellReportItem
 } from '@/services/simulated-well-report-api'
+import { http } from '@/services/http'
 import {
   getSimulatedWellReportTemplateDetail,
   listSimulatedWellReportTemplates,
@@ -34,6 +36,15 @@ const emit = defineEmits<{
 type Mode = 'list' | 'select-operation' | 'add-report'
 
 type ReportMeta = Record<string, any>
+type ReportAttachment = {
+  field?: string
+  type?: string
+  name?: string
+  file_name?: string
+  file_url?: string
+  content_type?: string
+  size?: number
+}
 type ReportOperationDevice = {
   id: string
   orderId: string
@@ -64,14 +75,18 @@ const selectedTemplate = ref<SimulatedWellReportTemplateDetail | null>(null)
 const templateCatalog = ref<SimulatedWellReportTemplateListItem[]>([])
 const templateDetails = ref<SimulatedWellReportTemplateDetail[]>([])
 const templateMessage = ref('')
+const editingReport = ref<(SimulatedWellReportItem & { meta: ReportMeta }) | null>(null)
 const previewReport = ref<(SimulatedWellReportItem & { meta: ReportMeta }) | null>(null)
+const previewAttachment = ref<{ title: string; url: string; isImage: boolean } | null>(null)
 
 const operationDate = ref(new Date().toISOString().slice(0, 10))
-const evaluator = ref('')
 const conclusion = ref<'qualified' | 'unqualified'>('qualified')
 const note = ref('')
-const pdfFiles = ref<File[]>([])
-const rawFiles = ref<File[]>([])
+const curveChartNo = ref('')
+const curveFiles = ref<File[]>([])
+const reportFiles = ref<File[]>([])
+const reportNextStepVisible = ref(false)
+const reportNextStepRemaining = ref(0)
 const testItemValues = reactive<Record<string, any>>({})
 const evaluationValues = reactive<Record<string, any>>({})
 
@@ -174,6 +189,31 @@ function safeParseRemark(remark: unknown): ReportMeta {
   }
 }
 
+function getReportMeta(report: SimulatedWellReportItem): ReportMeta {
+  return {
+    ...safeParseRemark(report.remark),
+    ...(report.report_json && typeof report.report_json === 'object' ? report.report_json : {}),
+  }
+}
+
+function getReportAttachments(report: SimulatedWellReportItem | null | undefined): ReportAttachment[] {
+  return Array.isArray(report?.attachments) ? report!.attachments as ReportAttachment[] : []
+}
+
+function resolveFileUrl(url?: string) {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('file://')) return raw
+  const base = http.getBaseUrl().replace(/\/+$/, '')
+  return `${base}${raw.startsWith('/') ? raw : `/${raw}`}`
+}
+
+function isImageAttachment(attachment: ReportAttachment) {
+  const contentType = String(attachment.content_type || '').toLowerCase()
+  const name = String(attachment.name || attachment.file_name || attachment.file_url || '').toLowerCase()
+  return contentType.startsWith('image/') || /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(name)
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return '-'
   return String(value).replace('T', ' ').slice(0, 19)
@@ -254,18 +294,27 @@ function clearReactiveMap(target: Record<string, any>) {
   Object.keys(target).forEach((key) => delete target[key])
 }
 
+function assignReactiveMap(target: Record<string, any>, source: unknown) {
+  clearReactiveMap(target)
+  if (!source || typeof source !== 'object') return
+  Object.entries(source as Record<string, any>).forEach(([key, value]) => {
+    target[key] = value
+  })
+}
+
 function resetReportForm() {
   operationDate.value = new Date().toISOString().slice(0, 10)
-  evaluator.value = ''
   conclusion.value = 'qualified'
   note.value = ''
-  pdfFiles.value = []
-  rawFiles.value = []
+  curveChartNo.value = ''
+  curveFiles.value = []
+  reportFiles.value = []
   clearReactiveMap(testItemValues)
   clearReactiveMap(evaluationValues)
 }
 
 function resetSelection() {
+  editingReport.value = null
   selectedOperation.value = null
   selectedDevice.value = null
   selectedTemplate.value = null
@@ -288,14 +337,13 @@ function buildOperationDevices(work: SimulatedWellDownholeWorkItem | null): Repo
 const reportRows = computed(() =>
   reports.value
     .map((report) => {
-      const meta = safeParseRemark(report.remark)
+      const meta = getReportMeta(report)
       return {
         ...report,
         meta,
         reportName: meta.report_name || meta.template_code || report.report_no,
         deviceName: meta.device_name || '-',
         operatorName: report.tester || '-',
-        evaluatorName: meta.evaluator || '-',
         statusLabel: statusText(report.status, report.status_text),
         statusClass: report.status === 1 ? 'approved' : report.status === 2 ? 'rejected' : 'pending'
       }
@@ -303,7 +351,7 @@ const reportRows = computed(() =>
     .filter((row) => {
       const kw = reportKeyword.value.trim()
       if (!kw) return true
-      return [row.report_no, row.reportName, row.task_number, row.deviceName, row.operatorName, row.evaluatorName]
+      return [row.report_no, row.reportName, row.task_number, row.deviceName, row.operatorName]
         .join(' ')
         .includes(kw)
     })
@@ -365,42 +413,6 @@ async function fetchReports() {
   } finally {
     loading.value = false
   }
-}
-
-async function handleDeleteReport(row: SimulatedWellReportItem) {
-  try {
-    await ElMessageBox.confirm(
-      `确认删除测试报告「${row.report_no}」吗？`,
-      '确认删除',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
-    )
-  } catch {
-    return
-  }
-  await initAuth()
-  const res = await deleteSimulatedWellReport(row.id, getAuthHeaders())
-  if (!res.success) {
-    ElMessage.error(res.error || '删除失败')
-    return
-  }
-  if (res.data?.code !== 0) {
-    ElMessage.error(res.data?.msg || '删除失败')
-    return
-  }
-  const workNo = String((row as any).task_number || (row as any).meta?.downhole_work_no || '').trim()
-  if (workNo) {
-    await fetchOperations()
-    const target = operations.value.find((item) => String((item as any).work_no || '').trim() === workNo)
-    if (target?.id) {
-      const nextCount = Math.max(0, Number((target as any).report_count || 0) - 1)
-      const updateRes = await updateSimulatedWellDownholeWork(target.id, { report_count: nextCount }, getAuthHeaders())
-      if (updateRes.success && updateRes.data?.code === 0) {
-        ;(target as any).report_count = nextCount
-      }
-    }
-  }
-  ElMessage.success('已删除')
-  await fetchReports()
 }
 
 async function fetchOperations() {
@@ -566,6 +578,7 @@ async function loadTemplate(device: ReportOperationDevice) {
 }
 
 async function openCreateFlow() {
+  editingReport.value = null
   mode.value = 'select-operation'
   resetSelection()
   await Promise.all([fetchOperations(), fetchReports()])
@@ -588,16 +601,79 @@ function pickOperation(work: SimulatedWellDownholeWorkItem) {
 }
 
 async function pickDevice(device: ReportOperationDevice) {
+  editingReport.value = null
   selectedDevice.value = device
   resetReportForm()
   await loadTemplate(device)
   mode.value = 'add-report'
 }
 
-function handleFileChange(event: Event, bucket: 'pdf' | 'raw') {
+function buildEditFallbackTemplate(meta: ReportMeta): SimulatedWellReportTemplateDetail {
+  return {
+    id: -Date.now(),
+    report_no: String(meta.template_code || meta.template_name || ''),
+    report_name: String(meta.template_name || meta.report_name || meta.template_code || '井下测试综合报告'),
+    test_products: [],
+    match_instruments: [],
+    test_items: [],
+    evaluation_standards: [],
+    updated_at: '',
+  }
+}
+
+async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMeta }) {
+  const meta = report.meta || getReportMeta(report)
+  editingReport.value = { ...report, meta }
+  mode.value = 'add-report'
+
+  selectedOperation.value = {
+    id: -report.id,
+    work_no: String(report.task_number || meta.downhole_work_no || meta.work_no || ''),
+    well_name: String(meta.well_name || ''),
+    env_text: String(meta.env_text || ''),
+    interval_text: String(meta.interval_text || ''),
+    device_count: 1,
+    devices: [],
+  } as unknown as SimulatedWellDownholeWorkItem
+  selectedDevice.value = {
+    id: `edit-${report.id}`,
+    orderId: '',
+    customer: '',
+    deviceName: String(meta.device_name || '-'),
+    sn: String(meta.device_sn || meta.device_number || meta.sn || ''),
+    template: String(meta.template_code || meta.template_name || ''),
+  }
+
+  operationDate.value = report.test_date || new Date().toISOString().slice(0, 10)
+  conclusion.value = meta.conclusion === 'unqualified' ? 'unqualified' : 'qualified'
+  note.value = String(meta.note || '')
+  curveChartNo.value = String(meta.curve_chart_no || '')
+  curveFiles.value = []
+  reportFiles.value = []
+  assignReactiveMap(testItemValues, meta.test_items)
+  assignReactiveMap(evaluationValues, meta.evaluation_standards)
+
+  selectedTemplate.value = null
+  templateMessage.value = ''
+  templateLoading.value = true
+  try {
+    await ensureTemplateCatalog()
+    selectedTemplate.value =
+      findMatchedTemplateByCode(String(meta.template_code || selectedDevice.value.template)) ||
+      findMatchedTemplateByProduct(String(meta.device_name || '')) ||
+      buildEditFallbackTemplate(meta)
+  } finally {
+    templateLoading.value = false
+  }
+}
+
+function handleFileChange(event: Event) {
   const files = Array.from((event.target as HTMLInputElement)?.files || [])
-  if (bucket === 'pdf') pdfFiles.value = files
-  else rawFiles.value = files
+  reportFiles.value = files
+}
+
+function handleCurveFileChange(event: Event) {
+  curveFiles.value = Array.from((event.target as HTMLInputElement)?.files || [])
 }
 
 function buildReportNo() {
@@ -620,34 +696,52 @@ async function saveReport() {
   saving.value = true
   try {
     await initAuth()
-    const reportNo = buildReportNo()
+    const editing = editingReport.value
+    const remainingBeforeSave = editing ? 0 : Math.max(0, selectedOperationDevices.value.length - 1)
+    const reportNo = editing?.report_no || buildReportNo()
+    const reportJson = {
+      report_name: reportTitle.value,
+      template_code: templateCode.value,
+      template_name: selectedTemplate.value?.report_name || '',
+      downhole_work_no: selectedOperation.value.work_no,
+      well_name: selectedOperation.value.well_name,
+      env_text: selectedOperation.value.env_text,
+      interval_text: selectedOperation.value.interval_text,
+      device_name: selectedDevice.value.deviceName,
+      device_sn: selectedDevice.value.sn,
+      conclusion: conclusion.value,
+      test_items: collectMeta(testItemValues),
+      evaluation_standards: collectMeta(evaluationValues),
+      curve_chart_no: curveChartNo.value.trim(),
+      curve_chart_files: curveFiles.value.map((file) => file.name),
+      report_files: reportFiles.value.map((file) => file.name),
+      pdf_files: reportFiles.value.map((file) => file.name),
+      note: note.value.trim()
+    }
     const payload = {
       report_no: reportNo,
       task_number: selectedOperation.value.work_no,
       test_date: operationDate.value,
       tester: getCurrentUserName(),
-      status: 0,
-      remark: JSON.stringify({
-        report_name: reportTitle.value,
-        template_code: templateCode.value,
-        template_name: selectedTemplate.value?.report_name || '',
-        downhole_work_no: selectedOperation.value.work_no,
-        well_name: selectedOperation.value.well_name,
-        env_text: selectedOperation.value.env_text,
-        interval_text: selectedOperation.value.interval_text,
-        device_name: selectedDevice.value.deviceName,
-        device_sn: selectedDevice.value.sn,
-        evaluator: evaluator.value.trim(),
-        conclusion: conclusion.value,
-        test_items: collectMeta(testItemValues),
-        evaluation_standards: collectMeta(evaluationValues),
-        pdf_files: pdfFiles.value.map((file) => file.name),
-        raw_files: rawFiles.value.map((file) => file.name),
-        note: note.value.trim()
-      })
+      status: editing?.status ?? 0,
+      report_json: reportJson,
+      order_numbers: [selectedOperation.value.work_no],
+      client_submit_id: editing?.client_submit_id || `${reportNo}-${Date.now()}`,
+      remark: JSON.stringify(reportJson)
     }
+    const uploadFiles = [
+      ...curveFiles.value.map((file) => ({ fieldName: 'curve_chart', fileName: file.name, blob: file })),
+      ...reportFiles.value.map((file) => ({ fieldName: 'report_file', fileName: file.name, blob: file })),
+    ]
 
-    const res = await createSimulatedWellReport(payload, getAuthHeaders())
+    if (editing && uploadFiles.length) {
+      ElMessage.warning('编辑模式暂不替换已上传附件，本次仅保存报告字段')
+    }
+    const res = editing
+      ? await updateSimulatedWellReport(editing.id, payload, getAuthHeaders())
+      : uploadFiles.length
+        ? await createSimulatedWellReportWithFiles(payload, uploadFiles, getAuthHeaders())
+        : await createSimulatedWellReport(payload, getAuthHeaders())
     if (!res.success) {
       ElMessage.error(res.error || '保存测试报告失败')
       return
@@ -657,7 +751,7 @@ async function saveReport() {
       return
     }
 
-    if (selectedOperation.value.id) {
+    if (!editing && selectedOperation.value.id) {
       await updateSimulatedWellDownholeWork(
         selectedOperation.value.id,
         { report_count: Number(selectedOperation.value.report_count || 0) + 1 },
@@ -665,13 +759,33 @@ async function saveReport() {
       )
     }
 
-    ElMessage.success('测试报告已保存')
+    ElMessage.success(editing ? '测试报告已更新' : '测试报告已保存')
     await Promise.all([fetchReports(), fetchOperations()])
+    if (remainingBeforeSave > 0) {
+      reportNextStepRemaining.value = remainingBeforeSave
+      reportNextStepVisible.value = true
+      resetReportForm()
+      return
+    }
     mode.value = 'list'
     resetSelection()
   } finally {
     saving.value = false
   }
+}
+
+function continueReportFill() {
+  reportNextStepVisible.value = false
+  selectedDevice.value = null
+  selectedTemplate.value = null
+  templateMessage.value = ''
+  mode.value = 'select-operation'
+}
+
+function finishDownholeOperation() {
+  reportNextStepVisible.value = false
+  mode.value = 'list'
+  resetSelection()
 }
 
 function openPreview(report: SimulatedWellReportItem & { meta: ReportMeta }) {
@@ -680,6 +794,21 @@ function openPreview(report: SimulatedWellReportItem & { meta: ReportMeta }) {
 
 function closePreview() {
   previewReport.value = null
+  previewAttachment.value = null
+}
+
+function openAttachment(attachment: ReportAttachment) {
+  const url = resolveFileUrl(attachment.file_url)
+  if (!url) {
+    ElMessage.warning('未找到附件地址')
+    return
+  }
+  const title = attachment.name || attachment.file_name || '附件'
+  if (isImageAttachment(attachment)) {
+    previewAttachment.value = { title, url, isImage: true }
+    return
+  }
+  window.open(url, '_blank')
 }
 
 function batchDownload() {
@@ -697,7 +826,7 @@ onMounted(async () => {
       <div class="header-left">
         <div class="header-icon"><Icon icon="mdi:file-document-outline" /></div>
         <div>
-          <h1 class="header-title">测试报告</h1>
+          <h1 class="header-title">{{ mode === 'select-operation' ? '报告准备 Report Preparation' : '测试报告' }}</h1>
           <p class="header-subtitle">
             {{
               mode === 'list'
@@ -734,7 +863,17 @@ onMounted(async () => {
         <div v-if="loading" class="empty-state"><p>报告列表加载中...</p></div>
         <div v-else-if="!reportRows.length" class="empty-state"><p>暂无测试报告</p></div>
         <div v-else class="table-wrapper">
-          <table class="data-table">
+          <table class="data-table report-list-table">
+            <colgroup>
+              <col class="col-report-id" />
+              <col class="col-report-name" />
+              <col class="col-operation" />
+              <col class="col-device" />
+              <col class="col-operator" />
+              <col class="col-status" />
+              <col class="col-created" />
+              <col class="col-actions" />
+            </colgroup>
             <thead>
               <tr>
                 <th>报告ID</th>
@@ -742,27 +881,45 @@ onMounted(async () => {
                 <th>下井作业</th>
                 <th>测试设备</th>
                 <th>操作工程师</th>
-                <th>资料评价人</th>
                 <th>状态</th>
                 <th>创建时间</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in reportRows" :key="row.id">
-                <td>{{ row.report_no }}</td>
-                <td>{{ row.reportName }}</td>
-                <td>{{ row.task_number }}</td>
-                <td>{{ row.deviceName }}</td>
-                <td>{{ row.operatorName }}</td>
-                <td>{{ row.evaluatorName }}</td>
-                <td><span :class="['status-badge', row.statusClass]">{{ row.statusLabel }}</span></td>
-                <td>{{ formatDateTime(row.submit_time) }}</td>
+              <tr v-for="row in reportRows" :key="row.id" class="report-list-row">
                 <td>
+                  <div class="cell-primary wrap-id">{{ row.report_no }}</div>
+                </td>
+                <td>
+                  <div class="report-name-cell" :title="row.reportName">{{ row.reportName }}</div>
+                </td>
+                <td>
+                  <div class="cell-primary">{{ row.task_number || '-' }}</div>
+                  <div v-if="row.meta?.well_name" class="cell-secondary">{{ row.meta.well_name }}</div>
+                </td>
+                <td>
+                  <div class="cell-primary clamp-two" :title="row.deviceName">{{ row.deviceName }}</div>
+                  <div v-if="row.meta?.device_sn" class="cell-secondary">{{ row.meta.device_sn }}</div>
+                </td>
+                <td>
+                  <div class="cell-primary compact-text">{{ row.operatorName }}</div>
+                </td>
+                <td><span :class="['status-badge', row.statusClass]">{{ row.statusLabel }}</span></td>
+                <td>
+                  <div class="cell-primary date-cell">{{ formatDateTime(row.submit_time).slice(0, 10) }}</div>
+                  <div class="cell-secondary">{{ formatDateTime(row.submit_time).slice(11) }}</div>
+                </td>
+                <td class="actions-cell">
                   <div class="action-buttons">
-                    <button class="action-btn action-btn-view" @click="openPreview(row)">查看</button>
-                    <button class="action-btn action-btn-view" @click="ElMessage.info('下载流程待接入')">下载</button>
-                    <button class="action-btn action-btn-danger" @click="handleDeleteReport(row)">删除</button>
+                    <button class="action-btn action-btn-view" @click="openPreview(row)">
+                      <Icon icon="mdi:eye-outline" />
+                      <span>查看</span>
+                    </button>
+                    <button class="action-btn action-btn-edit" @click="openEditReport(row)">
+                      <Icon icon="mdi:pencil-outline" />
+                      <span>编辑</span>
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -1096,12 +1253,26 @@ onMounted(async () => {
               <input v-model="operationDate" type="date" class="form-input" />
             </div>
             <div class="info-item">
-              <div class="info-label">资料评价人</div>
-              <input v-model="evaluator" type="text" class="form-input" placeholder="请输入资料评价人" />
-            </div>
-            <div class="info-item">
               <div class="info-label">备注</div>
               <textarea v-model="note" class="form-input textarea" rows="2" placeholder="补充说明或备注" />
+            </div>
+          </div>
+        </div>
+
+        <div class="downhole-card">
+          <div class="downhole-card-title">测试曲线图 <span class="english-sub">Test Curve Chart</span></div>
+          <div class="upload-grid">
+            <div class="upload-box">
+              <div class="upload-title">曲线图编号 Curve Chart No.</div>
+              <input v-model="curveChartNo" class="form-input" placeholder="请输入曲线图编号" />
+            </div>
+            <div class="upload-box">
+              <div class="upload-title">上传测试曲线图</div>
+              <input type="file" accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.pdf" multiple @change="handleCurveFileChange" />
+              <div class="file-list">
+                <div v-for="file in curveFiles" :key="file.name" class="file-row">{{ file.name }}</div>
+                <div v-if="!curveFiles.length" class="tiny-hint">支持 JPG、PNG、BMP、TIFF、PDF，可多选</div>
+              </div>
             </div>
           </div>
         </div>
@@ -1110,19 +1281,11 @@ onMounted(async () => {
           <div class="downhole-card-title">上传测试文件 <span class="english-sub">Upload Files</span></div>
           <div class="upload-grid">
             <div class="upload-box">
-              <div class="upload-title">PDF 报告文件</div>
-              <input type="file" accept=".pdf" multiple @change="handleFileChange($event, 'pdf')" />
+              <div class="upload-title">测试报告文件</div>
+              <input type="file" multiple @change="handleFileChange" />
               <div class="file-list">
-                <div v-for="file in pdfFiles" :key="file.name" class="file-row">{{ file.name }}</div>
-                <div v-if="!pdfFiles.length" class="tiny-hint">未选择 PDF 文件</div>
-              </div>
-            </div>
-            <div class="upload-box">
-              <div class="upload-title">原始数据文件</div>
-              <input type="file" multiple @change="handleFileChange($event, 'raw')" />
-              <div class="file-list">
-                <div v-for="file in rawFiles" :key="file.name" class="file-row">{{ file.name }}</div>
-                <div v-if="!rawFiles.length" class="tiny-hint">未选择原始文件</div>
+                <div v-for="file in reportFiles" :key="file.name" class="file-row">{{ file.name }}</div>
+                <div v-if="!reportFiles.length" class="tiny-hint">支持所有文件格式（PDF、LAS、CSV、Word 等），可多选</div>
               </div>
             </div>
           </div>
@@ -1133,6 +1296,16 @@ onMounted(async () => {
           <button class="primary-btn" :disabled="saving" @click="saveReport">
             {{ saving ? '保存中...' : '保存报告' }}
           </button>
+        </div>
+
+        <div v-if="reportNextStepVisible" class="report-next-step-bar">
+          <div class="report-saved-check">✓</div>
+          <div class="report-saved-title">测试报告已保存</div>
+          <div class="report-saved-actions">
+            <button class="primary-btn" @click="continueReportFill">继续填写下一组报告 →</button>
+            <button class="week-cal-nav" @click="finishDownholeOperation">跳过，完成下井作业</button>
+          </div>
+          <div class="report-saved-sub">还有 {{ reportNextStepRemaining }} 组报告待填写</div>
         </div>
       </template>
     </div>
@@ -1166,10 +1339,6 @@ onMounted(async () => {
               <div class="info-value">{{ previewReport.tester }}</div>
             </div>
             <div class="info-item">
-              <div class="info-label">资料评价人</div>
-              <div class="info-value">{{ previewReport.meta.evaluator || '-' }}</div>
-            </div>
-            <div class="info-item wide">
               <div class="info-label">测试环境</div>
               <div class="info-value">{{ previewReport.meta.env_text || '-' }}</div>
             </div>
@@ -1186,7 +1355,31 @@ onMounted(async () => {
               <div class="info-value">{{ previewReport.meta.note }}</div>
             </div>
           </div>
+          <div class="attachment-section">
+            <div class="downhole-card-title">报告附件 <span class="english-sub">Attachments</span></div>
+            <div v-if="!getReportAttachments(previewReport).length" class="tiny-hint">暂无上传附件</div>
+            <div v-else class="attachment-list">
+              <div v-for="attachment in getReportAttachments(previewReport)" :key="`${attachment.field}-${attachment.file_name || attachment.name}`" class="attachment-row">
+                <div class="attachment-main">
+                  <span class="attachment-badge">{{ isImageAttachment(attachment) ? '图片' : '文件' }}</span>
+                  <span class="attachment-name" :title="attachment.name || attachment.file_name">{{ attachment.name || attachment.file_name }}</span>
+                </div>
+                <button class="action-btn action-btn-view" @click="openAttachment(attachment)">
+                  {{ isImageAttachment(attachment) ? '预览' : '打开' }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
+      </div>
+    </div>
+    <div v-if="previewAttachment" class="attachment-preview-mask" @click.self="previewAttachment = null">
+      <div class="attachment-preview-card">
+        <div class="attachment-preview-header">
+          <span>{{ previewAttachment.title }}</span>
+          <button class="week-cal-nav" @click="previewAttachment = null">关闭</button>
+        </div>
+        <img v-if="previewAttachment.isImage" :src="previewAttachment.url" class="attachment-preview-image" />
       </div>
     </div>
   </div>
@@ -1386,12 +1579,26 @@ onMounted(async () => {
   border-collapse: collapse;
 }
 
+.report-list-table {
+  min-width: 1160px;
+  table-layout: fixed;
+}
+
+.report-list-table .col-report-id { width: 13%; }
+.report-list-table .col-report-name { width: 31%; }
+.report-list-table .col-operation { width: 10%; }
+.report-list-table .col-device { width: 14%; }
+.report-list-table .col-operator { width: 7%; }
+.report-list-table .col-status { width: 7%; }
+.report-list-table .col-created { width: 10%; }
+.report-list-table .col-actions { width: 8%; }
+
 .data-table th,
 .data-table td {
   border-bottom: 1px solid var(--color-border);
-  padding: 10px 8px;
+  padding: 12px 10px;
   text-align: left;
-  vertical-align: middle;
+  vertical-align: top;
   font-size: 13px;
 }
 
@@ -1401,13 +1608,70 @@ onMounted(async () => {
   background: var(--color-bg-tertiary);
 }
 
+.report-list-row td {
+  height: 70px;
+}
+
+.cell-primary {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-weight: 500;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.cell-secondary {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.wrap-id {
+  overflow-wrap: anywhere;
+}
+
+.report-name-cell,
+.clamp-two {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-weight: 500;
+  line-height: 1.45;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.compact-text {
+  word-break: keep-all;
+}
+
+.date-cell {
+  white-space: nowrap;
+}
+
+.actions-cell {
+  vertical-align: middle !important;
+}
+
 .action-buttons {
   display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .action-btn {
-  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 58px;
+  height: 30px;
+  padding: 0 9px;
   border: 1px solid rgba(59, 130, 246, 0.25);
   background: rgba(59, 130, 246, 0.12);
   color: var(--color-accent-blue);
@@ -1415,6 +1679,12 @@ onMounted(async () => {
 
 .action-btn-view {
   background: rgba(59, 130, 246, 0.12);
+}
+
+.action-btn-edit {
+  border-color: rgba(16, 185, 129, 0.25);
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
 }
 
 .action-btn-danger {
@@ -1709,6 +1979,39 @@ onMounted(async () => {
   color: #334155;
 }
 
+.report-next-step-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 26px 16px;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.report-saved-check {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.report-saved-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.report-saved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+.report-saved-sub {
+  color: #64748b;
+  font-size: 13px;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -1747,6 +2050,96 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 
+.attachment-section {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-border, #dce6ee);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.attachment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.attachment-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.attachment-badge {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: #0b78d0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.attachment-preview-card {
+  width: min(900px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+}
+
+.attachment-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  font-weight: 700;
+}
+
+.attachment-preview-image {
+  display: block;
+  width: 100%;
+  height: min(72vh, 680px);
+  object-fit: contain;
+  background: #f8fafc;
+}
+
 @media (max-width: 900px) {
   .info-grid,
   .info-grid.two-col,
@@ -1765,6 +2158,11 @@ onMounted(async () => {
 
   .field-row-input {
     width: 100%;
+  }
+
+  .attachment-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

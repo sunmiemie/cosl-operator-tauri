@@ -1,5 +1,44 @@
 import { http, type ApiResponse } from './http'
 
+export interface SimulatedWellSupportingTool {
+  code?: string
+  zh?: string
+  en?: string
+  name?: string
+  templateInstrumentCode?: string
+  templateInstrumentName?: string
+  internalInstrumentId?: number | string
+  internalInstrumentSn?: string
+  internalInstrumentName?: string
+  externalInstrumentModel?: string
+  modelNumber?: string
+  usedCount?: number
+  remainCount?: number
+  orderId?: string
+  sourceDeviceName?: string
+  template?: string
+}
+
+export interface SimulatedWellDownholeDevicePayload {
+  id?: string | number
+  orderId?: string
+  order_id?: string
+  customer?: string
+  deviceName?: string
+  name?: string
+  sn?: string
+  code?: string
+  template?: string
+  templateName?: string
+  template_name?: string
+  supportingTools?: SimulatedWellSupportingTool[]
+  supporting_tools?: SimulatedWellSupportingTool[]
+  selectedSupportingTools?: SimulatedWellSupportingTool[]
+  selected_supporting_tools?: SimulatedWellSupportingTool[]
+  availableSupportingTools?: SimulatedWellSupportingTool[]
+  available_supporting_tools?: SimulatedWellSupportingTool[]
+}
+
 export interface SimulatedWellDownholeWorkItem {
   id: number
   work_no: string
@@ -7,9 +46,9 @@ export interface SimulatedWellDownholeWorkItem {
   env_text: string
   interval_text: string
   order_ids?: string[]
-  devices?: any[]
-  supportingTools?: any[]
-  supporting_tools?: any[]
+  devices?: SimulatedWellDownholeDevicePayload[]
+  supportingTools?: SimulatedWellSupportingTool[]
+  supporting_tools?: SimulatedWellSupportingTool[]
   device_count: number
   status: number
   status_text?: string
@@ -59,9 +98,9 @@ export interface CreateSimulatedWellDownholeWorkPayload {
   env_text?: string
   interval_text?: string
   order_ids: string[]
-  devices: any[]
-  supportingTools?: any[]
-  supporting_tools?: any[]
+  devices: SimulatedWellDownholeDevicePayload[]
+  supportingTools?: SimulatedWellSupportingTool[]
+  supporting_tools?: SimulatedWellSupportingTool[]
   status?: number
   report_count?: number
 }

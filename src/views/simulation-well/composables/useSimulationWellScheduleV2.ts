@@ -103,7 +103,10 @@ export function useSimulationWellSchedule() {
           status: String(dto.status_text || dto.status || ''),
           createTime: toYmd(dto.created_at) || '',
           planTime: toYmd(dto.plan_date) || '',
-          taskDesc: normalizeText(dto.task_desc) || '',
+          taskDesc: normalizeText(dto.project_name || dto.task_desc) || '',
+          testPurpose: normalizeText(dto.test_purpose) || '',
+          testSteps: normalizeText(dto.test_steps) || '',
+          safetyRisks: normalizeText(dto.safety_risks) || '',
           deviceList: remainingDevices.map((d) => ({
             id: `${orderId}::${d.device_number}`,
             dbId: d.id,

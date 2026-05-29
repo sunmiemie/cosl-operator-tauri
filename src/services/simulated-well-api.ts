@@ -10,7 +10,24 @@ export interface SimulatedWellOrderDeviceDTO {
 
 export interface SimulatedWellOrderDTO {
   id: number
+  table_number?: string
   task_number: string
+  applicant?: string
+  applicant_phone?: string
+  test_unit?: string
+  test_unit_manager?: string
+  application_date?: string | null
+  research_no?: string
+  project_budget_no?: string
+  project_name?: string
+  tested_instrument?: string
+  instrument_sn_numbers?: string
+  quantity?: number
+  client?: string
+  entrusted_time?: string
+  test_purpose?: string
+  test_steps?: string
+  safety_risks?: string
   customer_unit?: string
   task_desc?: string
   device_count?: number

@@ -8,6 +8,11 @@ import {
   type VibrationTableOrderDTO,
 } from '@/services/vibration-table-order-api'
 import { useAuth } from '@/composables/useAuth'
+import {
+  getInstrumentRuntimeKeys,
+  isInstrumentCompletedByServer,
+  reconcileInstrumentRuntimeState,
+} from './vibrationInstrumentState'
 
 function getMonday(d: Date) {
   const dt = new Date(d)
@@ -33,16 +38,6 @@ function createScheduleEventId(orderId: string) {
 const VIBRATION_RUNNING_INSTRUMENTS_KEY = 'vibration-running-instrument-ids'
 const VIBRATION_COMPLETED_INSTRUMENTS_KEY = 'vibration-completed-instrument-ids-v2'
 
-function getInstrumentRuntimeKeys(orderId: string, instrument: VibrationInstrument) {
-  return Array.from(new Set([
-    instrument.id,
-    `${orderId}::${instrument.id}`,
-    instrument.dbId ? `${orderId}::db:${instrument.dbId}` : '',
-    instrument.sn ? `${orderId}::sn:${instrument.sn}` : '',
-    instrument.name ? `${orderId}::name:${instrument.name}` : '',
-  ].filter(Boolean)))
-}
-
 export function useVibrationSchedule() {
   const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
@@ -58,6 +53,7 @@ export function useVibrationSchedule() {
   const orderStatusMutating = ref(false)
 
   const visibleOrderStatuses = [1, 2]
+  let refreshTimer: number | null = null
 
   function normalizeVibrationInstruments(dto: VibrationTableOrderDTO): VibrationInstrument[] {
     const rawList =
@@ -202,6 +198,11 @@ export function useVibrationSchedule() {
         }
       }
       const nextOrders = Array.from(byId.values())
+      const reconciledState = reconcileInstrumentRuntimeState(nextOrders, runningInstrumentIds.value)
+      runningInstrumentIds.value = reconciledState.runningInstrumentIds
+      completedInstrumentIds.value = reconciledState.completedInstrumentIds
+      persistRunningInstrumentIds()
+      persistCompletedInstrumentIds()
       workOrders.value = nextOrders
       restoreScheduledEvents(nextOrders)
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => byId.has(id))
@@ -623,11 +624,19 @@ export function useVibrationSchedule() {
 
   onMounted(() => {
     refreshWorkOrders()
+    refreshTimer = window.setInterval(() => {
+      if (workOrdersLoading.value || orderStatusMutating.value) return
+      refreshWorkOrders()
+    }, 10000)
     window.addEventListener('focus', handleWindowFocus)
     document.addEventListener('visibilitychange', handleVisibilityChange)
   })
 
   onBeforeUnmount(() => {
+    if (refreshTimer !== null) {
+      window.clearInterval(refreshTimer)
+      refreshTimer = null
+    }
     window.removeEventListener('focus', handleWindowFocus)
     document.removeEventListener('visibilitychange', handleVisibilityChange)
   })
@@ -740,11 +749,7 @@ export function useVibrationSchedule() {
   }
 
   function isInstrumentCompleted(_order: WorkOrder, instrument: VibrationInstrument) {
-    return (
-      instrument.completed === true ||
-      instrument.status === 2 ||
-      instrument.status === 5
-    )
+    return isInstrumentCompletedByServer(instrument)
   }
 
   function getVisibleOrderInstruments(order: WorkOrder) {
