@@ -2,12 +2,14 @@ import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { ElMessage } from 'element-plus'
 import type { ReportFile, ReportFileId } from '../types'
+import type { VibrationReportFilePaths } from '../utils/vibrationReportPayload'
 
 interface UseVibrationReportOptions {
   getOscCanvas: () => HTMLCanvasElement | null
   getCsvContent: () => string
   getLatestCaptureBlob: () => Promise<Blob | null>
   getReportText: () => string
+  submitReport?: (files: VibrationReportFilePaths) => Promise<void>
   onComplete?: () => void
 }
 
@@ -17,6 +19,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     { id: 'csv', name: '振动测试数据.csv', status: '待生成', done: false },
     { id: 'png', name: '实时波形.png', status: '待生成', done: false },
     { id: 'doc', name: '测试报告.docx', status: '待生成', done: false },
+    { id: 'db', name: '报告入库', status: '待提交', done: false },
   ])
   const fileGenRunning = ref(false)
   const allFilesDone = computed(() => reportFiles.value.every(f => f.done))
@@ -31,6 +34,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
       { id: 'csv', name: '振动测试数据.csv', status: '待生成', done: false },
       { id: 'png', name: '实时波形.png', status: '待生成', done: false },
       { id: 'doc', name: '测试报告.docx', status: '待生成', done: false },
+      { id: 'db', name: '报告入库', status: '待提交', done: false },
     ]
     fileGenRunning.value = false
   }
@@ -82,8 +86,9 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
         updateFileStatus('csv', '生成中...')
         updateFileStatus('png', '生成中...')
         updateFileStatus('doc', '生成中...')
+        updateFileStatus('db', options.submitReport ? '等待文件生成...' : '无需提交')
         const imageBytes = await buildImageBytes()
-        await invoke('write_vibration_report_files', {
+        const files = await invoke<VibrationReportFilePaths>('write_vibration_report_files', {
           exportDir: exportDir.value,
           csvContent: options.getCsvContent(),
           reportText: options.getReportText(),
@@ -92,6 +97,11 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
         markFileDone('csv')
         markFileDone('png')
         markFileDone('doc')
+        if (options.submitReport) {
+          updateFileStatus('db', '提交中...')
+          await options.submitReport(files)
+        }
+        markFileDone('db')
         if (exportDir.value) ElMessage.success(`报告文件已写入 ${exportDir.value}`)
         options.onComplete?.()
       } catch (error) {
@@ -99,6 +109,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
         updateFileStatus('csv', message)
         updateFileStatus('png', message)
         updateFileStatus('doc', message)
+        updateFileStatus('db', message)
       } finally {
         fileGenRunning.value = false
       }

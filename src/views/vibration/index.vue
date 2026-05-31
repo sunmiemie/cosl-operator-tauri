@@ -8,7 +8,9 @@ import { useVibrationSchedule } from './composables/useVibrationSchedule'
 import { useVibrationChecks } from './composables/useVibrationChecks'
 import { useVibrationTesting } from './composables/useVibrationTesting'
 import { useVibrationReport } from './composables/useVibrationReport'
+import { buildVibrationReportPayload, type VibrationReportFilePaths } from './utils/vibrationReportPayload'
 import { changeVibrationTableOrderStatus } from '@/services/vibration-table-order-api'
+import { createVibrationTableReport } from '@/services/vibration-table-report-api'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { useAuth } from '@/composables/useAuth'
 import { ElMessage } from 'element-plus'
@@ -21,6 +23,10 @@ const showConfirmStartModal = ref(false)
 const calStep = ref<'amp' | 'dur'>('amp')
 const productPickerVisible = ref(false)
 const selectedInstrumentIds = ref<string[]>([])
+const currentReportClientSubmitId = ref('')
+const currentExperimentStartedAt = ref<string | null>(null)
+const currentExperimentEndedAt = ref<string | null>(null)
+const reportSubmitted = ref(false)
 
 const stepList = computed(() => [] as const)
 
@@ -66,7 +72,7 @@ const {
   getScheduleChangePayload,
 } = useVibrationSchedule()
 
-const { initAuth, getAuthHeaders } = useAuth()
+const { initAuth, getAuthHeaders, userInfo } = useAuth()
 
 const {
   showStartupCheck,
@@ -131,6 +137,7 @@ const testing = useVibrationTesting({
   getCurrentWorkOrder: () => currentWorkOrder.value,
   getTestMode: () => testMode.value,
   onFinishToReport: (exportDir: string) => {
+    currentExperimentEndedAt.value = new Date().toISOString()
     stage.value = 'report'
     report.resetReportFiles()
     report.setExportDir(exportDir)
@@ -146,10 +153,42 @@ const report = useVibrationReport({
   getCsvContent: () => testing.getCsvContent(),
   getLatestCaptureBlob: () => testing.getLatestCaptureBlob(),
   getReportText: () => testing.getReportText(),
+  submitReport: submitVibrationReport,
   onComplete: () => {
     stage.value = 'shutdown'
   },
 })
+
+async function submitVibrationReport(filePaths: VibrationReportFilePaths) {
+  const authOk = await initAuth()
+  if (!authOk) {
+    throw new Error('未登录，无法将报告写入数据库')
+  }
+  const tester = userInfo.value?.nickName || userInfo.value?.username || '操作员'
+  if (!currentReportClientSubmitId.value) {
+    const order = currentWorkOrder.value
+    currentReportClientSubmitId.value = `vibration-${order?.dbId || order?.id || 'order'}-${Date.now()}`
+  }
+  const payload = buildVibrationReportPayload({
+    workOrder: currentWorkOrder.value,
+    summary: testing.getAnalysisSummary(),
+    tester,
+    clientSubmitId: currentReportClientSubmitId.value,
+    experimentStartedAt: currentExperimentStartedAt.value,
+    experimentEndedAt: currentExperimentEndedAt.value,
+    videoFileName: testing.videoFileName.value,
+    videoPath: testing.videoPath.value,
+    sampleIntervalSeconds: testing.sampleIntervalSeconds.value,
+    reportText: testing.getReportText(),
+    filePaths,
+  })
+  const resp = await createVibrationTableReport(payload, getAuthHeaders())
+  if (!resp.success || !resp.data || resp.data.code !== 0) {
+    throw new Error(resp.data?.msg || resp.error || '振动台报告入库失败')
+  }
+  reportSubmitted.value = true
+  ElMessage.success('振动台报告已写入数据库，等待管理端审核')
+}
 
 async function resolveVibrationSchedulePayload(selected: WorkOrder, headers: Record<string, string>) {
   const fallbackTestType = (await resolveEngineerAssistantTestTypeId('振动台', headers))
@@ -273,6 +312,10 @@ async function confirmInstrumentSelection() {
     deviceNumber: selectedInstruments.map((instrument) => instrument.sn).join('、') || selected.deviceNumber,
     device: selectedInstruments.map((instrument) => instrument.name).join('、') || selected.device,
   }
+  currentReportClientSubmitId.value = `vibration-${selected.dbId || selected.id}-${Date.now()}`
+  currentExperimentStartedAt.value = new Date().toISOString()
+  currentExperimentEndedAt.value = null
+  reportSubmitted.value = false
   forcedMode.value = 'pre'
   productPickerVisible.value = false
   resetStartupChecks()
@@ -347,6 +390,10 @@ async function backToDashboard(finalStatus: number = 1) {
   stage.value = 'dashboard'
   currentWorkOrderId.value = null
   currentWorkOrderSnapshot.value = null
+  currentReportClientSubmitId.value = ''
+  currentExperimentStartedAt.value = null
+  currentExperimentEndedAt.value = null
+  reportSubmitted.value = false
   selectedInstrumentIds.value = []
   productPickerVisible.value = false
   showStartupCheck.value = false
@@ -402,7 +449,7 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  backToDashboard(5) // 完成整个测试，状态置为已完成(5)
+  backToDashboard(reportSubmitted.value ? 3 : 5)
 }
 
 function toggleShutdownCheck(id: number) {
