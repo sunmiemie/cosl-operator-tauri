@@ -372,6 +372,7 @@ onMounted(async () => {
       <StartPanel
         v-if="testing.currentPanel.value === 'start'"
         :current-selected="schedule.currentSelected.value"
+        :selected-scheduled-orders="activeTestSelections.length ? activeTestSelections : schedule.selectedScheduledOrders.value"
         @back-to-startup-check="backToStartupCheck"
         @confirm-start="handleConfirmStart"
       />
@@ -384,6 +385,7 @@ onMounted(async () => {
         :test-running="testing.testRunning.value"
         :csv-count="testing.csvCount.value"
         :current-selected="schedule.currentSelected.value"
+        :selected-scheduled-orders="activeTestSelections.length ? activeTestSelections : schedule.selectedScheduledOrders.value"
         :video-file-name="testing.videoFileName.value"
         :video-url="testing.videoUrl.value"
         :capture-progress-pct="testing.captureProgressPct.value"

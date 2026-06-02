@@ -320,14 +320,7 @@ export function useHighTempPressureSchedule() {
 
   const persistProgressState = () => {
     try {
-      window.localStorage.setItem(
-        HTP_PROGRESS_STORAGE_KEY,
-        JSON.stringify({
-          completedInstrumentIds: completedInstrumentIds.value,
-          startedOrderIds: startedOrderIds.value,
-          runningInstrumentIds: runningInstrumentIds.value,
-        })
-      )
+      window.localStorage.removeItem(HTP_PROGRESS_STORAGE_KEY)
     } catch {
       // ignore storage failures
     }
@@ -335,16 +328,10 @@ export function useHighTempPressureSchedule() {
 
   const hydrateProgressState = () => {
     try {
-      const raw = window.localStorage.getItem(HTP_PROGRESS_STORAGE_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as {
-        completedInstrumentIds?: Record<string, true>
-        startedOrderIds?: Record<string, true>
-        runningInstrumentIds?: Record<string, true>
-      }
-      completedInstrumentIds.value = parsed.completedInstrumentIds || {}
-      startedOrderIds.value = parsed.startedOrderIds || {}
-      runningInstrumentIds.value = parsed.runningInstrumentIds || {}
+      window.localStorage.removeItem(HTP_PROGRESS_STORAGE_KEY)
+      completedInstrumentIds.value = {}
+      startedOrderIds.value = {}
+      runningInstrumentIds.value = {}
     } catch {
       completedInstrumentIds.value = {}
       startedOrderIds.value = {}
@@ -409,6 +396,13 @@ export function useHighTempPressureSchedule() {
       const completedInstrumentIdsFromServer = new Set(
         all.flatMap(order => order.items.filter(item => item.completed).map(item => item.id))
       )
+      const runningInstrumentIdsFromServer = new Set(
+        all.flatMap(order =>
+          order.items
+            .filter(item => !item.completed && Number(item.status) === 1)
+            .map(item => item.id)
+        )
+      )
       const nextStartedOrderIds = Object.fromEntries(
         Array.from(startedOrderIdsFromServer, orderId => [orderId, true] as const)
       ) as Record<string, true>
@@ -417,9 +411,9 @@ export function useHighTempPressureSchedule() {
       ]
       const nextCompletedInstrumentIds = Object.fromEntries(nextCompletedEntries) as Record<string, true>
       const nextRunningEntries: Array<[string, true]> = [
-        ...Object.entries(runningInstrumentIds.value)
-          .filter(([instrumentId]) => allInstrumentIdsFromServer.has(instrumentId) && !nextCompletedInstrumentIds[instrumentId])
-          .map(([instrumentId]) => [instrumentId, true] as [string, true]),
+        ...Array.from(runningInstrumentIdsFromServer)
+          .filter(instrumentId => allInstrumentIdsFromServer.has(instrumentId) && !nextCompletedInstrumentIds[instrumentId])
+          .map(instrumentId => [instrumentId, true] as [string, true]),
       ]
       const nextRunningInstrumentIds = Object.fromEntries(nextRunningEntries) as Record<string, true>
 

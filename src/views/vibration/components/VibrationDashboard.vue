@@ -92,7 +92,7 @@ const gridInnerWidth = computed(() => {
 const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
 const expandedOrderIds = ref<string[]>([])
 const detailVisible = ref(false)
-const detailOrder = ref<WorkOrder | null>(null)
+const detailOrder = ref<WorkOrder>({} as WorkOrder)
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
 const toggleExpanded = (orderId: string) => {
   const set = new Set(expandedOrderIds.value)
@@ -121,7 +121,7 @@ const openDetail = (order: WorkOrder) => {
 
 const closeDetail = () => {
   detailVisible.value = false
-  detailOrder.value = null
+  detailOrder.value = {} as WorkOrder
 }
 
 const getOrderStatusText = (order: WorkOrder) => {
@@ -330,6 +330,69 @@ const getScheduledStyle = (item: any) => {
               <div class="detail-item"><span>工单类型</span><strong>{{ displayValue(detailOrder.orderType || detailOrder.type) }}</strong></div>
               <div class="detail-item"><span>任务编号</span><strong>{{ displayValue(detailOrder.taskNumber) }}</strong></div>
               <div class="detail-item"><span>表格编号</span><strong>{{ displayValue(detailOrder.tableNo) }}</strong></div>
+              <div class="detail-item"><span>申请人</span><strong>{{ displayValue(detailOrder.applicant) }}</strong></div>
+              <div class="detail-item"><span>联系电话</span><strong>{{ displayValue(detailOrder.phone) }}</strong></div>
+              <div class="detail-item"><span>申请单位</span><strong>{{ displayValue(detailOrder.applicationUnit) }}</strong></div>
+              <div class="detail-item"><span>计划时间</span><strong>{{ displayValue(detailOrder.planTime || detailOrder.testDate) }}</strong></div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">测试参数</div>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item"><span>使用设备</span><strong>{{ displayValue(detailOrder.device) }}</strong></div>
+              <div class="detail-item"><span>设备编号</span><strong>{{ displayValue(detailOrder.deviceNumber) }}</strong></div>
+              <div class="detail-item"><span>振动量级</span><strong>{{ displayValue(detailOrder.level) }}</strong></div>
+              <div class="detail-item"><span>测试时长</span><strong>{{ displayValue(detailOrder.duration) }} 分钟</strong></div>
+              <div class="detail-item"><span>测试类型</span><strong>{{ displayValue(detailOrder.testType || detailOrder.type) }}</strong></div>
+              <div class="detail-item"><span>振动方向</span><strong>{{ displayValue(detailOrder.vibrationDirection) }}</strong></div>
+              <div class="detail-item"><span>加速度</span><strong>{{ displayValue(detailOrder.acceleration) }}</strong></div>
+              <div class="detail-item"><span>斜率</span><strong>{{ displayValue(detailOrder.slope) }}</strong></div>
+              <div class="detail-item"><span>频率</span><strong>{{ displayValue(detailOrder.frequency) }}</strong></div>
+              <div class="detail-item"><span>振动次数</span><strong>{{ displayValue(detailOrder.vibrationTimes) }}</strong></div>
+            </div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">测试目的</div>
+            </div>
+            <div class="detail-note">{{ displayValue(detailOrder.purpose) }}</div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">测试步骤</div>
+            </div>
+            <ol v-if="multilineItems(detailOrder.testSteps).length" class="detail-list">
+              <li v-for="(item, idx) in multilineItems(detailOrder.testSteps)" :key="idx">{{ item }}</li>
+            </ol>
+            <div v-else class="detail-empty">暂无测试步骤</div>
+          </div>
+
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">安全风险</div>
+            </div>
+            <ol v-if="multilineItems(detailOrder.safetyRisks).length" class="detail-list">
+              <li v-for="(item, idx) in multilineItems(detailOrder.safetyRisks)" :key="idx">{{ item }}</li>
+            </ol>
+            <div v-else class="detail-empty">暂无安全风险说明</div>
+          </div>
+
+          <template v-if="detailOrder && false">
+          <div class="detail-card">
+            <div class="detail-card-header">
+              <div class="detail-section-title">基础信息</div>
+              <span class="status-pill" :class="getStatusClass(getOrderStatusText(detailOrder))">{{ getOrderStatusText(detailOrder) }}</span>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item"><span>工单号</span><strong>{{ detailOrder.id }}</strong></div>
+              <div class="detail-item"><span>工单类型</span><strong>{{ displayValue(detailOrder.orderType || detailOrder.type) }}</strong></div>
+              <div class="detail-item"><span>任务编号</span><strong>{{ displayValue(detailOrder.taskNumber) }}</strong></div>
+              <div class="detail-item"><span>表格编号</span><strong>{{ displayValue(detailOrder.tableNo) }}</strong></div>
               <div class="detail-item"><span>计划时间</span><strong>{{ displayValue(detailOrder.planTime) }}</strong></div>
               <div class="detail-item"><span>更新时间</span><strong>{{ displayValue(detailOrder.updatedAt) }}</strong></div>
             </div>
@@ -443,6 +506,7 @@ const getScheduledStyle = (item: any) => {
             </div>
             <div class="detail-note">{{ displayValue(detailOrder.remark) }}</div>
           </div>
+          </template>
         </div>
         <div class="detail-modal-footer">
           <button class="cancel-btn" @click="closeDetail">关闭</button>

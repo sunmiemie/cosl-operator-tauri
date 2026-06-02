@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import type {
   DevCheckItem,
@@ -20,6 +20,7 @@ const props = defineProps<{
   devCheckAllAnswered: boolean
   devCheckInvalidNoRemark: boolean
   currentWorkOrder: WorkOrder | null
+  selectedWorkOrders: WorkOrder[]
   calStep: 'amp' | 'dur'
   liveLevel: string
   liveFreq: string
@@ -79,29 +80,58 @@ const emit = defineEmits<{
 
 const uploadDragging = ref(false)
 const woDetailOpen = ref(false)
-const detailModuleCount = 6
+const activeStartWorkOrderIndex = ref(0)
+const activeSideWorkOrderIndex = ref(0)
+const detailModuleCount = 5
+const orderTabLabels = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
 
-const currentTestInstruments = () =>
-  props.currentWorkOrder?.selectedInstruments?.length
-    ? props.currentWorkOrder.selectedInstruments
-    : props.currentWorkOrder?.instruments || []
+const displayWorkOrders = computed(() => {
+  if (props.selectedWorkOrders.length) return props.selectedWorkOrders
+  return props.currentWorkOrder ? [props.currentWorkOrder] : []
+})
 
-const currentInstrumentNames = () => {
-  const names = currentTestInstruments()
+const startWorkOrder = computed(() => displayWorkOrders.value[activeStartWorkOrderIndex.value] || null)
+
+const activeSideWorkOrder = computed(() => displayWorkOrders.value[activeSideWorkOrderIndex.value] || displayWorkOrders.value[0] || null)
+
+watch(
+  () => displayWorkOrders.value.map((order) => order.id).join('|'),
+  () => {
+    activeStartWorkOrderIndex.value = 0
+    activeSideWorkOrderIndex.value = 0
+  }
+)
+
+const orderTabLabel = (index: number) => orderTabLabels[index] || String(index + 1)
+
+const testInstrumentsFor = (order?: WorkOrder | null) =>
+  order?.selectedInstruments?.length
+    ? order.selectedInstruments
+    : order?.instruments || []
+
+const workOrderInstrumentNames = (order?: WorkOrder | null) => {
+  const names = testInstrumentsFor(order)
     .map((instrument) => instrument.name)
     .filter(Boolean)
-  return names.length ? names.join('、') : displayValue(props.currentWorkOrder?.device)
+  return names.length ? names.join('、') : displayValue(order?.device)
 }
 
-const currentInstrumentQuantity = () => {
-  const instruments = currentTestInstruments()
-  const total = instruments.reduce((sum, instrument) => sum + (Number(instrument.quantity) || 1), 0)
+const workOrderInstrumentQuantity = (order?: WorkOrder | null) => {
+  const total = testInstrumentsFor(order).reduce((sum, instrument) => sum + (Number(instrument.quantity) || 1), 0)
   return total ? `${total} 台` : '-'
 }
 
 const displayValue = (value: unknown) => {
   if (value === undefined || value === null || value === '') return '-'
   return String(value)
+}
+
+const multilineItems = (value?: string) => {
+  if (!value?.trim()) return []
+  return value
+    .split(/\r?\n|[；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 const maskPhone = (phone?: string) => {
@@ -111,8 +141,8 @@ const maskPhone = (phone?: string) => {
 
 const durationText = (duration?: number) => duration ? `${duration} 分钟` : '-'
 
-const compactOrderRows = () => {
-  const wo = props.currentWorkOrder
+const compactOrderRows = (order?: WorkOrder | null) => {
+  const wo = order || activeSideWorkOrder.value
   if (!wo) return []
   return [
     ['工单编号', displayValue(wo.id)],
@@ -121,13 +151,13 @@ const compactOrderRows = () => {
     ['振动量级', displayValue(wo.level)],
     ['振动时长', durationText(wo.duration)],
     ['测试类型', displayValue(wo.testType || wo.type)],
-    ['待测仪器', currentInstrumentNames()],
-    ['数量', currentInstrumentQuantity()],
+    ['待测仪器', workOrderInstrumentNames(wo)],
+    ['数量', workOrderInstrumentQuantity(wo)],
   ]
 }
 
 const openWODetail = () => {
-  if (!props.currentWorkOrder) return
+  if (!activeSideWorkOrder.value) return
   woDetailOpen.value = true
 }
 
@@ -258,13 +288,30 @@ function handleUploadDrop(event: DragEvent) {
             </div>
             <div class="right-col">
               <div class="card-block">
-                <div class="block-title">当前工单详情</div>
+                <div class="block-title-row">
+                  <div class="block-title">当前工单详情</div>
+                  <div v-if="displayWorkOrders.length > 1" class="start-order-tabs" aria-label="切换工单">
+                    <button
+                      v-for="(_, index) in displayWorkOrders"
+                      :key="displayWorkOrders[index].id"
+                      class="start-order-tab"
+                      :class="{ 'is-active': activeStartWorkOrderIndex === index }"
+                      type="button"
+                      :aria-pressed="activeStartWorkOrderIndex === index"
+                      @click="activeStartWorkOrderIndex = index"
+                    >
+                      {{ orderTabLabel(index) }}
+                    </button>
+                  </div>
+                </div>
                 <div class="kv">
-                  <div class="k">工单号</div><div class="v">{{ currentWorkOrder?.id }}</div>
-                  <div class="k">设备名称</div><div class="v">{{ currentWorkOrder?.device }}</div>
-                  <div class="k">振动量级</div><div class="v">{{ currentWorkOrder?.level }}</div>
-                  <div class="k">测试时长</div><div class="v">{{ currentWorkOrder?.duration }} 分钟</div>
-                  <div class="k">测试类型</div><div class="v">{{ currentWorkOrder?.type }}</div>
+                  <div class="k">工单号</div><div class="v">{{ startWorkOrder?.id }}</div>
+                  <div class="k">设备名称</div><div class="v">{{ startWorkOrder?.device }}</div>
+                  <div class="k">振动量级</div><div class="v">{{ startWorkOrder?.level }}</div>
+                  <div class="k">测试时长</div><div class="v">{{ startWorkOrder?.duration }} 分钟</div>
+                  <div class="k">测试类型</div><div class="v">{{ startWorkOrder?.type }}</div>
+                  <div class="k">本次仪器</div><div class="v">{{ workOrderInstrumentNames(startWorkOrder) }}</div>
+                  <div class="k">数量</div><div class="v">{{ workOrderInstrumentQuantity(startWorkOrder) }}</div>
                 </div>
               </div>
             </div>
@@ -335,12 +382,26 @@ function handleUploadDrop(event: DragEvent) {
           </div>
           <div class="cal-side">
             <div class="card">
-              <div class="card-header"><h3 class="card-title">工单详细信息</h3></div>
+              <div class="card-header compact-wo-header">
+                <h3 class="card-title">工单详细信息</h3>
+                <div v-if="displayWorkOrders.length > 1" class="start-order-tabs" aria-label="切换工单">
+                  <button
+                    v-for="(_, index) in displayWorkOrders"
+                    :key="`cal-amp-order-${index}`"
+                    type="button"
+                    class="start-order-tab"
+                    :class="{ 'is-active': activeSideWorkOrderIndex === index }"
+                    @click="activeSideWorkOrderIndex = index"
+                  >
+                    {{ orderTabLabel(index) }}
+                  </button>
+                </div>
+              </div>
               <div class="info-body">
                 <div class="order-info-section">
                   <div class="info-sec-title">关键信息</div>
                   <div
-                    v-for="[label, value] in compactOrderRows()"
+                    v-for="[label, value] in compactOrderRows(activeSideWorkOrder)"
                     :key="label"
                     class="kv-row"
                   >
@@ -389,11 +450,25 @@ function handleUploadDrop(event: DragEvent) {
           </div>
           <div class="cal-side">
             <div class="card">
-              <div class="card-header"><h3 class="card-title">时长校验</h3></div>
+              <div class="card-header compact-wo-header">
+                <h3 class="card-title">时长校验</h3>
+                <div v-if="displayWorkOrders.length > 1" class="start-order-tabs" aria-label="切换工单">
+                  <button
+                    v-for="(_, index) in displayWorkOrders"
+                    :key="`cal-dur-order-${index}`"
+                    type="button"
+                    class="start-order-tab"
+                    :class="{ 'is-active': activeSideWorkOrderIndex === index }"
+                    @click="activeSideWorkOrderIndex = index"
+                  >
+                    {{ orderTabLabel(index) }}
+                  </button>
+                </div>
+              </div>
               <div class="info-body">
                 <div class="dur-box">
                   <div class="dur-label">工单要求时长</div>
-                  <div class="dur-val">{{ currentWorkOrder?.duration }}</div>
+                  <div class="dur-val">{{ activeSideWorkOrder?.duration }}</div>
                   <div class="dur-unit">分钟</div>
                 </div>
                 <div class="alert warning small">
@@ -403,7 +478,7 @@ function handleUploadDrop(event: DragEvent) {
                 <div class="order-info-section mt-4">
                   <div class="info-sec-title">关键信息</div>
                   <div
-                    v-for="[label, value] in compactOrderRows()"
+                    v-for="[label, value] in compactOrderRows(activeSideWorkOrder)"
                     :key="label"
                     class="kv-row"
                   >
@@ -465,44 +540,56 @@ function handleUploadDrop(event: DragEvent) {
             <div class="card current-wo-card">
               <div class="card-header compact-wo-header">
                 <h3 class="card-title"><span class="wo-mini-icon">▣</span>当前工单</h3>
+                <div v-if="displayWorkOrders.length > 1" class="start-order-tabs" aria-label="切换工单">
+                  <button
+                    v-for="(_, index) in displayWorkOrders"
+                    :key="`testing-order-${index}`"
+                    type="button"
+                    class="start-order-tab"
+                    :class="{ 'is-active': activeSideWorkOrderIndex === index }"
+                    @click="activeSideWorkOrderIndex = index"
+                  >
+                    {{ orderTabLabel(index) }}
+                  </button>
+                </div>
               </div>
               <div class="info-body current-wo-body">
-                <div v-if="currentWorkOrder" class="wo-compact-stack">
-                  <div class="wo-compact-title">{{ currentWorkOrder.id }}</div>
+                <div v-if="activeSideWorkOrder" class="wo-compact-stack">
+                  <div class="wo-compact-title">{{ activeSideWorkOrder.id }}</div>
                   <div class="wo-compact-grid">
                     <div class="wo-compact-cell">
                       <span>申请人</span>
-                      <strong>{{ displayValue(currentWorkOrder.applicant) }}</strong>
+                      <strong>{{ displayValue(activeSideWorkOrder.applicant) }}</strong>
                     </div>
                     <div class="wo-compact-cell">
                       <span>联系电话</span>
-                      <strong>{{ maskPhone(currentWorkOrder.phone) }}</strong>
+                      <strong>{{ maskPhone(activeSideWorkOrder.phone) }}</strong>
                     </div>
                     <div class="wo-compact-cell full">
                       <span>使用设备</span>
-                      <strong>{{ displayValue(currentWorkOrder.device) }}</strong>
+                      <strong>{{ displayValue(activeSideWorkOrder.device) }}</strong>
                     </div>
                     <div class="wo-compact-cell">
                       <span>振动量级</span>
-                      <strong class="danger-text">{{ displayValue(currentWorkOrder.level) }}</strong>
+                      <strong class="danger-text">{{ displayValue(activeSideWorkOrder.level) }}</strong>
                     </div>
                     <div class="wo-compact-cell">
                       <span>测试时长</span>
-                      <strong>{{ durationText(currentWorkOrder.duration) }}</strong>
+                      <strong>{{ durationText(activeSideWorkOrder.duration) }}</strong>
                     </div>
                     <div class="wo-compact-cell">
                       <span>测试类型</span>
-                      <strong>{{ displayValue(currentWorkOrder.type) }}</strong>
+                      <strong>{{ displayValue(activeSideWorkOrder.type) }}</strong>
                     </div>
                     <div class="wo-compact-cell">
                       <span>设备编号</span>
-                      <strong>{{ displayValue(currentWorkOrder.deviceNumber) }}</strong>
+                      <strong>{{ displayValue(activeSideWorkOrder.deviceNumber) }}</strong>
                     </div>
                   </div>
                   <div class="wo-compact-section-title">本次测试仪器</div>
                   <div class="wo-compact-instrument-list">
                     <div
-                      v-for="instrument in currentTestInstruments()"
+                      v-for="instrument in testInstrumentsFor(activeSideWorkOrder)"
                       :key="instrument.id"
                       class="wo-compact-instrument"
                     >
@@ -608,25 +695,25 @@ function handleUploadDrop(event: DragEvent) {
       </div>
 
       <div
-        v-if="currentWorkOrder"
+        v-if="activeSideWorkOrder"
         class="wo-detail-overlay"
         :class="{ open: woDetailOpen }"
         @click="closeWODetail"
       ></div>
       <aside
-        v-if="currentWorkOrder"
+        v-if="activeSideWorkOrder"
         class="wo-detail-drawer"
         :class="{ open: woDetailOpen }"
       >
         <div class="wo-detail-drawer-header">
           <div>
             <div class="drawer-eyebrow">完整测试详情</div>
-            <h3>{{ currentWorkOrder.id }}</h3>
+            <h3>{{ activeSideWorkOrder.id }}</h3>
           </div>
           <button class="drawer-close" type="button" @click="closeWODetail">×</button>
         </div>
         <div class="wo-detail-drawer-body">
-          <div class="detail-report-head">
+          <div v-if="false" class="detail-report-head">
             <div>
               <p>报告类型</p>
               <h4>Report of Vibration Test Operation</h4>
@@ -637,28 +724,69 @@ function handleUploadDrop(event: DragEvent) {
           <section class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:file-document-outline" />
+              <span>基础信息</span>
+            </div>
+            <div class="detail-table-card">
+              <div class="detail-table-cell">
+                <span>工单编号</span>
+                <strong>{{ displayValue(activeSideWorkOrder.id) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>任务编号</span>
+                <strong>{{ displayValue(activeSideWorkOrder.taskNumber) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>表格编号</span>
+                <strong>{{ displayValue(activeSideWorkOrder.tableNo) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>工单类型</span>
+                <strong>{{ displayValue(activeSideWorkOrder.orderType || activeSideWorkOrder.type) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>申请人</span>
+                <strong>{{ displayValue(activeSideWorkOrder.applicant) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>联系电话</span>
+                <strong>{{ maskPhone(activeSideWorkOrder.phone) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>申请单位</span>
+                <strong>{{ displayValue(activeSideWorkOrder.applicationUnit) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>计划时间</span>
+                <strong>{{ displayValue(activeSideWorkOrder.planTime || activeSideWorkOrder.testDate) }}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="false" class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:file-document-outline" />
               <span>基本信息 Basic Information</span>
             </div>
             <div class="detail-table-card">
               <div class="detail-table-cell">
                 <span>标题 Title</span>
-                <strong>{{ displayValue(currentWorkOrder.purpose || currentWorkOrder.testType) }}</strong>
+                <strong>{{ displayValue(activeSideWorkOrder.purpose || activeSideWorkOrder.testType) }}</strong>
               </div>
               <div class="detail-table-cell">
                 <span>试件 Specimen</span>
-                <strong>{{ displayValue(currentWorkOrder.device) }}</strong>
+                <strong>{{ displayValue(activeSideWorkOrder.device) }}</strong>
               </div>
               <div class="detail-table-cell">
                 <span>操作员 Operator</span>
-                <strong>{{ displayValue(currentWorkOrder.applicant) }}</strong>
+                <strong>{{ displayValue(activeSideWorkOrder.applicant) }}</strong>
               </div>
               <div class="detail-table-cell">
                 <span>联系电话 Phone</span>
-                <strong>{{ maskPhone(currentWorkOrder.phone) }}</strong>
+                <strong>{{ maskPhone(activeSideWorkOrder.phone) }}</strong>
               </div>
               <div class="detail-table-cell">
                 <span>试验开始 Date of Test Start</span>
-                <strong>{{ displayValue(currentWorkOrder.planTime || currentWorkOrder.testDate) }}</strong>
+                <strong>{{ displayValue(activeSideWorkOrder.planTime || activeSideWorkOrder.testDate) }}</strong>
               </div>
               <div class="detail-table-cell">
                 <span>完成状态 State</span>
@@ -666,16 +794,87 @@ function handleUploadDrop(event: DragEvent) {
               </div>
               <div class="detail-table-cell">
                 <span>设备编号 Device No.</span>
-                <strong>{{ displayValue(currentWorkOrder.deviceNumber) }}</strong>
+                <strong>{{ displayValue(activeSideWorkOrder.deviceNumber) }}</strong>
               </div>
               <div class="detail-table-cell">
                 <span>备注 Comment</span>
-                <strong>{{ displayValue(currentWorkOrder.remark) }}</strong>
+                <strong>{{ displayValue(activeSideWorkOrder.remark) }}</strong>
               </div>
             </div>
           </section>
 
           <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:tune-variant" />
+              <span>测试参数</span>
+            </div>
+            <div class="detail-table-card">
+              <div class="detail-table-cell">
+                <span>测试类型</span>
+                <strong>{{ displayValue(activeSideWorkOrder.testType || activeSideWorkOrder.type) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>振动量级</span>
+                <strong>{{ displayValue(activeSideWorkOrder.level) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>振动时长</span>
+                <strong>{{ durationText(activeSideWorkOrder.duration) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>振动方向</span>
+                <strong>{{ displayValue(activeSideWorkOrder.vibrationDirection) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>加速度</span>
+                <strong>{{ displayValue(activeSideWorkOrder.acceleration) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>斜率</span>
+                <strong>{{ displayValue(activeSideWorkOrder.slope) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>频率</span>
+                <strong>{{ displayValue(activeSideWorkOrder.frequency) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>振动次数</span>
+                <strong>{{ displayValue(activeSideWorkOrder.vibrationTimes) }}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:target" />
+              <span>测试目的</span>
+            </div>
+            <div class="detail-text-card">{{ displayValue(activeSideWorkOrder.purpose) }}</div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:format-list-numbered" />
+              <span>测试步骤</span>
+            </div>
+            <ol v-if="multilineItems(activeSideWorkOrder.testSteps).length" class="detail-list-card">
+              <li v-for="(item, idx) in multilineItems(activeSideWorkOrder.testSteps)" :key="idx">{{ item }}</li>
+            </ol>
+            <div v-else class="detail-text-card text-muted">暂无测试步骤</div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:shield-alert-outline" />
+              <span>安全风险</span>
+            </div>
+            <ol v-if="multilineItems(activeSideWorkOrder.safetyRisks).length" class="detail-list-card">
+              <li v-for="(item, idx) in multilineItems(activeSideWorkOrder.safetyRisks)" :key="idx">{{ item }}</li>
+            </ol>
+            <div v-else class="detail-text-card text-muted">暂无安全风险说明</div>
+          </section>
+
+          <section v-if="false" class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:pulse" />
               <span>测试条件 TEST CONDITION</span>
@@ -739,7 +938,7 @@ function handleUploadDrop(event: DragEvent) {
             </div>
           </section>
 
-          <section class="detail-section">
+          <section v-if="false" class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:input" />
               <span>输入条件 INPUT CONDITION</span>
@@ -770,7 +969,7 @@ function handleUploadDrop(event: DragEvent) {
             </div>
           </section>
 
-          <section class="detail-section">
+          <section v-if="false" class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:tune-variant" />
               <span>控制条件 CONTROL CONDITION</span>
@@ -817,14 +1016,14 @@ function handleUploadDrop(event: DragEvent) {
             </div>
           </section>
 
-          <section class="detail-section">
+          <section v-if="false" class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:tools" />
               <span>本次测试仪器 Instruments</span>
             </div>
             <div class="detail-instrument-list">
               <div
-                v-for="instrument in currentTestInstruments()"
+                v-for="instrument in testInstrumentsFor(activeSideWorkOrder)"
                 :key="instrument.id"
                 class="detail-instrument-item"
               >
@@ -843,3 +1042,64 @@ function handleUploadDrop(event: DragEvent) {
 </template>
 
 <style scoped src="./vibration.shared.css"></style>
+<style scoped>
+.block-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.block-title-row .block-title {
+  margin-bottom: 0;
+}
+
+.start-order-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.start-order-tab {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.start-order-tab:hover,
+.start-order-tab.is-active {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--color-accent-blue);
+}
+
+.detail-text-card,
+.detail-list-card {
+  margin: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.detail-list-card {
+  padding-left: 42px;
+}
+
+.detail-list-card li + li {
+  margin-top: 8px;
+}
+</style>

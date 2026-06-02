@@ -13,6 +13,17 @@ export interface WorkOrder {
   dbId: number
   taskNumber: string
   applicant: string
+  applicantPhone?: string
+  testApplicationUnit?: string
+  applicationDate?: string
+  researchNumber?: string
+  projectBudgetNumber?: string
+  projectName?: string
+  specification?: string
+  maxTemperature?: number
+  slope?: string
+  holdTime?: number
+  humidity?: string
   deviceName: string
   deviceNumber: string
   targetTemp: number
@@ -71,6 +82,19 @@ export function useHighTempBox() {
     reportNo: string
     taskNumber: string
     tester: string
+    applicant: string
+    applicantPhone: string
+    testApplicationUnit: string
+    applicationDate: string
+    researchNumber: string
+    projectBudgetNumber: string
+    projectName: string
+    specification: string
+    slope: string
+    holdTime: number
+    humidity: string
+    instrumentSummary: string
+    snSummary: string
     testDate: string
     completedAt: string
     targetTemp: number
@@ -189,8 +213,10 @@ export function useHighTempBox() {
       let page = 1
       let total = Infinity
 
+      const headers = (await initAuth()) ? getAuthHeaders() : undefined
+
       while (all.length < total) {
-        const resp = await listHighTempBoxOrders({ page, pageSize, status: visibleOrderStatus })
+        const resp = await listHighTempBoxOrders({ page, pageSize, status: visibleOrderStatus }, headers)
         if (!resp.success || !resp.data) {
           workOrdersError.value = resp.error || '获取高温箱工单失败'
           break
@@ -811,7 +837,7 @@ export function useHighTempBox() {
         const resp = await changeHighTempBoxOrderStatus(
           selected.dbId,
           2,
-          undefined,
+          (await initAuth()) ? getAuthHeaders() : undefined,
           { runningInstrumentIds }
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
@@ -841,7 +867,10 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await changeHighTempBoxOrderStatus(orderId, 1)
+        const runningInstrumentIds = (order?.selectedInstruments || [])
+          .map((instrument) => instrument.dbId)
+          .filter((id): id is number | string => id !== undefined)
+        const resp = await changeHighTempBoxOrderStatus(orderId, 1, (await initAuth()) ? getAuthHeaders() : undefined, { runningInstrumentIds })
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return
@@ -932,11 +961,27 @@ export function useHighTempBox() {
     const diff = finalTemp === null ? null : Math.abs(finalTemp - targetTemp)
     const stabilityText =
       diff === null ? '未采集到有效温度数据' : diff <= 3 ? '温控稳定' : diff <= 8 ? '温度接近目标值' : '温度偏差较大'
+    const selectedInstruments = order.selectedInstruments?.length ? order.selectedInstruments : order.instruments
+    const instrumentSummary = selectedInstruments.map((instrument) => instrument.name).filter(Boolean).join('、')
+    const snSummary = selectedInstruments.map((instrument) => instrument.sn).filter(Boolean).join('、')
 
     return {
       reportNo: buildReportNo(order.taskNumber),
       taskNumber: order.taskNumber,
       tester: testerName.value,
+      applicant: order.applicant || '',
+      applicantPhone: order.applicantPhone || '',
+      testApplicationUnit: order.testApplicationUnit || '',
+      applicationDate: order.applicationDate || order.testDate || '',
+      researchNumber: order.researchNumber || '',
+      projectBudgetNumber: order.projectBudgetNumber || '',
+      projectName: order.projectName || '',
+      specification: order.specification || '',
+      slope: order.slope || '',
+      holdTime: order.holdTime ?? order.duration ?? 0,
+      humidity: order.humidity || '',
+      instrumentSummary,
+      snSummary,
       testDate: order.testDate,
       completedAt: formatDateTime(),
       targetTemp,
@@ -1000,7 +1045,7 @@ export function useHighTempBox() {
         const resp = await changeHighTempBoxOrderStatus(
           orderId,
           willCompleteOrder ? 3 : 1,
-          undefined,
+          (await initAuth()) ? getAuthHeaders() : undefined,
           { completedInstrumentIds: completedInstrumentDbIds }
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
@@ -1027,7 +1072,7 @@ export function useHighTempBox() {
 
   const displaySetTemp = computed(() => {
     if (ocrSetTemp.value !== null) return ocrSetTemp.value
-    return currentWorkOrder.value?.targetTemp ?? '--'
+    return currentWorkOrder.value?.maxTemperature ?? currentWorkOrder.value?.targetTemp ?? '--'
   })
 
   const displayCurrentTemp = computed(() => {

@@ -90,34 +90,46 @@ const reportStats = computed(() => [
 
 const reportTableRows = computed(() => {
   const order = currentWorkOrder.value
+  const snapshot = reportSnapshot.value
   return [
     [
       { label: '工单编号', value: order?.id || '--' },
-      { label: '任务单号', value: reportSnapshot.value?.taskNumber || order?.taskNumber || '--' },
-      { label: '测试日期', value: reportSnapshot.value?.testDate || order?.testDate || '--' },
-      { label: '报告编号', value: reportSnapshot.value?.reportNo || '--' },
+      { label: '任务单号', value: snapshot?.taskNumber || order?.taskNumber || '--' },
+      { label: '报告编号', value: snapshot?.reportNo || '--' },
+      { label: '完成时间', value: snapshot?.completedAt || '--' },
     ],
     [
-      { label: '测试申请人', value: order?.applicant || '--' },
-      { label: '测试操作人员', value: reportSnapshot.value?.tester || '--' },
-      { label: '设备名称', value: order?.deviceName || '--' },
-      { label: '设备编号', value: order?.deviceNumber || '--' },
+      { label: '委托单位', value: snapshot?.testApplicationUnit || order?.testApplicationUnit || '--' },
+      { label: '科研编号', value: snapshot?.researchNumber || order?.researchNumber || '--' },
+      { label: '项目预算编号', value: snapshot?.projectBudgetNumber || order?.projectBudgetNumber || '--' },
+      { label: '项目名称', value: snapshot?.projectName || order?.projectName || '--' },
     ],
     [
+      { label: '申请人', value: snapshot?.applicant || order?.applicant || '--' },
+      { label: '申请人电话', value: snapshot?.applicantPhone || order?.applicantPhone || '--' },
+      { label: '申请日期', value: snapshot?.applicationDate || order?.applicationDate || order?.testDate || '--' },
+      { label: '测试操作人员', value: snapshot?.tester || '--' },
+    ],
+    [
+      { label: '规格', value: snapshot?.specification || order?.specification || '--' },
+      { label: '仪器名称', value: snapshot?.instrumentSummary || '--' },
+      { label: 'SN号', value: snapshot?.snSummary || '--' },
       { label: '测试平台', value: order?.testPlatform || '--' },
-      { label: '目标温度', value: reportSnapshot.value?.targetTemp !== undefined ? `${reportSnapshot.value.targetTemp}°C` : '--' },
-      { label: '测试时长', value: reportSnapshot.value?.durationText || '--' },
-      { label: '完成时间', value: reportSnapshot.value?.completedAt || '--' },
     ],
     [
-      { label: '温度下限', value: reportSnapshot.value?.summary.minTemp !== null && reportSnapshot.value?.summary.minTemp !== undefined ? `${reportSnapshot.value.summary.minTemp}°C` : '--' },
-      { label: '温度上限', value: reportSnapshot.value?.summary.maxTemp !== null && reportSnapshot.value?.summary.maxTemp !== undefined ? `${reportSnapshot.value.summary.maxTemp}°C` : '--' },
-      { label: '平均温度', value: reportSnapshot.value?.summary.avgTemp !== null && reportSnapshot.value?.summary.avgTemp !== undefined ? `${reportSnapshot.value.summary.avgTemp}°C` : '--' },
+      { label: '最高温度', value: snapshot?.targetTemp !== undefined ? `${snapshot.targetTemp}°C` : '--' },
+      { label: '斜率', value: snapshot?.slope || order?.slope || '--' },
+      { label: '保温时间', value: snapshot?.holdTime !== undefined ? `${snapshot.holdTime}分钟` : '--' },
+      { label: '湿度', value: snapshot?.humidity || order?.humidity ? `${snapshot?.humidity || order?.humidity}%` : '--' },
+    ],
+    [
+      { label: '温度下限', value: snapshot?.summary.minTemp !== null && snapshot?.summary.minTemp !== undefined ? `${snapshot.summary.minTemp}°C` : '--' },
+      { label: '温度上限', value: snapshot?.summary.maxTemp !== null && snapshot?.summary.maxTemp !== undefined ? `${snapshot.summary.maxTemp}°C` : '--' },
+      { label: '平均温度', value: snapshot?.summary.avgTemp !== null && snapshot?.summary.avgTemp !== undefined ? `${snapshot.summary.avgTemp}°C` : '--' },
       { label: '备注说明', value: order?.remark || '--' },
     ],
   ]
 })
-
 const reportSampleRows = computed(() => reportHistory.value.slice(-12))
 
 const reportConclusion = computed(() => {

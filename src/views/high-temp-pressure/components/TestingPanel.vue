@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
 import type { HighTempPressureVideoMeasurement } from '../composables/useHighTempPressureTesting'
@@ -11,6 +11,7 @@ const props = defineProps<{
   testRunning: boolean
   csvCount: number
   currentSelected: ScheduledSelection | null
+  selectedScheduledOrders: ScheduledSelection[]
   videoFileName: string
   videoUrl: string
   captureProgressPct: number
@@ -29,10 +30,17 @@ const emit = defineEmits<{
 }>()
 
 const detailModalVisible = ref(false)
+const activeSelectionIndex = ref(0)
 const detailModuleCount = 6
 
-const currentOrder = computed(() => props.currentSelected?.order ?? null)
-const currentInstrument = computed(() => props.currentSelected?.instrument ?? null)
+const displaySelections = computed(() => {
+  if (props.selectedScheduledOrders.length) return props.selectedScheduledOrders
+  return props.currentSelected ? [props.currentSelected] : []
+})
+
+const activeSelection = computed(() => displaySelections.value[activeSelectionIndex.value] || null)
+const currentOrder = computed(() => activeSelection.value?.order ?? null)
+const currentInstrument = computed(() => activeSelection.value?.instrument ?? null)
 const currentOrderBadge = computed(() => currentOrder.value?.no || currentOrder.value?.receivingNo || '未选择')
 const captureProgressSafe = computed(() => {
   const value = Number(props.captureProgressPct)
@@ -94,6 +102,13 @@ const testPurposeText = computed(() => {
     ? `验证试件在${targetText}条件下的耐温、耐压及密封稳定性。`
     : '验证试件在高温高压测试条件下的耐温、耐压及密封稳定性。'
 })
+
+watch(
+  () => displaySelections.value.map((selection) => selection.instrument.id).join('|'),
+  () => {
+    activeSelectionIndex.value = 0
+  }
+)
 </script>
 
 <template>
@@ -181,10 +196,25 @@ const testPurposeText = computed(() => {
               <Icon icon="mdi:file-document-outline" />
               <span>当前工单</span>
             </div>
-            <span class="current-order-no">{{ currentOrderBadge }}</span>
+            <div class="compact-order-head-actions">
+              <div v-if="displaySelections.length > 1" class="current-order-tabs" aria-label="切换工单">
+                <button
+                  v-for="(_, index) in displaySelections"
+                  :key="displaySelections[index].instrument.id"
+                  class="current-order-tab"
+                  :class="{ 'is-active': activeSelectionIndex === index }"
+                  type="button"
+                  :aria-pressed="activeSelectionIndex === index"
+                  @click="activeSelectionIndex = index"
+                >
+                  {{ ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'][index] || index + 1 }}
+                </button>
+              </div>
+              <span class="current-order-no">{{ currentOrderBadge }}</span>
+            </div>
           </div>
 
-          <div v-if="currentSelected" class="compact-order-body">
+          <div v-if="activeSelection" class="compact-order-body">
             <div class="testing-item-block">
               <div class="testing-item-kicker">Testing Item</div>
               <div class="testing-item-name">{{ currentInstrument?.label || '-' }}</div>
@@ -674,6 +704,41 @@ const testPurposeText = computed(() => {
 
 .compact-order-head {
   padding: 13px 14px;
+}
+
+.compact-order-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.current-order-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.current-order-tab {
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--capture-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.current-order-tab:hover,
+.current-order-tab.is-active {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--color-accent-blue);
 }
 
 .current-order-no {

@@ -19,6 +19,7 @@ import type { Stage, WorkOrder } from './types'
 const stage = ref<Stage>('dashboard')
 const currentWorkOrderId = ref<string | null>(null)
 const currentWorkOrderSnapshot = ref<WorkOrder | null>(null)
+const currentWorkOrderSnapshots = ref<WorkOrder[]>([])
 const showConfirmStartModal = ref(false)
 const calStep = ref<'amp' | 'dur'>('amp')
 const productPickerVisible = ref(false)
@@ -100,7 +101,8 @@ const testMode = computed<'formal' | 'pre'>(() => forcedMode.value)
 const productPickerRows = computed(() =>
   selectedScheduledOrders.value.flatMap((order) =>
     getVisibleOrderInstruments(order).map((instrument) => ({
-      id: instrument.id,
+      id: `${order.id}::${instrument.id}`,
+      instrumentId: instrument.id,
       name: instrument.name,
       sn: instrument.sn,
       model: instrument.model,
@@ -109,6 +111,13 @@ const productPickerRows = computed(() =>
     }))
   )
 )
+
+const validSelectedInstrumentIds = computed(() => {
+  const selected = new Set(selectedInstrumentIds.value)
+  return productPickerRows.value
+    .filter((row) => selected.has(row.id) || selected.has(row.instrumentId))
+    .map((row) => row.id)
+})
 
 watch(
   () => productPickerRows.value.map((row) => row.id).join('|'),
@@ -131,6 +140,10 @@ function selectAllInstruments() {
 
 function clearInstrumentSelection() {
   selectedInstrumentIds.value = []
+}
+
+function normalizeSelectedInstrumentIds() {
+  selectedInstrumentIds.value = Array.from(new Set(validSelectedInstrumentIds.value))
 }
 
 const testing = useVibrationTesting({
@@ -207,73 +220,82 @@ async function startExperiment() {
     ElMessage.warning('请先在日历中选择一个已排程工单')
     return
   }
-  if (selectedScheduledOrders.value.length > 1) {
-    ElMessage.warning('振动台一次实验请先选择一个工单')
-    return
-  }
   if (orderStatusMutating.value) {
     ElMessage.warning('当前正在更新工单状态，请稍后再试')
     return
   }
-  if (!selectedInstrumentIds.value.length) selectAllInstruments()
   if (!productPickerRows.value.length) {
     ElMessage.warning('该工单暂无待测试仪器')
     return
   }
+  normalizeSelectedInstrumentIds()
+  if (!selectedInstrumentIds.value.length) selectAllInstruments()
   productPickerVisible.value = true
 }
 
 async function confirmInstrumentSelection() {
+  normalizeSelectedInstrumentIds()
   if (!selectedInstrumentIds.value.length) {
     ElMessage.warning('请先选择本次实际开始测试的仪器')
     return
   }
 
-  const selected = selectedScheduledOrders.value[0]
-  if (!selected) return
-  const selectedInstruments = selected.instruments.filter((instrument) => selectedInstrumentIds.value.includes(instrument.id))
-  if (!selectedInstruments.length) {
+  const selectedOrderInfos = selectedScheduledOrders.value
+    .map((order) => ({
+      order,
+      selectedInstruments: order.instruments.filter((instrument) =>
+        selectedInstrumentIds.value.includes(`${order.id}::${instrument.id}`)
+      ),
+    }))
+    .filter((item) => item.selectedInstruments.length)
+
+  if (!selectedOrderInfos.length) {
     ElMessage.warning('未找到已选择的仪器')
     return
   }
+
   const authOk = await initAuth()
   const authHeaders = authOk ? getAuthHeaders() : undefined
-  const scheduleInfo = getScheduleChangePayload(selected.id)
-  if (scheduleInfo) {
-    console.log(
-      '[vibration schedule]',
-      scheduleInfo.segments.map((segment) => `${segment.startAtHour} ~ ${segment.endAtHour}`).join(' | ')
-    )
-  } else {
-    console.log('[vibration schedule] no scheduled range')
-  }
-  if (scheduleInfo) {
-    if (!authOk) {
-      ElMessage.warning('未登录，已跳过第三方排期推送并继续开始实验')
+
+  for (const { order, selectedInstruments } of selectedOrderInfos) {
+    const scheduleInfo = getScheduleChangePayload(order.id)
+    if (scheduleInfo) {
+      console.log(
+        '[vibration schedule]',
+        order.id,
+        scheduleInfo.segments.map((segment) => `${segment.startAtHour} ~ ${segment.endAtHour}`).join(' | ')
+      )
     } else {
-      const pushPayload = await resolveVibrationSchedulePayload(selected, authHeaders || {})
-      if (pushPayload.testType && pushPayload.testId && pushPayload.equipmentId) {
-        console.log('[vibration schedule push]', pushPayload)
-        const schedulePushList = scheduleInfo.segments.flatMap((segment) =>
-          selectedInstruments.map((instrument) => ({
-            testId: pushPayload.testId,
-            testType: pushPayload.testType,
-            equipmentId: String(instrument.dbId || instrument.sn || instrument.name || pushPayload.equipmentId),
-            startTime: segment.startAtHour,
-            endTime: segment.endAtHour,
-          }))
-        )
-        const resp = await pushEngineerAssistantSchedules(
-          {
-            schedulesInfo: schedulePushList,
-          },
-          authHeaders || {}
-        )
-        if (!resp.success || !resp.data || resp.data.code !== 0) {
-          ElMessage.warning(`推送第三方排期失败，已继续开始实验${resp.error ? `：${resp.error}` : ''}`)
-        }
+      console.log('[vibration schedule] no scheduled range', order.id)
+    }
+    if (scheduleInfo) {
+      if (!authOk) {
+        ElMessage.warning('未登录，已跳过第三方排期推送并继续开始实验')
       } else {
-        ElMessage.warning('未匹配到第三方测试类型（振动台），已跳过第三方排期推送并继续开始实验')
+        const pushPayload = await resolveVibrationSchedulePayload(order, authHeaders || {})
+        if (pushPayload.testType && pushPayload.testId && pushPayload.equipmentId) {
+          console.log('[vibration schedule push]', pushPayload)
+          const schedulePushList = scheduleInfo.segments.flatMap((segment) =>
+            selectedInstruments.map((instrument) => ({
+              testId: pushPayload.testId,
+              testType: pushPayload.testType,
+              equipmentId: String(instrument.dbId || instrument.sn || instrument.name || pushPayload.equipmentId),
+              startTime: segment.startAtHour,
+              endTime: segment.endAtHour,
+            }))
+          )
+          const resp = await pushEngineerAssistantSchedules(
+            {
+              schedulesInfo: schedulePushList,
+            },
+            authHeaders || {}
+          )
+          if (!resp.success || !resp.data || resp.data.code !== 0) {
+            ElMessage.warning(`推送第三方排期失败，已继续开始实验${resp.error ? `：${resp.error}` : ''}`)
+          }
+        } else {
+          ElMessage.warning('未匹配到第三方测试类型（振动台），已跳过第三方排期推送并继续开始实验')
+        }
       }
     }
   }
@@ -281,21 +303,22 @@ async function confirmInstrumentSelection() {
   {
     orderStatusMutating.value = true
     try {
-      const runningInstrumentIds = selectedInstruments
-        .map((instrument) => instrument.dbId)
-        .filter((id): id is number | string => id !== undefined)
-      const resp = await changeVibrationTableOrderStatus(
-        selected.dbId!,
-        2,
-        authHeaders,
-        { runningInstrumentIds }
-      )
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
-        ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
-        return
-      } else {
-        void refreshWorkOrders()
+      for (const { order, selectedInstruments } of selectedOrderInfos) {
+        const runningInstrumentIds = selectedInstruments
+          .map((instrument) => instrument.dbId)
+          .filter((id): id is number | string => id !== undefined)
+        const resp = await changeVibrationTableOrderStatus(
+          order.dbId!,
+          2,
+          authHeaders,
+          { runningInstrumentIds }
+        )
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+          return
+        }
       }
+      void refreshWorkOrders()
     } catch {
       ElMessage.error('工单状态更新异常，请稍后重试')
       return
@@ -304,15 +327,20 @@ async function confirmInstrumentSelection() {
     }
   }
 
-  markInstrumentsRunning(selected.id, selectedInstruments)
-  currentWorkOrderId.value = selected.id
-  currentWorkOrderSnapshot.value = {
-    ...selected,
-    selectedInstruments,
-    deviceNumber: selectedInstruments.map((instrument) => instrument.sn).join('、') || selected.deviceNumber,
-    device: selectedInstruments.map((instrument) => instrument.name).join('、') || selected.device,
-  }
-  currentReportClientSubmitId.value = `vibration-${selected.dbId || selected.id}-${Date.now()}`
+  const snapshots = selectedOrderInfos.map(({ order, selectedInstruments }) => {
+    markInstrumentsRunning(order.id, selectedInstruments)
+    return {
+      ...order,
+      selectedInstruments,
+      deviceNumber: selectedInstruments.map((instrument) => instrument.sn).join('、') || order.deviceNumber,
+      device: selectedInstruments.map((instrument) => instrument.name).join('、') || order.device,
+    }
+  })
+  const primarySnapshot = snapshots[0]
+  currentWorkOrderId.value = primarySnapshot?.id || null
+  currentWorkOrderSnapshot.value = primarySnapshot || null
+  currentWorkOrderSnapshots.value = snapshots
+  currentReportClientSubmitId.value = `vibration-${primarySnapshot?.dbId || primarySnapshot?.id || 'order'}-${Date.now()}`
   currentExperimentStartedAt.value = new Date().toISOString()
   currentExperimentEndedAt.value = null
   reportSubmitted.value = false
@@ -344,52 +372,62 @@ function continueAfterSafetyWarning() {
 async function backToDashboard(finalStatus: number = 1) {
   if (orderStatusMutating.value) return
 
-  const order = currentWorkOrderSnapshot.value
-  const selectedInstruments = order?.selectedInstruments || []
+  const activeOrders = currentWorkOrderSnapshots.value.length
+    ? currentWorkOrderSnapshots.value
+    : currentWorkOrderSnapshot.value
+      ? [currentWorkOrderSnapshot.value]
+      : []
   let nextOrderStatus = finalStatus
   let shouldRemoveSchedule = finalStatus === 5
-  const completedInstrumentIds = finalStatus === 5
-    ? selectedInstruments.map((instrument) => instrument.dbId).filter((id): id is number | string => id !== undefined)
-    : []
-  if (order && selectedInstruments.length) {
-    if (finalStatus === 5) {
-      shouldRemoveSchedule = true
+  activeOrders.forEach((order) => {
+    const selectedInstruments = order.selectedInstruments || []
+    if (selectedInstruments.length) {
+      if (finalStatus === 5) {
+        shouldRemoveSchedule = true
+      }
+      clearRunningInstruments(order.id, selectedInstruments)
     }
-    clearRunningInstruments(order.id, selectedInstruments)
-  }
+  })
 
-  if (order && order.dbId !== undefined) {
+  if (activeOrders.some((order) => order.dbId !== undefined)) {
     const authOk = await initAuth()
     const authHeaders = authOk ? getAuthHeaders() : undefined
     orderStatusMutating.value = true
     try {
-      const resp = await changeVibrationTableOrderStatus(
-        order.dbId,
-        nextOrderStatus,
-        authHeaders,
-        { completedInstrumentIds }
-      )
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
-        ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
-        return
-      } else {
+      for (const order of activeOrders) {
+        if (order.dbId === undefined) continue
+        const selectedInstruments = order.selectedInstruments || []
+        const completedInstrumentIds = finalStatus === 5
+          ? selectedInstruments.map((instrument) => instrument.dbId).filter((id): id is number | string => id !== undefined)
+          : []
+        const resp = await changeVibrationTableOrderStatus(
+          order.dbId,
+          nextOrderStatus,
+          authHeaders,
+          { completedInstrumentIds }
+        )
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+          return
+        }
         if (finalStatus === 5 && selectedInstruments.length) {
           markInstrumentsCompleted(order.id, selectedInstruments)
         }
-        void refreshWorkOrders()
       }
+      void refreshWorkOrders()
     } finally {
       orderStatusMutating.value = false
     }
   }
 
-  if (shouldRemoveSchedule && currentWorkOrderId.value) {
-    removeScheduledOrder(currentWorkOrderId.value)
+  if (shouldRemoveSchedule) {
+    activeOrders.forEach((order) => removeScheduledOrder(order.id))
   }
 
   stage.value = 'dashboard'
   currentWorkOrderId.value = null
   currentWorkOrderSnapshot.value = null
+  currentWorkOrderSnapshots.value = []
   currentReportClientSubmitId.value = ''
   currentExperimentStartedAt.value = null
   currentExperimentEndedAt.value = null
@@ -400,23 +438,11 @@ async function backToDashboard(finalStatus: number = 1) {
 }
 
 function handleCancelStartupCheck() {
-  if (currentWorkOrderSnapshot.value) {
-    clearRunningInstruments(
-      currentWorkOrderSnapshot.value.id,
-      currentWorkOrderSnapshot.value.selectedInstruments || []
-    )
-  }
   backToDashboard(1)
 }
 
 function goPrevStage() {
   if (stage.value === 'start') {
-    if (currentWorkOrderSnapshot.value) {
-      clearRunningInstruments(
-        currentWorkOrderSnapshot.value.id,
-        currentWorkOrderSnapshot.value.selectedInstruments || []
-      )
-    }
     backToDashboard(1)
   }
   else if (stage.value === 'calibration') stage.value = 'start'
@@ -449,7 +475,7 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  backToDashboard(reportSubmitted.value ? 3 : 5)
+  backToDashboard(5)
 }
 
 function toggleShutdownCheck(id: number) {
@@ -529,6 +555,7 @@ function toggleShutdownCheck(id: number) {
         :dev-check-all-answered="devCheckAllAnswered"
         :dev-check-invalid-no-remark="devCheckInvalidNoRemark"
         :current-work-order="currentWorkOrder"
+        :selected-work-orders="currentWorkOrderSnapshots"
         :cal-step="calStep"
         :live-level="testing.liveLevel.value"
         :live-freq="testing.liveFreq.value"
@@ -596,7 +623,7 @@ function toggleShutdownCheck(id: number) {
         <div class="product-picker-actions">
           <button class="week-cal-nav" @click="selectAllInstruments">全选</button>
           <button class="week-cal-nav" @click="clearInstrumentSelection">清空</button>
-          <span>已选择 {{ selectedInstrumentIds.length }} / {{ productPickerRows.length }} 台仪器</span>
+          <span>已选择 {{ validSelectedInstrumentIds.length }} / {{ productPickerRows.length }} 台仪器</span>
         </div>
         <div class="product-picker-list">
           <label v-for="row in productPickerRows" :key="row.id" class="product-picker-row">
@@ -612,7 +639,7 @@ function toggleShutdownCheck(id: number) {
         </div>
         <div class="product-picker-footer">
           <button class="week-cal-nav" @click="productPickerVisible = false">取消</button>
-          <button class="primary-btn" :disabled="selectedInstrumentIds.length === 0" @click="confirmInstrumentSelection">
+          <button class="primary-btn" :disabled="validSelectedInstrumentIds.length === 0" @click="confirmInstrumentSelection">
             确认开始实验
           </button>
         </div>

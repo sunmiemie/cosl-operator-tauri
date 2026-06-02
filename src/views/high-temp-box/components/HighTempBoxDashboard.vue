@@ -22,7 +22,6 @@ const {
   prevWeek,
   nextWeek,
   gotoDate,
-  loadPresetSchedule,
   getCellKey,
   getOrderById,
   getActiveInstruments,
@@ -323,17 +322,16 @@ async function confirmInstrumentSelection() {
     </div>
 
     <div class="main-content">
-      <div class="panel-header">
+      <div class="panel-header calendar-toolbar-header">
         <div class="week-cal-toolbar">
           <button class="week-cal-nav" @click="prevWeek">‹ 上一周</button>
           <input type="date" class="week-cal-date-input" :value="fmtDate(calBase)" @change="gotoDate" title="跳转到指定日期所在周" />
           <span class="week-cal-label">{{ weekLabel }}</span>
           <button class="week-cal-nav" @click="nextWeek">下一周 ›</button>
-          <button class="week-cal-nav" @click="loadPresetSchedule">读取本周排程</button>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><span class="dot pending"></span>空闲</div>
-          <div class="legend-item"><span class="dot occupied"></span>已占用</div>
+          <div class="legend">
+            <div class="legend-item"><span class="dot pending"></span>空闲</div>
+            <div class="legend-item"><span class="dot occupied"></span>已占用</div>
+          </div>
         </div>
       </div>
 
@@ -415,7 +413,7 @@ async function confirmInstrumentSelection() {
             </div>
             <span class="selected-divider">|</span>
             <span class="selected-device">{{ selectedInfo.deviceName }}</span>
-            <span class="selected-process">{{ selectedInfo.targetTemp }}°C</span>
+            <span class="selected-process">{{ (selectedInfo.maxTemperature ?? selectedInfo.targetTemp) }}°C</span>
           </template>
           <span v-else class="selected-placeholder">请在日历中选择一个已排程的工单</span>
         </div>
@@ -480,11 +478,20 @@ async function confirmInstrumentSelection() {
         <section class="detail-card">
           <h3>工单信息</h3>
           <div class="detail-grid">
+            <div class="detail-field"><span>委托单位</span><strong>{{ displayValue(detailOrder.testApplicationUnit) }}</strong></div>
             <div class="detail-field"><span>申请人</span><strong>{{ displayValue(detailOrder.applicant) }}</strong></div>
+            <div class="detail-field"><span>申请人电话</span><strong>{{ displayValue(detailOrder.applicantPhone) }}</strong></div>
+            <div class="detail-field"><span>申请日期</span><strong>{{ displayValue(detailOrder.applicationDate || detailOrder.testDate) }}</strong></div>
             <div class="detail-field"><span>任务编号</span><strong>{{ displayValue(detailOrder.taskNumber) }}</strong></div>
+            <div class="detail-field"><span>科研编号</span><strong>{{ displayValue(detailOrder.researchNumber) }}</strong></div>
+            <div class="detail-field"><span>项目预算编号</span><strong>{{ displayValue(detailOrder.projectBudgetNumber) }}</strong></div>
+            <div class="detail-field"><span>项目名称</span><strong>{{ displayValue(detailOrder.projectName) }}</strong></div>
+            <div class="detail-field"><span>规格</span><strong>{{ displayValue(detailOrder.specification) }}</strong></div>
             <div class="detail-field"><span>使用设备</span><strong>{{ displayValue(getOrderDeviceSummary(detailOrder)) }}</strong></div>
-            <div class="detail-field"><span>目标温度</span><strong>{{ displayValue(detailOrder.targetTemp) }} °C</strong></div>
-            <div class="detail-field"><span>测试时长</span><strong>{{ displayValue(detailOrder.duration) }} 分钟</strong></div>
+            <div class="detail-field"><span>最高温度</span><strong>{{ displayValue(detailOrder.maxTemperature ?? detailOrder.targetTemp) }} °C</strong></div>
+            <div class="detail-field"><span>斜率</span><strong>{{ displayValue(detailOrder.slope) }}</strong></div>
+            <div class="detail-field"><span>保温时间</span><strong>{{ displayValue(detailOrder.holdTime ?? detailOrder.duration) }} 分钟</strong></div>
+            <div class="detail-field"><span>湿度</span><strong>{{ displayValue(detailOrder.humidity) }} %</strong></div>
             <div class="detail-field"><span>当前状态</span><strong>{{ getOrderStatusText(detailOrder) }}</strong></div>
           </div>
         </section>
@@ -577,13 +584,14 @@ async function confirmInstrumentSelection() {
 .priority-tag.normal { background:rgba(59,130,246,0.12); color:#3b82f6; }
 .priority-tag.low { background:rgba(34,197,94,0.12); color:#22c55e; }
 .main-content { flex:1 1 0; min-width:0; display:flex; flex-direction:column; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; overflow:hidden; }
-.week-cal-toolbar { display:flex; align-items:center; gap:8px; flex:1; }
-.week-cal-label { font-size:13px; font-weight:600; flex:1; text-align:center; white-space:nowrap; }
-.week-cal-nav { padding:5px 10px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg-primary); cursor:pointer; font-size:12px; color:var(--color-text-primary); transition:all 0.2s; }
-.week-cal-nav:hover { background:var(--color-bg-hover); }
+.calendar-toolbar-header { min-height:48px; padding:10px 16px; background:var(--color-bg-secondary); }
+.week-cal-toolbar { display:flex; align-items:center; gap:8px; flex:1; width:100%; }
+.week-cal-label { font-size:13px; font-weight:600; flex:1; text-align:center; white-space:nowrap; color:var(--color-text-primary); }
+.week-cal-nav { padding:5px 10px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg-primary); cursor:pointer; font-size:12px; font-weight:500; color:var(--color-text-primary); transition:all 0.2s; white-space:nowrap; }
+.week-cal-nav:hover { background:var(--color-bg-hover); border-color:var(--color-border); }
 .week-cal-date-input { padding:5px 8px; border:1px solid var(--color-border); border-radius:6px; font-size:12px; background:var(--color-bg-primary); color:var(--color-text-primary); width:130px; }
-.legend { display:flex; gap:16px; margin-left:auto; }
-.legend-item { display:flex; align-items:center; font-size:13px; color:var(--color-text-secondary); }
+.legend { display:flex; align-items:center; gap:16px; margin-left:4px; }
+.legend-item { display:flex; align-items:center; font-size:13px; line-height:1; font-weight:600; color:var(--color-text-secondary); white-space:nowrap; }
 .dot { width:8px; height:8px; border-radius:50%; margin-right:6px; }
 .dot.pending { background:var(--color-border); }
 .dot.occupied { background:var(--color-accent-blue); }
@@ -660,6 +668,12 @@ async function confirmInstrumentSelection() {
 @media (max-width: 900px) {
   .layout-container { flex-direction:column; }
   .sidebar { width:100%; min-height:320px; }
+  .calendar-toolbar-header { padding:10px 12px; }
+  .week-cal-toolbar { flex-wrap:wrap; gap:8px; }
+  .week-cal-label { flex:1 1 100%; order:-1; font-size:13px; }
+  .week-cal-date-input { width:130px; }
+  .legend { justify-content:center; gap:16px; }
+  .legend-item { font-size:13px; }
   .product-picker-row { grid-template-columns:auto minmax(0,1fr); }
   .product-sub, .product-order { grid-column:2; }
   .detail-grid { grid-template-columns:1fr; }

@@ -666,7 +666,7 @@ export function useVibrationSchedule() {
 
   function persistRunningInstrumentIds() {
     try {
-      window.localStorage.setItem(VIBRATION_RUNNING_INSTRUMENTS_KEY, JSON.stringify(runningInstrumentIds.value))
+      window.localStorage.removeItem(VIBRATION_RUNNING_INSTRUMENTS_KEY)
     } catch {
       // ignore storage failures
     }
@@ -674,7 +674,7 @@ export function useVibrationSchedule() {
 
   function persistCompletedInstrumentIds() {
     try {
-      window.localStorage.setItem(VIBRATION_COMPLETED_INSTRUMENTS_KEY, JSON.stringify(completedInstrumentIds.value))
+      window.localStorage.removeItem(VIBRATION_COMPLETED_INSTRUMENTS_KEY)
     } catch {
       // ignore storage failures
     }
@@ -682,10 +682,8 @@ export function useVibrationSchedule() {
 
   function hydrateRunningInstrumentIds() {
     try {
-      const raw = window.localStorage.getItem(VIBRATION_RUNNING_INSTRUMENTS_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as Record<string, true>
-      runningInstrumentIds.value = parsed && typeof parsed === 'object' ? parsed : {}
+      window.localStorage.removeItem(VIBRATION_RUNNING_INSTRUMENTS_KEY)
+      runningInstrumentIds.value = {}
     } catch {
       runningInstrumentIds.value = {}
     }
@@ -693,10 +691,8 @@ export function useVibrationSchedule() {
 
   function hydrateCompletedInstrumentIds() {
     try {
-      const raw = window.localStorage.getItem(VIBRATION_COMPLETED_INSTRUMENTS_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as Record<string, true>
-      completedInstrumentIds.value = parsed && typeof parsed === 'object' ? parsed : {}
+      window.localStorage.removeItem(VIBRATION_COMPLETED_INSTRUMENTS_KEY)
+      completedInstrumentIds.value = {}
     } catch {
       completedInstrumentIds.value = {}
     }

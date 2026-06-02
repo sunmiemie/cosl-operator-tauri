@@ -17,7 +17,6 @@ const {
   prevWeek,
   nextWeek,
   gotoDate,
-  loadPresetSchedule,
   getCellKey,
   getOrderById,
   handleDragStart,
@@ -103,17 +102,16 @@ const {
     </div>
 
     <div class="main-content">
-      <div class="panel-header">
+      <div class="panel-header calendar-toolbar-header">
         <div class="week-cal-toolbar">
           <button class="week-cal-nav" @click="prevWeek">‹ 上一周</button>
           <input type="date" class="week-cal-date-input" :value="fmtDate(calBase)" @change="gotoDate" title="跳转到指定日期所在周" />
           <span class="week-cal-label">{{ weekLabel }}</span>
           <button class="week-cal-nav" @click="nextWeek">下一周 ›</button>
-          <button class="week-cal-nav" @click="loadPresetSchedule">读取本周排程</button>
-        </div>
-        <div class="legend">
-          <div class="legend-item"><span class="dot pending"></span>空闲</div>
-          <div class="legend-item"><span class="dot occupied"></span>已占用</div>
+          <div class="legend">
+            <div class="legend-item"><span class="dot pending"></span>空闲</div>
+            <div class="legend-item"><span class="dot occupied"></span>已占用</div>
+          </div>
         </div>
       </div>
 
@@ -225,13 +223,14 @@ const {
 .filter-tag { border:none; background:transparent; padding:4px 8px; font-size:12px; border-radius:4px; color:var(--color-text-secondary); cursor:pointer; }
 .filter-tag.active { background:var(--color-accent-blue); color:white; }
 .main-content { flex:1; display:flex; flex-direction:column; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; overflow:hidden; }
-.week-cal-toolbar { display:flex; align-items:center; gap:8px; flex:1; }
-.week-cal-label { font-size:13px; font-weight:600; flex:1; text-align:center; white-space:nowrap; }
-.week-cal-nav { padding:5px 10px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg-primary); cursor:pointer; font-size:12px; color:var(--color-text-primary); transition:all 0.2s; }
-.week-cal-nav:hover { background:var(--color-bg-hover); }
+.calendar-toolbar-header { min-height:48px; padding:10px 16px; background:var(--color-bg-secondary); }
+.week-cal-toolbar { display:flex; align-items:center; gap:8px; flex:1; width:100%; }
+.week-cal-label { font-size:13px; font-weight:600; flex:1; text-align:center; white-space:nowrap; color:var(--color-text-primary); }
+.week-cal-nav { padding:5px 10px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg-primary); cursor:pointer; font-size:12px; font-weight:500; color:var(--color-text-primary); transition:all 0.2s; white-space:nowrap; }
+.week-cal-nav:hover { background:var(--color-bg-hover); border-color:var(--color-border); }
 .week-cal-date-input { padding:5px 8px; border:1px solid var(--color-border); border-radius:6px; font-size:12px; background:var(--color-bg-primary); color:var(--color-text-primary); width:130px; }
-.legend { display:flex; gap:16px; margin-left:auto; }
-.legend-item { display:flex; align-items:center; font-size:13px; color:var(--color-text-secondary); }
+.legend { display:flex; align-items:center; gap:16px; margin-left:4px; }
+.legend-item { display:flex; align-items:center; font-size:13px; line-height:1; font-weight:600; color:var(--color-text-secondary); white-space:nowrap; }
 .dot { width:8px; height:8px; border-radius:50%; margin-right:6px; }
 .dot.pending { background:var(--color-border); }
 .dot.occupied { background:var(--color-accent-blue); }
@@ -273,4 +272,14 @@ const {
 .primary-btn { display:flex; align-items:center; gap:8px; padding:12px 24px; border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; transition:all 0.2s ease; background:var(--color-primary,#3b82f6); color:white; }
 .primary-btn:hover:not(:disabled) { opacity:0.9; transform:translateY(-1px); }
 .primary-btn:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
+@media (max-width: 900px) {
+  .layout-container { flex-direction:column; }
+  .sidebar { width:100%; min-height:320px; }
+  .calendar-toolbar-header { padding:10px 12px; }
+  .week-cal-toolbar { flex-wrap:wrap; gap:8px; }
+  .week-cal-label { flex:1 1 100%; order:-1; font-size:13px; }
+  .week-cal-date-input { width:130px; }
+  .legend { justify-content:center; gap:16px; }
+  .legend-item { font-size:13px; }
+}
 </style>

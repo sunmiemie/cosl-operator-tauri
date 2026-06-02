@@ -20,6 +20,17 @@ export type HighTempBoxOrderDTO = {
   task_number: string
   target_temp: number
   applicant: string
+  applicant_phone?: string
+  test_application_unit?: string
+  application_date?: string | null
+  research_number?: string
+  project_budget_number?: string
+  project_name?: string
+  specification?: string
+  max_temperature?: number | null
+  slope?: string | number | null
+  hold_time?: number | null
+  humidity?: string | number | null
   remark: string
   feedback_reason: string
   status: number
@@ -47,9 +58,20 @@ export type HighTempBoxOrder = {
   dbId: number
   taskNumber: string
   applicant: string
+  applicantPhone: string
+  testApplicationUnit: string
+  applicationDate: string
+  researchNumber: string
+  projectBudgetNumber: string
+  projectName: string
+  specification: string
   deviceName: string
   deviceNumber: string
   targetTemp: number
+  maxTemperature: number
+  slope: string
+  holdTime: number
+  humidity: string
   duration: number
   testPlatform: string
   testDate: string
@@ -64,16 +86,39 @@ export type HighTempBoxOrder = {
   updatedAt: string
 }
 
+function toNumber(value: unknown, fallback = 0): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function toText(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  return String(value)
+}
+
 export function mapHighTempBoxOrder(dto: HighTempBoxOrderDTO): HighTempBoxOrder {
+  const maxTemperature = toNumber(dto.max_temperature ?? dto.target_temp, 0)
+  const holdTime = toNumber(dto.hold_time ?? dto.run_time, 0)
   return {
     id: dto.task_number,
     dbId: dto.id,
     taskNumber: dto.task_number,
     applicant: dto.applicant,
+    applicantPhone: dto.applicant_phone || '',
+    testApplicationUnit: dto.test_application_unit || '',
+    applicationDate: dto.application_date || dto.test_date || '',
+    researchNumber: dto.research_number || '',
+    projectBudgetNumber: dto.project_budget_number || '',
+    projectName: dto.project_name || '',
+    specification: dto.specification || '',
     deviceName: dto.device_name,
     deviceNumber: dto.device_number,
     targetTemp: dto.target_temp,
-    duration: dto.run_time,
+    maxTemperature,
+    slope: toText(dto.slope),
+    holdTime,
+    humidity: toText(dto.humidity),
+    duration: holdTime || dto.run_time,
     testPlatform: dto.test_platform,
     testDate: dto.test_date,
     remark: dto.remark,
@@ -118,14 +163,15 @@ export type ListHighTempBoxOrdersParams = {
 }
 
 export async function listHighTempBoxOrders(
-  params: ListHighTempBoxOrdersParams
+  params: ListHighTempBoxOrdersParams,
+  headers?: Record<string, string>
 ): Promise<ApiResponse<HighTempBoxOrderListResponse>> {
   const query: Record<string, string> = {}
   if (params.page !== undefined) query.page = String(params.page)
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.taskNumber) query.taskNumber = params.taskNumber
   if (params.status !== undefined) query.status = String(params.status)
-  return http.get<HighTempBoxOrderListResponse>('/test/high-temp-box/order/list/', {}, query)
+  return http.get<HighTempBoxOrderListResponse>('/test/high-temp-box/order/list/', headers || {}, query)
 }
 
 export type HighTempBoxOrderWriteResponse = {
@@ -163,6 +209,17 @@ export type UpdateHighTempBoxOrderBody = Partial<
     | 'task_number'
     | 'target_temp'
     | 'applicant'
+    | 'applicant_phone'
+    | 'test_application_unit'
+    | 'application_date'
+    | 'research_number'
+    | 'project_budget_number'
+    | 'project_name'
+    | 'specification'
+    | 'max_temperature'
+    | 'slope'
+    | 'hold_time'
+    | 'humidity'
     | 'remark'
     | 'feedback_reason'
     | 'status'
