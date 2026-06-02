@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
-import { updateWaterCycleOrder, type WaterCycleOrder } from '@/services/water-cycle-api'
+import { updateWaterCycleOrder } from '@/services/water-cycle-api'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { useAuth } from '@/composables/useAuth'
 
 // 跳出一层目录 (../) 找到逻辑层
 import { useSchedule } from '../composables/useSchedule'
-import { currentView, selectedOrder, selectedWaterCycleInstrumentIds } from '../composables/useTestStore'
+import { currentView, selectedOrder } from '../composables/useTestStore'
 
 // 引入同级组件
 import StartupCheckModal from './StartupCheckModal.vue'
@@ -18,10 +17,9 @@ const { initAuth, getAuthHeaders } = useAuth()
 // 引入抽象出的排程逻辑
 const {
   searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
-  unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, getCellKey, getMonday,
+  unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, loadPresetSchedule, getCellKey, getMonday,
   handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
-  workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload,
-  getActiveInstruments, isInstrumentRunning, markInstrumentsRunning
+  workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload
 } = useSchedule()
 
 const timeColWidth = 60
@@ -30,11 +28,6 @@ const gridScrollRef = ref<HTMLElement | null>(null)
 const gridViewportWidth = ref(0)
 let ro: ResizeObserver | null = null
 const gridInnerRef = ref<HTMLElement | null>(null)
-const expandedOrderIds = ref<string[]>([])
-const detailVisible = ref(false)
-const detailOrder = ref<WaterCycleOrder | null>(null)
-const instrumentPickerVisible = ref(false)
-const pickerInstrumentIds = ref<string[]>([])
 const handleWindowFocus = () => {
   if (workOrdersLoading.value) return
   refreshWorkOrders()
@@ -51,87 +44,6 @@ const gridInnerWidth = computed(() => {
   const base = Math.max(0, gridViewportWidth.value - timeColWidth)
   return timeColWidth + base * widthFactor.value
 })
-
-const scheduledOrderIdSet = computed(() => new Set(scheduledLayoutItems.value.map((item) => item.orderId)))
-
-const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
-
-function toggleExpanded(orderId: string) {
-  const set = new Set(expandedOrderIds.value)
-  if (set.has(orderId)) set.delete(orderId)
-  else set.add(orderId)
-  expandedOrderIds.value = Array.from(set)
-}
-
-const displayValue = (value: unknown) => {
-  if (value === undefined || value === null || value === '') return '-'
-  return String(value)
-}
-
-const getInstrumentCount = (order: WaterCycleOrder) => {
-  const active = getActiveInstruments(order)
-  if (active.length) return active.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0)
-  return 1
-}
-
-const getOrderDeviceSummary = (order: WaterCycleOrder) => order.deviceName || order.testPlatform || '-'
-
-const getOrderStatusText = (order: WaterCycleOrder) => {
-  if (getActiveInstruments(order).some((item) => isInstrumentRunning(item.id))) return '测试中'
-  if (order.status === 2) return '测试中'
-  if (order.status === 5 || order.status === 3) return '已完成'
-  if (order.status === 6) return '异常'
-  if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
-  return '待排程'
-}
-
-const getStatusClass = (statusText: string) => {
-  if (statusText === '测试中') return 'status-running'
-  if (statusText === '已排程') return 'status-scheduled'
-  if (statusText === '已完成') return 'status-done'
-  if (statusText === '异常') return 'status-error'
-  return 'status-pending'
-}
-
-const getInstrumentStatusText = (order: WaterCycleOrder, instrumentId: string) => {
-  const instrument = order.instruments.find((item) => item.id === instrumentId)
-  if (instrument?.status === 2 || instrument?.completed) return '已完成'
-  if (instrument?.status === 1 || isInstrumentRunning(instrumentId)) return '测试中'
-  if (order.status === 2) return '待排程'
-  if (scheduledOrderIdSet.value.has(order.id)) return '已排程'
-  return '待排程'
-}
-
-const selectedOrderForPicker = computed(() => selectedScheduledOrders.value[0] as WaterCycleOrder | undefined)
-const pickerRows = computed(() => {
-  const order = selectedOrderForPicker.value
-  return order ? getActiveInstruments(order) : []
-})
-
-function togglePickerInstrument(instrumentId: string, checked: boolean) {
-  const set = new Set(pickerInstrumentIds.value)
-  if (checked) set.add(instrumentId)
-  else set.delete(instrumentId)
-  pickerInstrumentIds.value = Array.from(set)
-}
-
-function selectAllPickerInstruments() {
-  pickerInstrumentIds.value = pickerRows.value.map((item) => item.id)
-}
-
-function clearPickerInstruments() {
-  pickerInstrumentIds.value = []
-}
-
-function openDetail(order: WaterCycleOrder) {
-  detailOrder.value = order
-  detailVisible.value = true
-}
-
-function closeDetail() {
-  detailVisible.value = false
-  detailOrder.value = null
-}
 
 onMounted(() => {
   if (!gridScrollRef.value) return
@@ -154,7 +66,7 @@ onBeforeUnmount(() => {
 })
 
 const getScheduledStyle = (item: any) => {
-  const ev = getEvent(item.eventId)
+  const ev = getEvent(item.orderId)
   if (!ev) return {}
   const totalWidth = gridInnerWidth.value || 0
   const dayColW = totalWidth > timeColWidth ? (totalWidth - timeColWidth) / 7 : 0
@@ -222,24 +134,7 @@ function gotoDate(e: Event) {
 // 点击开始实验按钮
 async function handleStartTest() {
   if (selectedScheduledOrders.value.length > 0) {
-    const o = selectedScheduledOrders.value[0] as WaterCycleOrder
-    const activeInstruments = getActiveInstruments(o)
-    if (activeInstruments.length === 0) {
-      ElMessage.warning('当前工单没有可开始测试的仪器')
-      return
-    }
-    pickerInstrumentIds.value = activeInstruments.map((item) => item.id)
-    instrumentPickerVisible.value = true
-  }
-}
-
-async function confirmInstrumentSelection() {
-  const o = selectedOrderForPicker.value
-  if (!o) return
-  if (pickerInstrumentIds.value.length === 0) {
-    ElMessage.warning('请先选择本次要测试的仪器')
-    return
-  }
+    const o = selectedScheduledOrders.value[0]
     const p = getScheduleChangePayload(o.id)
     console.log('[water-cycle schedule]', p ? `${p.startAtHour} ~ ${p.endAtHour}` : '', p)
     if (p) {
@@ -272,10 +167,9 @@ async function confirmInstrumentSelection() {
       }
     }
     // 将当前选中打算测试的工单存入全局状态，供后续页面使用
-    selectedOrder.value = o
-    selectedWaterCycleInstrumentIds.value = pickerInstrumentIds.value.slice()
-    instrumentPickerVisible.value = false
+    selectedOrder.value = selectedScheduledOrders.value[0]
     showStartupCheck.value = true
+  }
 }
 
 // 开机检查完毕，切换视图
@@ -284,16 +178,11 @@ async function onStartupComplete() {
   const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
   if (orderId !== undefined) {
     await initAuth()
-    const runningInstrumentIds = (order?.instruments || [])
-      .filter((instrument) => selectedWaterCycleInstrumentIds.value.includes(instrument.id))
-      .map((instrument) => instrument.dbId)
-      .filter((id): id is number => typeof id === 'number')
-    const resp = await updateWaterCycleOrder(orderId, { status: 2, running_instrument_ids: runningInstrumentIds }, getAuthHeaders())
+    const resp = await updateWaterCycleOrder(orderId, { status: 2 }, getAuthHeaders())
     if (!resp.success || !resp.data || resp.data.code !== 0) {
       const ok = confirm('工单状态更新失败，是否仍继续开始实验？')
       if (!ok) return
     } else {
-      markInstrumentsRunning(selectedWaterCycleInstrumentIds.value)
       void refreshWorkOrders()
     }
   }
@@ -324,84 +213,6 @@ async function onStartupComplete() {
       <div class="table-content">
         <div v-if="unscheduledOrders.length === 0" class="empty-state"><p>无待排程工单</p></div>
         <div v-else class="table-wrapper">
-          <table class="water-order-table">
-            <colgroup>
-              <col class="col-applicant" />
-              <col class="col-task" />
-              <col class="col-action" />
-              <col class="col-status" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>申请人</th>
-                <th>任务编号</th>
-                <th>操作</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <template v-for="order in unscheduledOrders" :key="order.id">
-                <tr
-                  class="order-row"
-                  :class="{ 'is-scheduled': scheduledOrderIdSet.has(order.id), 'is-expanded': isExpanded(order.id) }"
-                  draggable="true"
-                  @click="toggleExpanded(order.id)"
-                  @dragstart="handleDragStart($event, order)"
-                  @dragend="handleDragEnd"
-                >
-                  <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
-                  <td class="cell-id" :title="order.taskNumber">
-                    <div class="cell-detail cell-task-detail">
-                      <span class="expand-icon" @click.stop="toggleExpanded(order.id)">
-                        <Icon :icon="isExpanded(order.id) ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
-                      </span>
-                      <span class="device-summary" :title="order.taskNumber">{{ order.taskNumber }}</span>
-                    </div>
-                  </td>
-                  <td class="cell-action">
-                    <button class="op-btn view" @click.stop="openDetail(order)">详情</button>
-                  </td>
-                  <td class="cell-status" :title="getOrderStatusText(order)">
-                    <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">
-                      {{ getOrderStatusText(order) }}
-                    </span>
-                  </td>
-                </tr>
-                <tr v-if="isExpanded(order.id)" :key="order.id + '-expanded'">
-                  <td class="expanded-cell" colspan="4">
-                    <div class="instrument-panel">
-                      <div class="instrument-panel-head">
-                        <div>
-                          <div class="instrument-title">设备明细</div>
-                          <div class="instrument-subtitle">该工单包含的待测试设备</div>
-                        </div>
-                        <span class="instrument-count-pill">{{ getInstrumentCount(order) }} 台</span>
-                      </div>
-                      <div v-if="getActiveInstruments(order).length === 0" class="instrument-list">
-                        <div class="instrument-item">
-                          <div class="instrument-main">
-                            <span class="instrument-name">{{ order.deviceName || '-' }}</span>
-                            <span class="instrument-sn">{{ order.deviceNumber || '-' }}</span>
-                          </div>
-                          <span class="status-pill" :class="getStatusClass(getOrderStatusText(order))">{{ getOrderStatusText(order) }}</span>
-                        </div>
-                      </div>
-                      <div v-else class="instrument-list">
-                        <div v-for="instrument in getActiveInstruments(order)" :key="instrument.id" class="instrument-item">
-                          <div class="instrument-main">
-                            <span class="instrument-name">{{ instrument.name }}</span>
-                            <span class="instrument-sn">{{ instrument.sn }}</span>
-                          </div>
-                          <span class="instrument-quantity">{{ instrument.quantity || 1 }} 台</span>
-                          <span class="status-pill" :class="getStatusClass(getInstrumentStatusText(order, instrument.id))">{{ getInstrumentStatusText(order, instrument.id) }}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
           <table class="data-table">
             <thead><tr><th>任务单号</th><th>申请人</th><th>设备名称</th><th>流程长度</th><th>测试台</th></tr></thead>
             <tbody>
@@ -427,6 +238,7 @@ async function onStartupComplete() {
           <input type="date" class="week-cal-date-input" :value="fmtDate(calBase)" @change="gotoDate" />
           <span class="week-cal-label">{{ weekLabel }}</span>
           <button class="week-cal-nav" @click="nextWeek">下一周 ›</button>
+          <button class="week-cal-nav" @click="loadPresetSchedule">读取本周排程</button>
         </div>
         <div class="legend">
           <div class="legend-item"><span class="dot pending"></span>空闲</div>
@@ -460,11 +272,11 @@ async function onStartupComplete() {
                   v-for="it in scheduledLayoutItems
                     .map((x) => ({ ...x, dayIndex: currentWeekDays.findIndex((d) => d.dateStr === x.dateStr) }))
                     .filter((x) => x.dayIndex >= 0)"
-                  :key="it.eventId"
+                  :key="it.orderId"
                   class="scheduled-item"
                   :class="{
                     'is-selected': selectedScheduledOrderIds.includes(it.orderId),
-                    'is-resizing': isResizing && resizingOrderId === it.eventId
+                    'is-resizing': isResizing && resizingOrderId === it.orderId
                   }"
                   :style="getScheduledStyle(it)"
                   @click="selectScheduledOrder(it.orderId)"
@@ -472,13 +284,13 @@ async function onStartupComplete() {
                 >
                   <div class="scheduled-content">
                     <span class="device-name">{{ getOrderById(it.orderId)?.taskNumber }}</span>
-                    <button class="remove-btn" title="删除排程" @click.stop="handleUnschedule(it.cellKey, it.orderId, it.eventId)">
+                    <button class="remove-btn" title="删除排程" @click.stop="handleUnschedule(it.cellKey, it.orderId)">
                       <Icon icon="mdi:close" />
                     </button>
                   </div>
                   <div class="scheduled-tag">{{ getOrderById(it.orderId)?.deviceName }}</div>
-                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.eventId, $event)"></div>
-                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.eventId, $event)"></div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.orderId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="startResize(it.orderId, $event)"></div>
                 </div>
               </div>
 
@@ -519,128 +331,13 @@ async function onStartupComplete() {
       </div>
     </div>
   </div>
-
-  <div v-if="instrumentPickerVisible" class="product-picker-mask">
-    <div class="product-picker-dialog">
-      <div class="product-picker-header">
-        <div>
-          <h3>选择测试仪器</h3>
-          <p>已排程工单确认开始实验后，在这里选择本次实际开始测试的仪器。</p>
-        </div>
-        <button class="product-picker-close" type="button" @click="instrumentPickerVisible = false">
-          <Icon icon="mdi:close" />
-        </button>
-      </div>
-      <div class="product-picker-actions">
-        <button class="week-cal-nav" type="button" @click="selectAllPickerInstruments">全选</button>
-        <button class="week-cal-nav" type="button" @click="clearPickerInstruments">清空</button>
-        <span>已选择 {{ pickerInstrumentIds.length }} / {{ pickerRows.length }} 台仪器</span>
-      </div>
-      <div class="product-picker-list">
-        <label v-for="instrument in pickerRows" :key="instrument.id" class="product-picker-row">
-          <input
-            type="checkbox"
-            :checked="pickerInstrumentIds.includes(instrument.id)"
-            @change="togglePickerInstrument(instrument.id, ($event.target as HTMLInputElement).checked)"
-          />
-          <span class="product-main">{{ instrument.name }}</span>
-          <span class="product-sub">{{ instrument.sn || '-' }}</span>
-          <span class="product-order">{{ selectedOrderForPicker?.taskNumber }} · {{ selectedOrderForPicker?.applicant }}</span>
-        </label>
-      </div>
-      <div class="product-picker-footer">
-        <button class="week-cal-nav" type="button" @click="instrumentPickerVisible = false">取消</button>
-        <button class="primary-btn" type="button" @click="confirmInstrumentSelection">确认开始实验</button>
-      </div>
-    </div>
-  </div>
-
-  <div v-if="detailVisible" class="detail-modal-mask" @click.self="closeDetail">
-    <div class="detail-modal">
-      <div class="detail-modal-header">
-        <div>
-          <div class="detail-modal-title">工单详情</div>
-          <div class="detail-modal-subtitle">{{ detailOrder?.taskNumber || '-' }}</div>
-        </div>
-        <button class="detail-close" type="button" @click="closeDetail">
-          <Icon icon="mdi:close" />
-        </button>
-      </div>
-
-      <div v-if="detailOrder" class="detail-body">
-        <section class="detail-card">
-          <h3>工单信息</h3>
-          <div class="detail-grid">
-            <div class="detail-field">
-              <span>申请人</span>
-              <strong>{{ displayValue(detailOrder.applicant) }}</strong>
-            </div>
-            <div class="detail-field">
-              <span>任务编号</span>
-              <strong>{{ displayValue(detailOrder.taskNumber) }}</strong>
-            </div>
-            <div class="detail-field">
-              <span>使用设备</span>
-              <strong>{{ displayValue(getOrderDeviceSummary(detailOrder)) }}</strong>
-            </div>
-            <div class="detail-field">
-              <span>测试台</span>
-              <strong>{{ displayValue(detailOrder.testPlatform) }}</strong>
-            </div>
-            <div class="detail-field">
-              <span>流程长度</span>
-              <strong>{{ displayValue(detailOrder.flowProcess) }}</strong>
-            </div>
-            <div class="detail-field">
-              <span>当前状态</span>
-              <strong>{{ getOrderStatusText(detailOrder) }}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="detail-card">
-          <h3>设备明细</h3>
-          <div class="detail-instrument-list">
-            <div
-              v-for="instrument in detailOrder.instruments"
-              :key="instrument.id"
-              class="detail-instrument-item"
-            >
-              <div>
-                <strong>{{ displayValue(instrument.name) }}</strong>
-                <span>{{ displayValue(instrument.sn) }}</span>
-              </div>
-              <span class="instrument-quantity">{{ instrument.quantity || 1 }} 台</span>
-            </div>
-            <div v-if="detailOrder.instruments.length === 0" class="detail-instrument-item">
-              <div>
-                <strong>{{ displayValue(detailOrder.deviceName) }}</strong>
-                <span>{{ displayValue(detailOrder.deviceNumber) }}</span>
-              </div>
-              <span class="instrument-quantity">1 台</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="detail-card">
-          <h3>测试流程</h3>
-          <div class="steps-list">
-            <div class="step-item"><span>1</span><p>确认水循环管路、阀门和待测设备连接状态。</p></div>
-            <div class="step-item"><span>2</span><p>完成启动前检查，确认水泵、传感器和采集通道正常。</p></div>
-            <div class="step-item"><span>3</span><p>按排程开始水循环测试，实时记录流量、压力和温度等关键数据。</p></div>
-            <div class="step-item"><span>4</span><p>测试结束后保存数据并进入报告/复核流程。</p></div>
-          </div>
-        </section>
-      </div>
-    </div>
-  </div>
-
+  
   <StartupCheckModal v-if="showStartupCheck" @cancel="showStartupCheck = false" @complete="onStartupComplete" />
 </template>
 
 <style scoped>
 .layout-container { display:flex; flex:1; min-height:0; gap:16px; overflow:hidden; }
-.sidebar { width:520px; min-width:480px; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
+.sidebar { width:320px; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
 .main-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; }
 .panel-header { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 18px; border-bottom:1px solid var(--color-border); font-size:15px; font-weight:600; color:var(--color-text-primary); background:var(--color-bg-secondary); flex-shrink:0; }
 .sidebar .panel-header .header-title { display:flex; align-items:center; gap:8px; font-size:.875rem; font-weight:500; }
@@ -657,53 +354,7 @@ async function onStartupComplete() {
 .table-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); }
 .table-wrapper { flex:1; overflow:auto; }
 .empty-state { text-align:center; padding:40px 20px; color:#94a3b8; font-size:13px; }
-.data-table { display:none; }
-.water-order-table { width:100%; min-width:0; border-collapse:collapse; table-layout:fixed; font-size:13px; }
-.water-order-table .col-applicant { width:15%; }
-.water-order-table .col-task { width:42%; }
-.water-order-table .col-action { width:18%; }
-.water-order-table .col-status { width:25%; }
-.water-order-table thead { position:sticky; top:0; z-index:2; }
-.water-order-table th { padding:12px 6px; text-align:left; font-weight:700; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }
-.water-order-table td { padding:13px 6px; vertical-align:middle; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.order-row { position:relative; cursor:grab; user-select:none; transition:background .18s ease; }
-.order-row:active { cursor:grabbing; }
-.order-row td { background:var(--color-bg-secondary); border-bottom:1px solid rgba(255,255,255,.04); transition:background-color .15s ease; }
-.order-row td:first-child { border-left:3px solid transparent; }
-.order-row:hover td,
-.order-row.is-expanded td,
-.order-row.is-scheduled td { background:var(--color-bg-hover); }
-.order-row:hover td:first-child,
-.order-row.is-expanded td:first-child,
-.order-row.is-scheduled td:first-child { border-left-color:var(--color-accent-blue); }
-.cell-detail { display:flex; align-items:center; gap:4px; min-width:0; }
-.cell-task-detail { align-items:flex-start; }
-.expand-icon { width:18px; height:18px; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; color:var(--color-text-secondary); }
-.device-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.cell-task-detail .device-summary { overflow:visible; text-overflow:clip; white-space:normal; word-break:break-word; overflow-wrap:anywhere; line-height:1.35; }
-.cell-action,.cell-status { text-align:center; }
-.op-btn { min-width:48px; height:26px; padding:0 8px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; transition:all .18s ease; }
-.op-btn.view { color:#006be6; border:1px solid rgba(37,99,235,.25); background:rgba(59,130,246,.1); }
-.op-btn.view:hover { background:rgba(59,130,246,.18); }
-.status-pill { display:inline-flex; align-items:center; justify-content:center; min-width:54px; height:26px; padding:0 8px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; letter-spacing:.01em; }
-.status-pending { color:#d97706; border:1px solid rgba(245,158,11,.35); background:rgba(245,158,11,.12); }
-.status-scheduled { color:#006be6; border:1px solid rgba(37,99,235,.3); background:rgba(59,130,246,.12); }
-.status-running { color:#059669; border:1px solid rgba(16,185,129,.35); background:rgba(16,185,129,.14); }
-.status-done { color:#64748b; border:1px solid rgba(100,116,139,.2); background:rgba(100,116,139,.1); }
-.status-error { color:#dc2626; border:1px solid rgba(239,68,68,.25); background:rgba(239,68,68,.1); }
-.expanded-cell { padding:0 16px 12px 19px!important; white-space:normal!important; background:var(--color-bg-primary)!important; border-bottom:1px solid rgba(255,255,255,.04)!important; }
-.instrument-panel { margin:0; border-top:1px solid var(--color-border); padding:10px 0 0; border-radius:0; background:transparent; box-shadow:none; }
-.instrument-panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
-.instrument-title { font-size:12px; font-weight:600; color:var(--color-text-secondary); }
-.instrument-subtitle { margin-top:2px; font-size:11px; color:var(--color-text-tertiary); }
-.instrument-count-pill { display:inline-flex; align-items:center; justify-content:center; min-width:44px; height:22px; padding:0 8px; border-radius:999px; background:var(--color-bg-tertiary); color:var(--color-text-secondary); font-size:11px; font-weight:500; white-space:nowrap; }
-.instrument-list { display:flex; flex-direction:column; gap:8px; }
-.instrument-item { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:10px; background:transparent; }
-.instrument-item:hover { border-color:var(--color-border); background:var(--color-bg-hover); }
-.instrument-main { min-width:0; display:flex; flex-direction:column; gap:3px; }
-.instrument-name { color:var(--color-text-primary); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.instrument-sn { color:var(--color-text-secondary); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.instrument-quantity { color:var(--color-text-secondary); font-size:11px; font-weight:600; white-space:nowrap; }
+.data-table { width:100%; border-collapse:collapse; font-size:13px; }
 .data-table thead { position:sticky; top:0; z-index:1; }
 .data-table th { padding:12px 16px; text-align:left; font-weight:600; color:var(--color-text-secondary); background:var(--color-bg-secondary); border-bottom:1px solid var(--color-border); white-space:nowrap; }
 .data-table td { padding:12px 16px; border-bottom:1px solid rgba(255,255,255,.04); vertical-align:middle; }
@@ -774,53 +425,4 @@ async function onStartupComplete() {
 .primary-btn:hover:not(:disabled) { opacity:.9; transform:translateY(-1px); }
 .primary-btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
 .start-icon { font-size:20px; }
-.product-picker-mask { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(15,23,42,.5); backdrop-filter:blur(4px); }
-.product-picker-dialog { width:min(820px,92vw); max-height:82vh; display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--color-border); border-radius:18px; background:var(--color-bg-secondary); box-shadow:0 24px 80px rgba(15,23,42,.25); }
-.product-picker-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:22px 26px; border-bottom:1px solid var(--color-border); }
-.product-picker-header h3 { margin:0; font-size:20px; font-weight:800; color:var(--color-text-primary); }
-.product-picker-header p { margin:8px 0 0; color:var(--color-text-secondary); font-size:13px; }
-.product-picker-close { width:40px; height:40px; display:flex; align-items:center; justify-content:center; border:none; border-radius:12px; background:var(--color-bg-tertiary); color:var(--color-text-primary); cursor:pointer; }
-.product-picker-actions { display:flex; align-items:center; gap:12px; padding:16px 26px; border-bottom:1px solid var(--color-border); color:var(--color-text-secondary); }
-.product-picker-list { overflow:auto; padding:0 26px; }
-.product-picker-row { display:grid; grid-template-columns:24px minmax(0,1.4fr) minmax(0,1fr) minmax(0,1.6fr); align-items:center; gap:16px; padding:16px 0; border-bottom:1px solid var(--color-border); cursor:pointer; }
-.product-picker-row input { width:16px; height:16px; accent-color:var(--color-primary); }
-.product-main { font-weight:800; color:var(--color-text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.product-sub,.product-order { color:var(--color-text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.product-picker-footer { display:flex; justify-content:flex-end; align-items:center; gap:14px; padding:18px 26px; border-top:1px solid var(--color-border); }
-.detail-modal-mask { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:32px; background:rgba(15,23,42,.48); backdrop-filter:blur(4px); }
-.detail-modal { width:min(920px, 92vw); max-height:86vh; display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--color-border); border-radius:18px; background:var(--color-bg-secondary); box-shadow:0 24px 80px rgba(15,23,42,.24); }
-.detail-modal-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:22px 26px; border-bottom:1px solid var(--color-border); background:var(--color-bg-secondary); }
-.detail-modal-title { font-size:20px; font-weight:800; color:var(--color-text-primary); }
-.detail-modal-subtitle { margin-top:6px; font-size:13px; color:var(--color-text-secondary); }
-.detail-close { width:40px; height:40px; display:flex; align-items:center; justify-content:center; border:none; border-radius:12px; background:var(--color-bg-tertiary); color:var(--color-text-primary); cursor:pointer; font-size:20px; transition:all .18s ease; }
-.detail-close:hover { background:var(--color-bg-hover); }
-.detail-body { flex:1; overflow:auto; padding:22px 26px 26px; display:flex; flex-direction:column; gap:16px; }
-.detail-card { border:1px solid var(--color-border); border-radius:14px; background:var(--color-bg-primary); overflow:hidden; }
-.detail-card h3 { margin:0; padding:16px 18px; border-bottom:1px solid var(--color-border); font-size:16px; font-weight:800; color:var(--color-text-primary); }
-.detail-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; padding:16px 18px; }
-.detail-field { min-width:0; padding:12px 14px; border-radius:10px; background:var(--color-bg-secondary); border:1px solid rgba(148,163,184,.18); }
-.detail-field span { display:block; margin-bottom:6px; font-size:12px; color:var(--color-text-secondary); }
-.detail-field strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:15px; color:var(--color-text-primary); }
-.detail-instrument-list { display:flex; flex-direction:column; gap:10px; padding:16px 18px; }
-.detail-instrument-item { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 16px; border:1px solid var(--color-border); border-radius:12px; background:var(--color-bg-secondary); }
-.detail-instrument-item div { min-width:0; display:flex; flex-direction:column; gap:4px; }
-.detail-instrument-item strong { color:var(--color-text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.detail-instrument-item span { color:var(--color-text-secondary); }
-.steps-list { display:grid; gap:10px; padding:16px 18px; }
-.step-item { display:grid; grid-template-columns:28px minmax(0,1fr); align-items:start; gap:10px; padding:12px; border-radius:12px; background:var(--color-bg-secondary); }
-.step-item span { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:999px; color:#fff; background:var(--color-primary); font-weight:800; }
-.step-item p { margin:4px 0 0; color:var(--color-text-primary); line-height:1.55; }
-
-@media (max-width: 1180px) {
-  .layout-container { gap:12px; }
-  .sidebar { width:460px; min-width:420px; }
-  .water-order-table .col-applicant { width:14%; }
-  .water-order-table .col-task { width:43%; }
-}
-
-@media (max-width: 920px) {
-  .layout-container { flex-direction:column; }
-  .sidebar { width:100%; min-width:0; min-height:420px; }
-  .detail-grid { grid-template-columns:1fr; }
-}
 </style>

@@ -8,6 +8,7 @@ import {
   type SimulatedWellOrderDTO,
 } from '@/services/simulated-well-api'
 import { listSimulatedWellDownholeWorks } from '@/services/simulated-well-downhole-api'
+import { listSimulatedWellReports } from '@/services/simulated-well-report-api'
 import type { CalendarDay, DownholeDevice, TimeSlot, UnscheduledDeviceRow, WorkOrder } from '../types'
 
 function getMonday(d: Date) {
@@ -51,9 +52,35 @@ export function useSimulationWellSchedule() {
 
   const workOrders = ref<WorkOrder[]>([])
 
-  const buildSavedDownholeDeviceIds = (items: any[]) => {
+  const safeParseJson = (value: unknown) => {
+    if (!value || typeof value !== 'string') return {}
+    try {
+      return JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+
+  const buildReportedDownholeWorkNos = (items: any[]) => {
+    const set = new Set<string>()
+    ;(items || []).forEach((report) => {
+      const meta = {
+        ...safeParseJson(report?.remark),
+        ...(report?.report_json && typeof report.report_json === 'object' ? report.report_json : {}),
+      } as Record<string, unknown>
+      const workNo = normalizeText(
+        String(report?.task_number || meta.downhole_work_no || meta.task_number || meta.work_no || '')
+      )
+      if (workNo) set.add(workNo)
+    })
+    return set
+  }
+
+  const buildSavedDownholeDeviceIds = (items: any[], reportedWorkNos: Set<string>) => {
     const set = new Set<string>()
     ;(items || []).forEach((work) => {
+      const workNo = normalizeText(work?.work_no || '')
+      if (workNo && reportedWorkNos.has(workNo)) return
       const devices = Array.isArray(work?.devices) ? work.devices : []
       devices.forEach((device: any) => {
         const orderId = normalizeText(device?.orderId || device?.order_id || '')
@@ -68,7 +95,7 @@ export function useSimulationWellSchedule() {
   const refreshWorkOrders = async () => {
     await initAuth()
     const headers = getAuthHeaders()
-    const [orderRes1, orderRes2, downholeRes] = await Promise.all([
+    const [orderRes1, orderRes2, downholeRes, reportRes] = await Promise.all([
       listSimulatedWellOrders(
         { page: 1, pageSize: 2000, status: 1, includeDevices: true },
         headers
@@ -77,14 +104,20 @@ export function useSimulationWellSchedule() {
         { page: 1, pageSize: 2000, status: 2, includeDevices: true },
         headers
       ),
-      listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000 }, headers)
+      listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000 }, headers),
+      listSimulatedWellReports({ page: 1, pageSize: 2000 }, headers)
     ])
     if (!orderRes1.success || !orderRes2.success) return
     if (orderRes1.data?.code !== 0 || orderRes2.data?.code !== 0) return
 
+    const reportedDownholeWorkNos =
+      reportRes.success && reportRes.data?.code === 0
+        ? buildReportedDownholeWorkNos(reportRes.data.data?.list || [])
+        : new Set<string>()
+
     const savedDownholeDeviceIds =
       downholeRes.success && downholeRes.data?.code === 0
-        ? buildSavedDownholeDeviceIds(downholeRes.data.data?.list || [])
+        ? buildSavedDownholeDeviceIds(downholeRes.data.data?.list || [], reportedDownholeWorkNos)
         : new Set<string>()
 
     const combined = [...(orderRes1.data.data?.list || []), ...(orderRes2.data.data?.list || [])]

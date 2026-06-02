@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
 import {
   createSimulatedWellReport,
   createSimulatedWellReportWithFiles,
+  deleteSimulatedWellReport,
   listSimulatedWellReports,
   updateSimulatedWellReport,
   type SimulatedWellReportItem
@@ -24,9 +25,11 @@ import {
 } from '@/services/simulated-well-downhole-api'
 import extractedFields from './extracted_fields.json'
 
-defineProps<{
+const props = defineProps<{
   selectedOrders: any[]
   selectedDevices: any[]
+  autoCreateReport?: boolean
+  autoWorkNo?: string
 }>()
 
 const emit = defineEmits<{
@@ -87,6 +90,7 @@ const curveFiles = ref<File[]>([])
 const reportFiles = ref<File[]>([])
 const reportNextStepVisible = ref(false)
 const reportNextStepRemaining = ref(0)
+const autoStartedWorkNo = ref('')
 const testItemValues = reactive<Record<string, any>>({})
 const evaluationValues = reactive<Record<string, any>>({})
 
@@ -357,9 +361,13 @@ const reportRows = computed(() =>
     })
 )
 
-const selectableOperations = computed(() =>
-  operations.value.filter((item) => Number(item.device_count || 0) > 0 && Array.isArray(item.devices) && item.devices.length > 0)
-)
+const currentAutoWorkNo = computed(() => String(props.autoWorkNo || '').trim())
+
+const selectableOperations = computed(() => {
+  const rows = operations.value.filter((item) => Number(item.device_count || 0) > 0 && Array.isArray(item.devices) && item.devices.length > 0)
+  if (!props.autoCreateReport || !currentAutoWorkNo.value) return rows
+  return rows.filter((item) => String(item.work_no || '').trim() === currentAutoWorkNo.value)
+})
 
 const reportedDeviceKeys = computed(() => {
   const set = new Set<string>()
@@ -584,6 +592,39 @@ async function openCreateFlow() {
   await Promise.all([fetchOperations(), fetchReports()])
 }
 
+async function openCreateFlowForWorkNo(workNo: string) {
+  const normalizedWorkNo = String(workNo || '').trim()
+  if (!normalizedWorkNo) return
+  if (autoStartedWorkNo.value === normalizedWorkNo && mode.value === 'add-report') return
+
+  editingReport.value = null
+  reportNextStepVisible.value = false
+  mode.value = 'select-operation'
+  resetSelection()
+  await Promise.all([fetchOperations(), fetchReports()])
+
+  const work =
+    selectableOperations.value.find((item) => String(item.work_no || '').trim() === normalizedWorkNo) ||
+    operations.value.find((item) => String(item.work_no || '').trim() === normalizedWorkNo)
+
+  if (!work) {
+    autoStartedWorkNo.value = ''
+    ElMessage.warning('未找到刚保存的下井作业，请从列表中选择')
+    return
+  }
+
+  pickOperation(work)
+  const firstDevice = selectedOperationDevices.value[0]
+  if (!firstDevice) {
+    autoStartedWorkNo.value = ''
+    ElMessage.warning('该下井作业暂无可填写报告的测试设备')
+    return
+  }
+
+  autoStartedWorkNo.value = normalizedWorkNo
+  await pickDevice(firstDevice)
+}
+
 function backStep() {
   if (mode.value === 'add-report') {
     mode.value = 'select-operation'
@@ -665,6 +706,34 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   } finally {
     templateLoading.value = false
   }
+}
+
+async function deleteReport(row: SimulatedWellReportItem & { meta: ReportMeta }) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除报告 ${row.report_no}？删除后不可恢复。`,
+      '删除测试报告',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }
+    )
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(error instanceof Error ? error.message : '删除确认失败')
+    }
+    return
+  }
+
+  const res = await deleteSimulatedWellReport(row.id, getAuthHeaders())
+  if (!res.success) {
+    ElMessage.error(res.error || '删除测试报告失败')
+    return
+  }
+  if (res.data?.code !== 0) {
+    ElMessage.error(res.data?.msg || '删除测试报告失败')
+    return
+  }
+
+  ElMessage.success('测试报告已删除')
+  await Promise.all([fetchReports(), fetchOperations()])
 }
 
 function handleFileChange(event: Event) {
@@ -818,6 +887,15 @@ function batchDownload() {
 onMounted(async () => {
   await fetchReports()
 })
+
+watch(
+  () => [props.autoCreateReport, props.autoWorkNo],
+  ([autoCreate, workNo]) => {
+    if (!autoCreate || !workNo) return
+    void openCreateFlowForWorkNo(String(workNo))
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -920,6 +998,10 @@ onMounted(async () => {
                       <Icon icon="mdi:pencil-outline" />
                       <span>编辑</span>
                     </button>
+                    <button class="action-btn action-btn-danger" @click="deleteReport(row)">
+                      <Icon icon="mdi:trash-can-outline" />
+                      <span>删除</span>
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -930,8 +1012,17 @@ onMounted(async () => {
 
       <template v-else-if="mode === 'select-operation'">
         <div class="downhole-card">
-          <div class="downhole-card-title">步骤 1：选择下井作业 <span class="english-sub">Select Downhole Work</span></div>
-          <p class="section-desc">请选择一个已保存的下井作业，再从其测试设备中选择本次要创建报告的对象。</p>
+          <div class="downhole-card-title">
+            {{ props.autoCreateReport ? '当前下井作业' : '步骤 1：选择下井作业' }}
+            <span class="english-sub">{{ props.autoCreateReport ? 'Current Downhole Work' : 'Select Downhole Work' }}</span>
+          </div>
+          <p class="section-desc">
+            {{
+              props.autoCreateReport
+                ? '仅显示本次保存的下井作业，并从其测试设备中选择本次要创建报告的对象。'
+                : '请选择一个已保存的下井作业，再从其测试设备中选择本次要创建报告的对象。'
+            }}
+          </p>
 
           <div v-if="operationLoading" class="empty-state"><p>下井作业加载中...</p></div>
           <div v-else-if="!selectableOperations.length" class="empty-state"><p>暂无可用于创建报告的下井作业</p></div>

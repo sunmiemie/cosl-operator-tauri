@@ -13,17 +13,6 @@ export interface WorkOrder {
   dbId: number
   taskNumber: string
   applicant: string
-  applicantPhone?: string
-  testApplicationUnit?: string
-  applicationDate?: string
-  researchNumber?: string
-  projectBudgetNumber?: string
-  projectName?: string
-  specification?: string
-  maxTemperature?: number
-  slope?: string
-  holdTime?: number
-  humidity?: string
   deviceName: string
   deviceNumber: string
   targetTemp: number
@@ -34,18 +23,6 @@ export interface WorkOrder {
   status: number
   statusText?: string
   priority?: 'high' | 'normal' | 'low'
-  instruments: HighTempBoxInstrument[]
-  selectedInstruments?: HighTempBoxInstrument[]
-}
-
-export interface HighTempBoxInstrument {
-  id: string
-  dbId?: number | string
-  name: string
-  sn: string
-  quantity?: number
-  status?: number
-  completed?: boolean
 }
 
 interface TempHistoryPoint {
@@ -82,19 +59,6 @@ export function useHighTempBox() {
     reportNo: string
     taskNumber: string
     tester: string
-    applicant: string
-    applicantPhone: string
-    testApplicationUnit: string
-    applicationDate: string
-    researchNumber: string
-    projectBudgetNumber: string
-    projectName: string
-    specification: string
-    slope: string
-    holdTime: number
-    humidity: string
-    instrumentSummary: string
-    snSummary: string
     testDate: string
     completedAt: string
     targetTemp: number
@@ -123,7 +87,6 @@ export function useHighTempBox() {
   const slotHeightPx = 44
 
   type ScheduledEvent = {
-    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
@@ -132,91 +95,23 @@ export function useHighTempBox() {
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
   const workOrders = ref<WorkOrder[]>([])
-  const completedInstrumentIds = ref<Record<string, boolean>>({})
-  const runningInstrumentIds = ref<Record<string, boolean>>({})
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
   const visibleOrderStatus = 1
   const orderStatusMutating = ref(false)
-
-  const mockWorkOrders: WorkOrder[] = [
-    {
-      id: 'HTB-MOCK-001',
-      dbId: -1001,
-      taskNumber: 'HTB-MOCK-001',
-      applicant: '王工',
-      deviceName: '高温箱 A01',
-      deviceNumber: 'HTB-A01',
-      targetTemp: 125,
-      duration: 180,
-      testPlatform: '高温箱',
-      testDate: fmtDate(new Date()),
-      remark: '前端模拟工单',
-      status: 1,
-      statusText: '待测试',
-      priority: 'normal',
-      instruments: [
-        { id: 'HTB-MOCK-001-I1', name: '温度采集模块', sn: 'TEMP-24001', quantity: 1 },
-        { id: 'HTB-MOCK-001-I2', name: '控制板组件', sn: 'CTRL-24008', quantity: 1 },
-        { id: 'HTB-MOCK-001-I3', name: '传感器探头', sn: 'SEN-24019', quantity: 1 },
-      ],
-    },
-    {
-      id: 'HTB-MOCK-002',
-      dbId: -1002,
-      taskNumber: 'HTB-MOCK-002',
-      applicant: '李工',
-      deviceName: '高温箱 B02',
-      deviceNumber: 'HTB-B02',
-      targetTemp: 150,
-      duration: 240,
-      testPlatform: '高温箱',
-      testDate: fmtDate(new Date()),
-      remark: '前端模拟工单',
-      status: 1,
-      statusText: '待测试',
-      priority: 'high',
-      instruments: [
-        { id: 'HTB-MOCK-002-I1', name: '电源管理单元', sn: 'PWR-25003', quantity: 1 },
-        { id: 'HTB-MOCK-002-I2', name: '通讯转接板', sn: 'COM-25011', quantity: 1 },
-      ],
-    },
-  ]
-
-  const buildFallbackInstrument = (order: HighTempBoxOrder | WorkOrder): HighTempBoxInstrument => ({
-    id: `${order.id}-instrument-1`,
-    name: order.deviceName || '高温箱测试仪器',
-    sn: order.deviceNumber || order.taskNumber || order.id,
-    quantity: 1,
-  })
-
-  const withInstrumentState = (order: WorkOrder): WorkOrder => ({
-    ...order,
-    instruments: (order.instruments.length ? order.instruments : [buildFallbackInstrument(order)]).map((instrument) => ({
-      ...instrument,
-      completed: instrument.completed === true || instrument.status === 2 || !!completedInstrumentIds.value[instrument.id],
-    })),
-  })
-
-  const mapOrderWithInstruments = (order: HighTempBoxOrder): WorkOrder => ({
-    ...order,
-    instruments: order.instruments.length ? order.instruments : [buildFallbackInstrument(order)],
-  })
 
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     workOrdersError.value = null
 
     try {
-      const all: WorkOrder[] = []
+      const all: HighTempBoxOrder[] = []
       const pageSize = 100
       let page = 1
       let total = Infinity
 
-      const headers = (await initAuth()) ? getAuthHeaders() : undefined
-
       while (all.length < total) {
-        const resp = await listHighTempBoxOrders({ page, pageSize, status: visibleOrderStatus }, headers)
+        const resp = await listHighTempBoxOrders({ page, pageSize, status: visibleOrderStatus })
         if (!resp.success || !resp.data) {
           workOrdersError.value = resp.error || '获取高温箱工单失败'
           break
@@ -226,10 +121,7 @@ export function useHighTempBox() {
           break
         }
 
-        const chunk = resp.data.data.list
-          .map(mapHighTempBoxOrder)
-          .filter((o) => o.status === visibleOrderStatus)
-          .map(mapOrderWithInstruments)
+        const chunk = resp.data.data.list.map(mapHighTempBoxOrder).filter((o) => o.status === visibleOrderStatus)
         all.push(...chunk)
         total = resp.data.data.total
 
@@ -238,11 +130,9 @@ export function useHighTempBox() {
         if (page > 50) break
       }
 
-      const mockOnlyNew = mockWorkOrders.filter((mock) => !all.some((order) => order.id === mock.id))
-      workOrders.value = (all.length ? [...all, ...mockOnlyNew] : mockWorkOrders).map(withInstrumentState)
+      workOrders.value = all
     } catch (e) {
       workOrdersError.value = e instanceof Error ? e.message : '获取高温箱工单失败'
-      workOrders.value = mockWorkOrders.map(withInstrumentState)
     } finally {
       workOrdersLoading.value = false
     }
@@ -295,19 +185,15 @@ export function useHighTempBox() {
 
   const filteredOrders = computed(() => {
     return workOrders.value.filter(order => {
-      if (!getActiveInstruments(order).length) return false
+      const isScheduled = !!scheduledEvents.value[order.id]
+      if (isScheduled) return false
 
       if (searchKeyword.value) {
         const keyword = searchKeyword.value.toLowerCase()
         const matchId = order.id.toLowerCase().includes(keyword)
-        const matchTask = order.taskNumber.toLowerCase().includes(keyword)
         const matchApplicant = order.applicant.toLowerCase().includes(keyword)
         const matchDevice = order.deviceName.toLowerCase().includes(keyword)
-        const matchInstrument = order.instruments.some((instrument) =>
-          instrument.name.toLowerCase().includes(keyword) ||
-          instrument.sn.toLowerCase().includes(keyword)
-        )
-        if (!matchId && !matchTask && !matchApplicant && !matchDevice && !matchInstrument) return false
+        if (!matchId && !matchApplicant && !matchDevice) return false
       }
 
       if (activeFilter.value === 'high' && order.priority !== 'high') return false
@@ -360,8 +246,7 @@ export function useHighTempBox() {
 
   const selectedScheduledOrderInfo = computed(() => {
     if (!selectedScheduledOrder.value) return null
-    const ev = scheduledEvents.value[selectedScheduledOrder.value]
-    return ev ? getOrderById(ev.orderId) : getOrderById(selectedScheduledOrder.value)
+    return getOrderById(selectedScheduledOrder.value)
   })
 
   const isPreCheckComplete = computed(() => preCheckItems.value.every(i => i.checked))
@@ -412,39 +297,6 @@ export function useHighTempBox() {
 
   const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
-  const getActiveInstruments = (order: WorkOrder) => order.instruments.filter((instrument) =>
-    instrument.completed !== true &&
-    instrument.status !== 2 &&
-    !completedInstrumentIds.value[instrument.id]
-  )
-  const isInstrumentRunning = (instrumentId: string) => {
-    const instrument = workOrders.value.flatMap((order) => order.instruments).find((item) => item.id === instrumentId)
-    return instrument?.status === 1 || !!runningInstrumentIds.value[instrumentId]
-  }
-  const markInstrumentsRunning = (instrumentIds: string[]) => {
-    const next = { ...runningInstrumentIds.value }
-    instrumentIds.forEach((id) => {
-      if (id) next[id] = true
-    })
-    runningInstrumentIds.value = next
-  }
-  const clearRunningInstruments = (instrumentIds?: string[]) => {
-    if (!instrumentIds) {
-      runningInstrumentIds.value = {}
-      return
-    }
-    const next = { ...runningInstrumentIds.value }
-    instrumentIds.forEach((id) => delete next[id])
-    runningInstrumentIds.value = next
-  }
-  const markInstrumentsCompleted = (instrumentIds: string[]) => {
-    const next = { ...completedInstrumentIds.value }
-    instrumentIds.forEach((id) => {
-      if (id) next[id] = true
-    })
-    completedInstrumentIds.value = next
-    workOrders.value = workOrders.value.map(withInstrumentState)
-  }
 
   const timeKeyToIndex = computed(() => {
     const map: Record<string, number> = {}
@@ -467,8 +319,8 @@ export function useHighTempBox() {
     return timeSlots.value[endIdx]?.key || ''
   }
 
-  const getScheduleChangePayload = (eventId: string) => {
-    const ev = scheduledEvents.value[eventId]
+  const getScheduleChangePayload = (orderId: string) => {
+    const ev = scheduledEvents.value[orderId]
     if (!ev) return null
     const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
     if (!endTimeKey) return null
@@ -477,7 +329,6 @@ export function useHighTempBox() {
     if (!startHh || !endHh) return null
     return {
       orderId: ev.orderId,
-      eventId: ev.eventId,
       dateStr: ev.dateStr,
       startTimeKey: ev.startTimeKey,
       endTimeKey,
@@ -492,7 +343,7 @@ export function useHighTempBox() {
     Object.values(scheduledEvents.value).forEach((ev) => {
       const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
       if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.eventId)
+      map[cellKey].push(ev.orderId)
     })
     return map
   })
@@ -506,7 +357,6 @@ export function useHighTempBox() {
   })
 
   type ScheduledLayoutItem = {
-    eventId: string
     orderId: string
     dateStr: string
     startTimeKey: string
@@ -534,7 +384,7 @@ export function useHighTempBox() {
         })
         .filter((x) => x.startIdx >= 0)
         .map((x) => ({ ...x, endIdx: x.startIdx + x.span }))
-        .sort((a, b) => a.startIdx - b.startIdx || a.ev.eventId.localeCompare(b.ev.eventId))
+        .sort((a, b) => a.startIdx - b.startIdx || a.ev.orderId.localeCompare(b.ev.orderId))
 
       const counts = new Array(timeSlots.value.length + 1).fill(0)
       mapped.forEach((x) => {
@@ -544,7 +394,7 @@ export function useHighTempBox() {
       for (let i = 1; i < counts.length; i++) counts[i] += counts[i - 1]
 
       const laneEnds: number[] = []
-      const laneByEventId: Record<string, number> = {}
+      const laneByOrderId: Record<string, number> = {}
       mapped.forEach((x) => {
         let lane = laneEnds.findIndex((le) => le <= x.startIdx)
         if (lane === -1) {
@@ -553,7 +403,7 @@ export function useHighTempBox() {
         } else {
           laneEnds[lane] = x.endIdx
         }
-        laneByEventId[x.ev.eventId] = lane
+        laneByOrderId[x.ev.orderId] = lane
       })
 
       mapped.forEach((x) => {
@@ -563,13 +413,12 @@ export function useHighTempBox() {
           laneCount = Math.max(laneCount, counts[i] || 0)
         }
         out.push({
-          eventId: x.ev.eventId,
           orderId: x.ev.orderId,
           dateStr,
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
           span: x.span,
-          lane: laneByEventId[x.ev.eventId] ?? 0,
+          lane: laneByOrderId[x.ev.orderId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
         })
@@ -599,31 +448,31 @@ export function useHighTempBox() {
       { d: 0, t: '1000', id: 'HT-2024-002' },
       { d: 1, t: '1400', id: 'HT-2024-003' },
     ]
-    const scheduled = new Set(Object.values(scheduledEvents.value).map((event) => `${event.orderId}-${event.dateStr}-${event.startTimeKey}`))
+    const scheduled = new Set(Object.keys(scheduledEvents.value))
     presets.forEach(p => {
+      if (scheduled.has(p.id)) return
       const d = addDays(base, p.d)
       const dateStr = fmtDate(d)
-      if (scheduled.has(`${p.id}-${dateStr}-${p.t}`)) return
       scheduleOrder(p.id, dateStr, p.t, false)
     })
   }
 
-  function handleUnschedule(cellKey: string, orderId: string, eventId = orderId) {
+  function handleUnschedule(cellKey: string, orderId: string) {
     void cellKey
-    if (selectedScheduledOrder.value === eventId) selectedScheduledOrder.value = null
+    if (selectedScheduledOrder.value === orderId) selectedScheduledOrder.value = null
     const next = { ...scheduledEvents.value }
-    delete next[eventId]
+    delete next[orderId]
     scheduledEvents.value = next
   }
 
   function removeSchedule(cellKey: string) {
     const ev = scheduledTasks.value[cellKey]
     if (!ev) return
-    handleUnschedule(cellKey, ev.orderId, ev.eventId)
+    handleUnschedule(cellKey, ev.orderId)
   }
 
-  function selectScheduledTask(eventId: string) {
-    selectedScheduledOrder.value = selectedScheduledOrder.value === eventId ? null : eventId
+  function selectScheduledTask(orderId: string) {
+    selectedScheduledOrder.value = selectedScheduledOrder.value === orderId ? null : orderId
   }
 
   function handleDragStart(e: DragEvent, order: WorkOrder) {
@@ -662,17 +511,17 @@ export function useHighTempBox() {
     if (!orderId) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
+    if (scheduledEvents.value[orderId]) return
 
     const order = getOrderById(orderId)
     const span = Math.max(1, Math.ceil(Number(order?.duration || 0) / 60) || 1)
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
-    const eventId = `${orderId}-${dateStr}-${timeKey}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     scheduledEvents.value = {
       ...scheduledEvents.value,
-      [eventId]: { eventId, orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
+      [orderId]: { orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
     }
-    selectedScheduledOrder.value = eventId
+    selectedScheduledOrder.value = orderId
     if (isDragging.value) {
       isDragging.value = false
       draggedOrderId.value = null
@@ -688,34 +537,34 @@ export function useHighTempBox() {
     scheduleOrder(orderId, dateStr, timeKey, isPast)
   }
 
-  const getEvent = (eventId: string) => scheduledEvents.value[eventId]
+  const getEvent = (orderId: string) => scheduledEvents.value[orderId]
 
-  const setEventSpan = (eventId: string, span: number) => {
-    const ev = scheduledEvents.value[eventId]
+  const setEventSpan = (orderId: string, span: number) => {
+    const ev = scheduledEvents.value[orderId]
     if (!ev) return
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
     const maxSpan = Math.max(1, (timeSlots.value.length - 1) - startIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
-    scheduledEvents.value = { ...scheduledEvents.value, [eventId]: { ...ev, span: nextSpan } }
+    scheduledEvents.value = { ...scheduledEvents.value, [orderId]: { ...ev, span: nextSpan } }
   }
 
-  const resizing = ref<{ eventId: string; startY: number; originSpan: number; isTop?: boolean; originStartIdx?: number } | null>(null)
-  const resizingOrderId = computed(() => resizing.value?.eventId || null)
+  const resizing = ref<{ orderId: string; startY: number; originSpan: number; isTop?: boolean; originStartIdx?: number } | null>(null)
+  const resizingOrderId = computed(() => resizing.value?.orderId || null)
   const isResizing = computed(() => !!resizing.value)
 
-  const startResize = (eventId: string, e: MouseEvent) => {
-    const ev = scheduledEvents.value[eventId]
+  const startResize = (orderId: string, e: MouseEvent) => {
+    const ev = scheduledEvents.value[orderId]
     if (!ev) return
-    resizing.value = { eventId, startY: e.clientY, originSpan: ev.span, isTop: false }
+    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, isTop: false }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
       if (!ctx || ctx.isTop) return
       const delta = me.clientY - ctx.startY
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
-      setEventSpan(ctx.eventId, ctx.originSpan + deltaSlots)
+      setEventSpan(ctx.orderId, ctx.originSpan + deltaSlots)
     }
 
     const onUp = () => {
@@ -728,8 +577,8 @@ export function useHighTempBox() {
     window.addEventListener('mouseup', onUp)
   }
 
-  const setEventStartAndSpan = (eventId: string, newStartIdx: number, newSpan: number) => {
-    const ev = scheduledEvents.value[eventId]
+  const setEventStartAndSpan = (orderId: string, newStartIdx: number, newSpan: number) => {
+    const ev = scheduledEvents.value[orderId]
     if (!ev) return
 
     const safeStartIdx = Math.max(0, Math.min(newStartIdx, timeSlots.value.length - 1))
@@ -743,17 +592,17 @@ export function useHighTempBox() {
 
     scheduledEvents.value = {
       ...scheduledEvents.value,
-      [eventId]: { ...ev, startTimeKey: newTimeKey, span: safeSpan }
+      [orderId]: { ...ev, startTimeKey: newTimeKey, span: safeSpan }
     }
   }
 
-  const startResizeTop = (eventId: string, e: MouseEvent) => {
-    const ev = scheduledEvents.value[eventId]
+  const startResizeTop = (orderId: string, e: MouseEvent) => {
+    const ev = scheduledEvents.value[orderId]
     if (!ev) return
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
 
-    resizing.value = { eventId, startY: e.clientY, originSpan: ev.span, isTop: true, originStartIdx: startIdx }
+    resizing.value = { orderId, startY: e.clientY, originSpan: ev.span, isTop: true, originStartIdx: startIdx }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -767,7 +616,7 @@ export function useHighTempBox() {
 
       if (newSpan < 1) return
       
-      setEventStartAndSpan(ctx.eventId, newStartIdx, newSpan)
+      setEventStartAndSpan(ctx.orderId, newStartIdx, newSpan)
     }
 
     const onUp = () => {
@@ -780,23 +629,14 @@ export function useHighTempBox() {
     window.addEventListener('mouseup', onUp)
   }
 
-  async function startExperiment(eventId?: string, instrumentIds?: string[]) {
-    if (eventId) {
-      selectedScheduledOrder.value = eventId
+  async function startExperiment(orderId?: string) {
+    if (orderId) {
+      selectedScheduledOrder.value = orderId
     }
 
-    const selectedEvent = selectedScheduledOrder.value ? scheduledEvents.value[selectedScheduledOrder.value] : null
-    const selected = selectedScheduledOrderInfo.value || (selectedEvent ? getOrderById(selectedEvent.orderId) : null)
+    const selected = selectedScheduledOrderInfo.value || (selectedScheduledOrder.value ? getOrderById(selectedScheduledOrder.value) : null)
     if (!selected) return
-    const pendingInstruments = getActiveInstruments(selected)
-    const selectedInstruments = instrumentIds?.length
-      ? pendingInstruments.filter((instrument) => instrumentIds.includes(instrument.id))
-      : pendingInstruments
-    if (!selectedInstruments.length) {
-      alert('请先选择本次实际开始测试的仪器')
-      return
-    }
-    const scheduleInfo = selectedScheduledOrder.value ? getScheduleChangePayload(selectedScheduledOrder.value) : null
+    const scheduleInfo = getScheduleChangePayload(selected.id)
     console.log('[high-temp-box schedule]', scheduleInfo ? `${scheduleInfo.startAtHour} ~ ${scheduleInfo.endAtHour}` : '', scheduleInfo)
     if (scheduleInfo) {
       const ok = await initAuth()
@@ -830,29 +670,18 @@ export function useHighTempBox() {
 
     orderStatusMutating.value = true
     try {
-      if (selected.dbId > 0) {
-        const runningInstrumentIds = selectedInstruments
-          .map((instrument) => instrument.dbId)
-          .filter((id): id is number | string => id !== undefined)
-        const resp = await changeHighTempBoxOrderStatus(
-          selected.dbId,
-          2,
-          (await initAuth()) ? getAuthHeaders() : undefined,
-          { runningInstrumentIds }
-        )
-        if (!resp.success || !resp.data || resp.data.code !== 0) {
-          alert(resp.data?.msg || resp.error || '工单状态更新失败')
-          return
-        } else {
-          void refreshWorkOrders()
-        }
+      const resp = await changeHighTempBoxOrderStatus(selected.dbId, 2)
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        alert(resp.data?.msg || resp.error || '工单状态更新失败')
+        return
+      } else {
+        void refreshWorkOrders()
       }
     } finally {
       orderStatusMutating.value = false
     }
 
-    markInstrumentsRunning(selectedInstruments.map((instrument) => instrument.id))
-    currentWorkOrder.value = { ...selected, selectedInstruments }
+    currentWorkOrder.value = selected
     preCheckItems.value.forEach(i => (i.checked = false))
     shutdownCheckData.value = {}
     reportSnapshot.value = null
@@ -863,14 +692,11 @@ export function useHighTempBox() {
 
   async function cancelExperiment() {
     const order = currentWorkOrder.value
-    const orderId = typeof order?.dbId === 'number' && order.dbId > 0 ? order.dbId : undefined
+    const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const runningInstrumentIds = (order?.selectedInstruments || [])
-          .map((instrument) => instrument.dbId)
-          .filter((id): id is number | string => id !== undefined)
-        const resp = await changeHighTempBoxOrderStatus(orderId, 1, (await initAuth()) ? getAuthHeaders() : undefined, { runningInstrumentIds })
+        const resp = await changeHighTempBoxOrderStatus(orderId, 1)
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return
@@ -885,8 +711,6 @@ export function useHighTempBox() {
   }
 
   function backToDashboard() {
-    const selectedInstrumentIds = (currentWorkOrder.value?.selectedInstruments || []).map((instrument) => instrument.id)
-    if (selectedInstrumentIds.length) clearRunningInstruments(selectedInstrumentIds)
     currentStep.value = 'pre-check'
     currentView.value = 'dashboard'
     currentWorkOrder.value = null
@@ -961,27 +785,11 @@ export function useHighTempBox() {
     const diff = finalTemp === null ? null : Math.abs(finalTemp - targetTemp)
     const stabilityText =
       diff === null ? '未采集到有效温度数据' : diff <= 3 ? '温控稳定' : diff <= 8 ? '温度接近目标值' : '温度偏差较大'
-    const selectedInstruments = order.selectedInstruments?.length ? order.selectedInstruments : order.instruments
-    const instrumentSummary = selectedInstruments.map((instrument) => instrument.name).filter(Boolean).join('、')
-    const snSummary = selectedInstruments.map((instrument) => instrument.sn).filter(Boolean).join('、')
 
     return {
       reportNo: buildReportNo(order.taskNumber),
       taskNumber: order.taskNumber,
       tester: testerName.value,
-      applicant: order.applicant || '',
-      applicantPhone: order.applicantPhone || '',
-      testApplicationUnit: order.testApplicationUnit || '',
-      applicationDate: order.applicationDate || order.testDate || '',
-      researchNumber: order.researchNumber || '',
-      projectBudgetNumber: order.projectBudgetNumber || '',
-      projectName: order.projectName || '',
-      specification: order.specification || '',
-      slope: order.slope || '',
-      holdTime: order.holdTime ?? order.duration ?? 0,
-      humidity: order.humidity || '',
-      instrumentSummary,
-      snSummary,
       testDate: order.testDate,
       completedAt: formatDateTime(),
       targetTemp,
@@ -1031,23 +839,11 @@ export function useHighTempBox() {
 
   async function finishCompletedFlow() {
     const order = currentWorkOrder.value
-    const selectedInstrumentIds = (order?.selectedInstruments || []).map((instrument) => instrument.id)
-    const completedInstrumentDbIds = (order?.selectedInstruments || [])
-      .map((instrument) => instrument.dbId)
-      .filter((id): id is number | string => id !== undefined)
-    const freshOrder = order ? getOrderById(order.id) : null
-    const selectedSet = new Set(selectedInstrumentIds)
-    const willCompleteOrder = !!freshOrder && getActiveInstruments(freshOrder).every((instrument) => selectedSet.has(instrument.id))
-    const orderId = typeof order?.dbId === 'number' && order.dbId > 0 ? order.dbId : undefined
+    const orderId = typeof order?.dbId === 'number' ? order.dbId : undefined
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await changeHighTempBoxOrderStatus(
-          orderId,
-          willCompleteOrder ? 3 : 1,
-          (await initAuth()) ? getAuthHeaders() : undefined,
-          { completedInstrumentIds: completedInstrumentDbIds }
-        )
+        const resp = await changeHighTempBoxOrderStatus(orderId, 3)
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return
@@ -1057,10 +853,6 @@ export function useHighTempBox() {
       } finally {
         orderStatusMutating.value = false
       }
-    }
-    if (selectedInstrumentIds.length) {
-      markInstrumentsCompleted(selectedInstrumentIds)
-      clearRunningInstruments(selectedInstrumentIds)
     }
     backToDashboard()
   }
@@ -1072,7 +864,7 @@ export function useHighTempBox() {
 
   const displaySetTemp = computed(() => {
     if (ocrSetTemp.value !== null) return ocrSetTemp.value
-    return currentWorkOrder.value?.maxTemperature ?? currentWorkOrder.value?.targetTemp ?? '--'
+    return currentWorkOrder.value?.targetTemp ?? '--'
   })
 
   const displayCurrentTemp = computed(() => {
@@ -1534,10 +1326,6 @@ export function useHighTempBox() {
     fmtDate,
     getCellKey,
     getOrderById,
-    getActiveInstruments,
-    isInstrumentRunning,
-    markInstrumentsRunning,
-    clearRunningInstruments,
     loadPresetSchedule,
     handleUnschedule,
     removeSchedule,

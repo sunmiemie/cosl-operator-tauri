@@ -500,9 +500,9 @@ async function handleSaveDownhole(payload: any) {
     router.replace({
       path: '/simulation-well',
       query: {
-        view: 'active-test',
+        view: 'test-report',
+        autoCreate: '1',
         workNo: res.data.data?.work_no || '',
-        startDevices: JSON.stringify(activeStartDevicesSnapshot.value),
       },
     })
   } catch (e) {
@@ -733,6 +733,8 @@ async function handleSaveDownhole(payload: any) {
       v-else-if="currentView === 'test-report'"
       :selected-orders="startSelectedOrders"
       :selected-devices="startSelectedDevices"
+      :auto-create-report="route.query.autoCreate === '1'"
+      :auto-work-no="String(route.query.workNo || route.query.work_no || '')"
       @back="backToDashboard"
     />
   </div>

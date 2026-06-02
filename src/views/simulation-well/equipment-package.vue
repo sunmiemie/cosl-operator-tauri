@@ -985,9 +985,21 @@ onMounted(() => {
           <div class="form-section-header">测试环境</div>
           <div class="form-section-body">
             <div class="grid-fields-four">
-              <input v-model="wellDepth" class="form-input" placeholder="井深 m" />
-              <input v-model="wellTemperature" class="form-input" placeholder="井温 °C" />
-              <input v-model="wellPressure" class="form-input" placeholder="井压 ksi" />
+              <label class="labeled-input">
+                <span class="input-label">井深：</span>
+                <input v-model="wellDepth" class="form-input inline-field" />
+                <span class="input-unit">m</span>
+              </label>
+              <label class="labeled-input">
+                <span class="input-label">井温：</span>
+                <input v-model="wellTemperature" class="form-input inline-field" />
+                <span class="input-unit">°C</span>
+              </label>
+              <label class="labeled-input">
+                <span class="input-label">井压：</span>
+                <input v-model="wellPressure" class="form-input inline-field" />
+                <span class="input-unit">MPa</span>
+              </label>
             </div>
           </div>
         </div>
@@ -996,10 +1008,26 @@ onMounted(() => {
           <div class="form-section-header">测试井段</div>
           <div class="form-section-body">
             <div class="grid-fields-four">
-              <input v-model="mainIntervalFrom" class="form-input" placeholder="主测起始深度" />
-              <input v-model="mainIntervalTo" class="form-input" placeholder="主测终止深度" />
-              <input v-model="repeatIntervalFrom" class="form-input" placeholder="复测起始深度" />
-              <input v-model="repeatIntervalTo" class="form-input" placeholder="复测终止深度" />
+              <label class="labeled-input">
+                <span class="input-label">主测起始深度：</span>
+                <input v-model="mainIntervalFrom" class="form-input inline-field" />
+                <span class="input-unit">m</span>
+              </label>
+              <label class="labeled-input">
+                <span class="input-label">主测终止深度：</span>
+                <input v-model="mainIntervalTo" class="form-input inline-field" />
+                <span class="input-unit">m</span>
+              </label>
+              <label class="labeled-input">
+                <span class="input-label">复测起始深度：</span>
+                <input v-model="repeatIntervalFrom" class="form-input inline-field" />
+                <span class="input-unit">m</span>
+              </label>
+              <label class="labeled-input">
+                <span class="input-label">复测终止深度：</span>
+                <input v-model="repeatIntervalTo" class="form-input inline-field" />
+                <span class="input-unit">m</span>
+              </label>
             </div>
           </div>
         </div>
@@ -1380,6 +1408,49 @@ onMounted(() => {
 
 .form-input.full-width { width: 100%; }
 .form-input.small-inline { width: 50px; text-align: center; }
+.form-input.inline-field {
+  min-width: 0;
+  flex: 1;
+  height: 34px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.form-input.inline-field:focus {
+  border-color: transparent;
+}
+
+.labeled-input {
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.labeled-input:focus-within {
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.input-label {
+  flex: 0 0 auto;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.input-unit {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  white-space: nowrap;
+}
 
 .grid-fields-four {
   display: grid;
