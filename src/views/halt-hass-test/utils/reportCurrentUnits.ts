@@ -6,23 +6,26 @@ import type {
 
 function toMilliamps(value: number | null): number | null {
   if (value === null || !Number.isFinite(value)) return null
-  return Number((value * 1000).toFixed(6))
+  const converted = value * 1000
+  return Number.isFinite(converted) ? Number(converted.toFixed(6)) : null
 }
 
 function normalizeRecords(records?: HaltHassPeriodicRecord[]): HaltHassPeriodicRecord[] | undefined {
-  return records?.map(record => ({
+  return Array.isArray(records) ? records.filter(record => record && typeof record === 'object').map(record => ({
     ...record,
     current48v: toMilliamps(record.current48v),
     current90v: toMilliamps(record.current90v),
-  }))
+  })) : undefined
 }
 
 function normalizeSummary(summary?: HaltHassChartSummary): HaltHassChartSummary | undefined {
   if (!summary) return undefined
   return {
     ...summary,
-    current48v: summary.current48v.map(point => ({ ...point, value: toMilliamps(point.value) })),
-    current90v: summary.current90v.map(point => ({ ...point, value: toMilliamps(point.value) })),
+    current48v: (Array.isArray(summary.current48v) ? summary.current48v : [])
+      .filter(point => point && typeof point === 'object').map(point => ({ ...point, value: toMilliamps(point.value) })),
+    current90v: (Array.isArray(summary.current90v) ? summary.current90v : [])
+      .filter(point => point && typeof point === 'object').map(point => ({ ...point, value: toMilliamps(point.value) })),
   }
 }
 
