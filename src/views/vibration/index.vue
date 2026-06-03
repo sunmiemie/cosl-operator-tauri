@@ -378,7 +378,7 @@ async function backToDashboard(finalStatus: number = 1) {
       ? [currentWorkOrderSnapshot.value]
       : []
   let nextOrderStatus = finalStatus
-  let shouldRemoveSchedule = finalStatus === 5
+  let shouldRemoveSchedule = finalStatus === 5 || finalStatus === 1
   activeOrders.forEach((order) => {
     const selectedInstruments = order.selectedInstruments || []
     if (selectedInstruments.length) {
@@ -397,6 +397,9 @@ async function backToDashboard(finalStatus: number = 1) {
       for (const order of activeOrders) {
         if (order.dbId === undefined) continue
         const selectedInstruments = order.selectedInstruments || []
+        const runningInstrumentIds = finalStatus === 1
+          ? selectedInstruments.map((instrument) => instrument.dbId).filter((id): id is number | string => id !== undefined)
+          : []
         const completedInstrumentIds = finalStatus === 5
           ? selectedInstruments.map((instrument) => instrument.dbId).filter((id): id is number | string => id !== undefined)
           : []
@@ -404,7 +407,7 @@ async function backToDashboard(finalStatus: number = 1) {
           order.dbId,
           nextOrderStatus,
           authHeaders,
-          { completedInstrumentIds }
+          { runningInstrumentIds, completedInstrumentIds }
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
@@ -475,7 +478,7 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  backToDashboard(5)
+  backToDashboard(testMode.value === 'pre' ? 1 : 5)
 }
 
 function toggleShutdownCheck(id: number) {
