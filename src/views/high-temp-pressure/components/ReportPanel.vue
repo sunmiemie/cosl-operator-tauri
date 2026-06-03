@@ -17,6 +17,7 @@ const props = defineProps<{
   exportedCaptureDir: string
   curveChartImagePath: string
   curvePointCount: number
+  testElapsedSeconds: number
   ensureCurveChartImage?: () => Promise<string>
 }>()
 const emit = defineEmits<{
@@ -61,10 +62,7 @@ const submittedReportNo = ref('')
 const clientSubmitId = ref('')
 const shutdownChecks = ref([false, false, false, false, false])
 const shiftHours = ref('')
-const totalHours = computed(() => {
-  const value = Number(shiftHours.value)
-  return Number.isFinite(value) && value > 0 ? (475.18 + value).toFixed(2) : '475.18'
-})
+const shiftHoursTouched = ref(false)
 const taskSummary = ref('')
 const generatedCurveChartImagePath = ref('')
 const activeCurveChartImagePath = computed(() => props.curveChartImagePath || generatedCurveChartImagePath.value)
@@ -79,6 +77,28 @@ const orderNos = computed(() => Array.from(new Set(reportSelections.value.map((i
 const applicantNames = computed(() => Array.from(new Set(reportSelections.value.map((item) => item.order.applicant).filter(Boolean))).join(' / ') || '-')
 const instruments = computed(() => reportSelections.value.map((item) => `${item.instrument.label} ${item.instrument.sn}`).join(', ') || '-')
 const allFilesDone = computed(() => Object.values(fileStatuses.value).every((status) => status === 'done'))
+const previousRuntimeHours = computed(() => {
+  for (const selection of reportSelections.value) {
+    const value = [
+      selection.instrument.totalRuntimeHours,
+      selection.instrument.previousRuntimeHours,
+      selection.order.totalRuntimeHours,
+      selection.order.previousRuntimeHours,
+    ].find((item) => typeof item === 'number' && Number.isFinite(item) && item >= 0)
+    if (typeof value === 'number') return value
+  }
+  return 0
+})
+const actualShiftHours = computed(() => Math.max(0, (Number(props.testElapsedSeconds) || 0) / 3600))
+const formatRuntimeHours = (value: number) => {
+  if (!Number.isFinite(value) || value < 0) return '0.00'
+  return value.toFixed(2)
+}
+const totalHours = computed(() => {
+  const shiftValue = Number(shiftHours.value)
+  const safeShiftHours = Number.isFinite(shiftValue) && shiftValue >= 0 ? shiftValue : 0
+  return formatRuntimeHours(previousRuntimeHours.value + safeShiftHours)
+})
 const savePath = computed(() => props.exportedCaptureDir || '未获取到保存目录，请先完成视频识别结果保存')
 const savedFiles = [
   { icon: '📊', name: '高温高压监控数据.csv' },
@@ -183,6 +203,15 @@ onMounted(() => {
 watch(selectionSignature, () => {
   if (!uploadCompleted.value) resetReportStateForSelections()
 })
+
+watch(
+  () => [actualShiftHours.value, selectionSignature.value] as const,
+  ([hours]) => {
+    if (shiftHoursTouched.value) return
+    shiftHours.value = formatRuntimeHours(hours)
+  },
+  { immediate: true }
+)
 
 const submitReport = async () => {
   if (!reportSelections.value.length) {
@@ -583,7 +612,7 @@ const finishShutdown = () => {
         <div class="shutdown-form-grid">
           <div class="form-group">
             <div class="form-label">本班运转时间（小时）<span class="req">*</span></div>
-            <input v-model="shiftHours" class="form-control" type="number" min="0" step="0.1" placeholder="请输入本班运转时间" />
+            <input v-model="shiftHours" class="form-control" type="number" min="0" step="0.1" placeholder="请输入本班运转时间" @input="shiftHoursTouched = true" />
           </div>
           <div class="form-group">
             <div class="form-label">设备总运转时间</div>

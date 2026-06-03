@@ -65,6 +65,73 @@ function formatHoldTime(value: number | string | undefined | null) {
   return String(value)
 }
 
+const RUNTIME_HOUR_KEYS = [
+  'previous_runtime_hours',
+  'previous_run_hours',
+  'previous_running_hours',
+  'total_runtime_hours',
+  'total_run_hours',
+  'total_running_hours',
+  'equipment_runtime_hours',
+  'equipment_run_hours',
+  'equipment_total_runtime_hours',
+  'device_runtime_hours',
+  'device_run_hours',
+  'device_total_runtime_hours',
+  'operating_hours',
+  'operation_hours',
+  'running_hours',
+  'work_time_hours',
+]
+
+const RUNTIME_MINUTE_KEYS = [
+  'previous_runtime_minutes',
+  'previous_run_minutes',
+  'total_runtime_minutes',
+  'total_run_minutes',
+  'equipment_total_runtime_minutes',
+  'device_total_runtime_minutes',
+  'operating_minutes',
+  'running_minutes',
+]
+
+const RUNTIME_SECOND_KEYS = [
+  'previous_runtime_seconds',
+  'previous_run_seconds',
+  'total_runtime_seconds',
+  'total_run_seconds',
+  'equipment_total_runtime_seconds',
+  'device_total_runtime_seconds',
+  'operating_seconds',
+  'running_seconds',
+]
+
+function toNumberValue(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().replace(/,/g, '')
+  if (!normalized) return null
+  const numeric = Number(normalized)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+function pickRuntimeHours(source: Record<string, unknown> | null | undefined) {
+  if (!source) return null
+  for (const key of RUNTIME_HOUR_KEYS) {
+    const value = toNumberValue(source[key])
+    if (value !== null && value >= 0) return value
+  }
+  for (const key of RUNTIME_MINUTE_KEYS) {
+    const value = toNumberValue(source[key])
+    if (value !== null && value >= 0) return value / 60
+  }
+  for (const key of RUNTIME_SECOND_KEYS) {
+    const value = toNumberValue(source[key])
+    if (value !== null && value >= 0) return value / 3600
+  }
+  return null
+}
+
 function applyTaskDragPreview(e: DragEvent, order: WorkOrder) {
   if (!e.dataTransfer || typeof document === 'undefined') return
   const preview = document.createElement('div')
@@ -113,9 +180,11 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   const taskNumber = dto.task_number?.trim() || `HTP-${dto.id}`
   const useDevice = dto.use_device?.trim() || dto.device_name?.trim() || dto.test_platform?.trim() || '-'
   const itemsDto = normalizeInstrumentItems(dto, useDevice, taskNumber)
+  const orderRuntimeHours = pickRuntimeHours(dto as unknown as Record<string, unknown>)
   const items: InstrumentItem[] = itemsDto.map((it, idx) => {
     const name = (it.instrument_name || '').trim() || useDevice || '仪器'
     const sn = (it.instrument_sn || '').trim() || `${taskNumber}-${idx + 1}`
+    const instrumentRuntimeHours = pickRuntimeHours(it as unknown as Record<string, unknown>)
     const scheduleSegments: InstrumentScheduleSegment[] = Array.isArray(it.schedule_segments)
       ? it.schedule_segments
           .map((segment) => {
@@ -140,6 +209,8 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
       scheduleSegments,
       status: Number(it.instrument_status ?? (it.is_completed ? 2 : 0)),
       completed: it.is_completed === true || Number(it.instrument_status) === 2,
+      previousRuntimeHours: instrumentRuntimeHours ?? orderRuntimeHours,
+      totalRuntimeHours: instrumentRuntimeHours ?? orderRuntimeHours,
     }
   })
   const rawSig = dto.admin_signature_url?.trim()
@@ -193,6 +264,8 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     sanxinTesterItem1: item1 === 'yes' || item1 === 'no' ? (item1 as 'yes' | 'no') : null,
     sanxinTesterItem2: item2 === 'yes' || item2 === 'no' ? (item2 as 'yes' | 'no') : null,
     sanxinIsSanxin: isSanxin,
+    previousRuntimeHours: orderRuntimeHours,
+    totalRuntimeHours: orderRuntimeHours,
   }
 }
 

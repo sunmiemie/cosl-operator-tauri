@@ -93,8 +93,8 @@ export function useHighTempPressureTesting() {
   const testRunning = ref(false)
   const testStartTime = ref<number | null>(null)
   const csvCount = ref(0)
-  const onlineSeconds = ref(54)
-  const onlineTimerStr = ref('0时0分54秒')
+  const onlineSeconds = ref(0)
+  const onlineTimerStr = ref('0时0分0秒')
   const videoPath = ref('')
   const videoFileName = ref('')
   const videoUrl = ref('')
@@ -130,6 +130,21 @@ export function useHighTempPressureTesting() {
   let latestFrameObjectUrl = ''
   let lastSyncedRecordCount = 0
   let chartInst: echarts.ECharts | null = null
+
+  function formatOnlineTimer(seconds: number) {
+    const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0))
+    const h = Math.floor(safeSeconds / 3600)
+    const m = Math.floor((safeSeconds % 3600) / 60)
+    const s = safeSeconds % 60
+    return `${h}时${m}分${s}秒`
+  }
+
+  function refreshOnlineTimer() {
+    if (testStartTime.value) {
+      onlineSeconds.value = Math.max(0, Math.floor((Date.now() - testStartTime.value) / 1000))
+    }
+    onlineTimerStr.value = formatOnlineTimer(onlineSeconds.value)
+  }
 
   function initChart() {
     const el = document.getElementById('htp-chart')
@@ -268,6 +283,8 @@ export function useHighTempPressureTesting() {
     clearVideoSelection()
     testRunning.value = false
     testStartTime.value = null
+    onlineSeconds.value = 0
+    onlineTimerStr.value = formatOnlineTimer(0)
     captureStatusText.value = '等待选择试验视频'
     disposeChart()
   }
@@ -702,6 +719,7 @@ export function useHighTempPressureTesting() {
     resetTestSession()
     closeModal()
     testStartTime.value = Date.now()
+    refreshOnlineTimer()
     switchPanel('testing')
     nextTick(() => initChart())
     captureStatusText.value = '等待选择试验视频并启动识别采集'
@@ -774,6 +792,8 @@ export function useHighTempPressureTesting() {
 
   function endTest() {
     stopCapturePolling()
+    refreshOnlineTimer()
+    testStartTime.value = null
     testRunning.value = false
     closeModal()
     switchPanel('report')
@@ -781,11 +801,7 @@ export function useHighTempPressureTesting() {
 
   onMounted(() => {
     timerInterval = window.setInterval(() => {
-      onlineSeconds.value++
-      const h = Math.floor(onlineSeconds.value / 3600)
-      const m = Math.floor((onlineSeconds.value % 3600) / 60)
-      const s = onlineSeconds.value % 60
-      onlineTimerStr.value = `${h}时${m}分${s}秒`
+      refreshOnlineTimer()
     }, 1000)
   })
 

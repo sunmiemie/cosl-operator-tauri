@@ -16,6 +16,8 @@ export interface InstrumentItem {
   scheduleSegments?: InstrumentScheduleSegment[]
   status?: number
   completed?: boolean
+  previousRuntimeHours?: number | null
+  totalRuntimeHours?: number | null
 }
 
 export interface InstrumentScheduleSegment {
@@ -65,6 +67,8 @@ export interface WorkOrder {
   sanxinTesterItem1?: 'yes' | 'no' | null
   sanxinTesterItem2?: 'yes' | 'no' | null
   sanxinIsSanxin?: boolean
+  previousRuntimeHours?: number | null
+  totalRuntimeHours?: number | null
 }
 
 export interface WeekDayItem {
