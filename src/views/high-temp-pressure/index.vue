@@ -13,7 +13,11 @@ import { useHighTempPressureStartupCheck } from './composables/useHighTempPressu
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
 import { useAuth } from '@/composables/useAuth'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestType } from '@/services'
-import { finishHighTempPressureOrder, startHighTempPressureOrder } from '@/services/high-temp-pressure-api'
+import {
+  cancelHighTempPressureOrder,
+  finishHighTempPressureOrder,
+  startHighTempPressureOrder,
+} from '@/services/high-temp-pressure-api'
 import type { ScheduledSelection } from './types'
 
 const schedule = useHighTempPressureSchedule()
@@ -34,6 +38,93 @@ const productPickerRows = computed(() =>
     customer: selection.order.applicant,
   }))
 )
+
+function getEngineerAssistantScheduleError(resp: Awaited<ReturnType<typeof pushEngineerAssistantSchedules>>) {
+  const detail = resp.data?.detail
+  const detailPayload = detail?.payload
+  const messages = [
+    resp.error,
+    resp.data?.msg,
+    detailPayload?.msg,
+    detailPayload?.message,
+    detailPayload?.error,
+    detail?.error,
+    detail?.text,
+  ]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+  return Array.from(new Set(messages)).join('；')
+}
+
+function getEngineerAssistantEquipmentId(selection: ScheduledSelection) {
+  return String(selection.instrument.sn || selection.instrument.dbId || selection.instrument.id).trim()
+}
+
+async function pushEngineerAssistantSchedulesInBackground(selections: ScheduledSelection[]) {
+  try {
+    const selectedScheduleInfos = selections
+      .map((selection) => ({
+        selection,
+        scheduleInfo: schedule.getScheduleChangePayload(selection.instrument.id),
+      }))
+      .filter((item) => item.scheduleInfo)
+    console.log('[high-temp-pressure schedule]', selectedScheduleInfos)
+    if (!selectedScheduleInfos.length) return
+
+    const ok = await initAuth()
+    if (!ok) {
+      ElMessage.warning('未登录，已跳过第三方排期推送')
+      return
+    }
+
+    const headers = getAuthHeaders()
+    const testTypeResult = await resolveEngineerAssistantTestType('高温高压井', headers)
+    const testType = testTypeResult.typeId || ''
+    if (!testType) {
+      const availableTypes = testTypeResult.candidates
+        .map((item) => item.typeName || item.name)
+        .filter(Boolean)
+        .slice(0, 6)
+        .join('、')
+      const detailLines = [
+        testTypeResult.error ? `原因：${testTypeResult.error}` : '',
+        availableTypes ? `当前返回类型：${availableTypes}` : '',
+      ].filter(Boolean)
+      ElMessage.warning(`未匹配到第三方测试类型（高温高压井），已跳过第三方排期推送${detailLines.length ? `：${detailLines.join('；')}` : ''}`)
+      return
+    }
+
+    if (testTypeResult.source === 'fallback') {
+      const reason = testTypeResult.error ? `：${testTypeResult.error}` : ''
+      ElMessage.warning(`未从接口匹配到高温高压井测试类型，已使用默认 testType=${testType}${reason}`)
+    }
+
+    const resp = await pushEngineerAssistantSchedules(
+      {
+        schedulesInfo: selectedScheduleInfos.flatMap(({ selection, scheduleInfo }) =>
+          scheduleInfo!.segments.map((segment) => ({
+            testId: String(selection.order.dbId ?? selection.order.id),
+            testType,
+            equipmentId: getEngineerAssistantEquipmentId(selection),
+            startTime: segment.startAtHour,
+            endTime: segment.endAtHour,
+          }))
+        ),
+      },
+      headers
+    )
+    if (!resp.success || !resp.data || resp.data.code !== 0) {
+      const reason = getEngineerAssistantScheduleError(resp)
+      ElMessage.warning(`推送第三方排期失败，已继续开始实验${reason ? `：${reason}` : ''}`)
+    }
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? `推送第三方排期失败，已继续开始实验：${e.message}` : '推送第三方排期失败，已继续开始实验')
+  }
+}
+
+function refreshWorkOrdersInBackground() {
+  void schedule.refreshWorkOrders()
+}
 
 watch(
   () => productPickerRows.value.map((row) => row.id).join('|'),
@@ -83,60 +174,10 @@ async function confirmProductSelection() {
     ElMessage.warning('未找到已选中的仪器')
     return
   }
-  const selectedScheduleInfos = selectedSelections
-    .map((selection) => ({
-      selection,
-      scheduleInfo: schedule.getScheduleChangePayload(selection.instrument.id),
-    }))
-    .filter((item) => item.scheduleInfo)
-  console.log('[high-temp-pressure schedule]', selectedScheduleInfos)
-  if (selectedScheduleInfos.length) {
-    const ok = await initAuth()
-    if (!ok) {
-      ElMessage.warning('未登录，已跳过第三方排期推送并继续开始实验')
-    } else {
-      const headers = getAuthHeaders()
-      const testTypeResult = await resolveEngineerAssistantTestType('高温高压井', headers)
-      const testType = testTypeResult.typeId || ''
-      if (testType) {
-        if (testTypeResult.source === 'fallback') {
-          const reason = testTypeResult.error ? `：${testTypeResult.error}` : ''
-          ElMessage.warning(`未从接口匹配到高温高压井测试类型，已使用默认 testType=${testType}${reason}`)
-        }
-        const resp = await pushEngineerAssistantSchedules(
-          {
-            schedulesInfo: selectedScheduleInfos.flatMap(({ selection, scheduleInfo }) =>
-              scheduleInfo!.segments.map((segment) => ({
-                testId: String(selection.order.dbId ?? selection.order.id),
-                testType,
-                equipmentId: String(selection.instrument.id),
-                startTime: segment.startAtHour,
-                endTime: segment.endAtHour,
-              }))
-            ),
-          },
-          headers
-        )
-        if (!resp.success || !resp.data || resp.data.code !== 0) {
-          ElMessage.warning(`推送第三方排期失败，已继续开始实验${resp.error ? `：${resp.error}` : ''}`)
-        }
-      } else {
-        const availableTypes = testTypeResult.candidates
-          .map((item) => item.typeName || item.name)
-          .filter(Boolean)
-          .slice(0, 6)
-          .join('、')
-        const detailLines = [
-          testTypeResult.error ? `原因：${testTypeResult.error}` : '',
-          availableTypes ? `当前返回类型：${availableTypes}` : '',
-        ].filter(Boolean)
-        ElMessage.warning(`未匹配到第三方测试类型（高温高压井），已跳过第三方排期推送并继续开始实验${detailLines.length ? `：${detailLines.join('；')}` : ''}`)
-      }
-    }
-  }
   activeTestSelections.value = selectedSelections.slice()
   productPickerVisible.value = false
   startupCheck.openStartupCheck()
+  void pushEngineerAssistantSchedulesInBackground(selectedSelections)
 }
 
 function handleStartupCheckComplete() {
@@ -173,25 +214,37 @@ async function handleConfirmStart() {
   }
 
   try {
-    await initAuth()
-    for (const order of ordersNeedingStart) {
-      if (typeof order.dbId !== 'number') return
+    const authOk = await initAuth()
+    if (!authOk) {
+      ElMessage.error('登录已失效，请重新登录后再开始实验')
+      return
+    }
+
+    const startResults = await Promise.all(ordersNeedingStart.map(async (order) => {
+      const dbId = order.dbId
+      if (typeof dbId !== 'number') {
+        throw new Error(`工单 ${order.no} 未找到工单ID`)
+      }
       const orderInstrumentSns = Array.from(new Set(
         selections
           .filter((selection) => selection.order.id === order.id)
           .map((selection) => selection.instrument.sn)
           .filter(Boolean)
       ))
-      const res = await startHighTempPressureOrder(order.dbId, { instrument_sns: orderInstrumentSns }, getAuthHeaders())
-      if (!res.success || res.data?.code !== 0) {
-        ElMessage.error(res.data?.msg || res.error || `工单 ${order.no} 开始测试失败`)
-        return
-      }
-      schedule.markOrderStarted(order.id)
+      const res = await startHighTempPressureOrder(dbId, { instrument_sns: orderInstrumentSns }, getAuthHeaders())
+      return { order, res }
+    }))
+
+    const failed = startResults.find(({ res }) => !res.success || res.data?.code !== 0)
+    if (failed) {
+      ElMessage.error(failed.res.data?.msg || failed.res.error || `工单 ${failed.order.no} 开始测试失败`)
+      return
     }
+
+    startResults.forEach(({ order }) => schedule.markOrderStarted(order.id))
     schedule.markInstrumentsRunning(runningInstrumentIds)
-    await schedule.refreshWorkOrders()
     testing.confirmStart()
+    refreshWorkOrdersInBackground()
   } catch (e) {
     ElMessage.error('开始测试失败')
   }
@@ -207,6 +260,7 @@ async function handleConfirmEnd() {
     ElMessage.error('未找到已选中的仪器')
     return
   }
+  const endConfirmedAt = Date.now()
 
   try {
     const captureSaved = await testing.finalizeVideoCapture()
@@ -267,23 +321,60 @@ async function handleConfirmEnd() {
     } else {
       ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
     }
-    testing.endTest()
+    testing.endTest(endConfirmedAt)
     activeTestSelections.value = []
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '结束测试失败')
   }
 }
 
-function handleConfirmStop() {
+async function handleConfirmStop() {
   const currentSelections = activeTestSelections.value.length
     ? activeTestSelections.value
     : schedule.selectedScheduledOrders.value
-  const current = schedule.currentSelected.value
   testing.stopTest()
-  schedule.clearRunningInstruments(currentSelections.map((selection) => selection.instrument.id))
-  activeTestSelections.value = []
-  schedule.cancelScheduledInstrument(current?.instrument.id)
-  ElMessage.info('已中止本次测试，视频采集状态已重置')
+
+  if (!currentSelections.length) {
+    ElMessage.info('已中止本次测试，视频采集状态已重置')
+    return
+  }
+
+  const groupedByOrder = new Map<string, { order: ScheduledSelection['order']; selections: ScheduledSelection[] }>()
+  currentSelections.forEach((selection) => {
+    const group = groupedByOrder.get(selection.order.id)
+    if (group) {
+      group.selections.push(selection)
+      return
+    }
+    groupedByOrder.set(selection.order.id, { order: selection.order, selections: [selection] })
+  })
+
+  try {
+    const authOk = await initAuth()
+    if (!authOk) {
+      throw new Error('登录已失效，请重新登录后再中止测试')
+    }
+
+    for (const { order, selections } of groupedByOrder.values()) {
+      if (typeof order.dbId !== 'number') {
+        throw new Error(`工单 ${order.no} 未找到工单ID`)
+      }
+      const instrumentSns = Array.from(new Set(selections.map((selection) => selection.instrument.sn).filter(Boolean)))
+      const res = await cancelHighTempPressureOrder(order.dbId, { instrument_sns: instrumentSns }, getAuthHeaders())
+      if (!res.success || res.data?.code !== 0) {
+        throw new Error(res.data?.msg || res.error || `工单 ${order.no} 中止测试失败`)
+      }
+    }
+
+    currentSelections.forEach((selection) => schedule.cancelScheduledInstrument(selection.instrument.id))
+    schedule.clearRunningInstruments(currentSelections.map((selection) => selection.instrument.id))
+    activeTestSelections.value = []
+    await schedule.refreshWorkOrders()
+    ElMessage.info('已中止本次测试，工单已回到待排程')
+  } catch (e) {
+    await schedule.refreshWorkOrders()
+    ElMessage.error(e instanceof Error ? e.message : '中止测试失败，工单状态未回退')
+  }
 }
 
 async function handleShutdownComplete() {
@@ -406,6 +497,7 @@ onMounted(async () => {
         :exported-capture-dir="testing.exportedCaptureDir.value"
         :curve-chart-image-path="testing.curveChartImagePath.value"
         :curve-point-count="testing.curveData.timeSec.length"
+        :runtime-seconds="testing.onlineSeconds.value"
         :ensure-curve-chart-image="testing.ensureCurveChartImage"
         @shutdown-complete="handleShutdownComplete"
       />

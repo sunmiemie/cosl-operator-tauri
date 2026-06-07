@@ -81,6 +81,24 @@ const uploadDragging = ref(false)
 const woDetailOpen = ref(false)
 const detailModuleCount = 6
 
+const getOrderStatusText = (order: WorkOrder) => {
+  const instruments = order.selectedInstruments?.length ? order.selectedInstruments : order.instruments
+  const hasRunningInstrument = instruments.some((instrument) => instrument.status === 1 || instrument.statusText === '测试中')
+  if (hasRunningInstrument || props.sessionStarted) return '测试中'
+  if (order.status === 5) return '已完成'
+  if (order.status === 6) return '异常'
+  if (order.scheduledStartAt || order.scheduleSegments?.length) return '已排程'
+  return order.statusText || '待排程'
+}
+
+const getStatusClass = (statusText: string) => {
+  if (statusText === '测试中') return 'status-running'
+  if (statusText === '已排程') return 'status-scheduled'
+  if (statusText === '已完成') return 'status-done'
+  if (statusText === '异常') return 'status-error'
+  return 'status-pending'
+}
+
 const currentTestInstruments = () =>
   props.currentWorkOrder?.selectedInstruments?.length
     ? props.currentWorkOrder.selectedInstruments
@@ -102,6 +120,14 @@ const currentInstrumentQuantity = () => {
 const displayValue = (value: unknown) => {
   if (value === undefined || value === null || value === '') return '-'
   return String(value)
+}
+
+const multilineItems = (value?: string) => {
+  if (!value?.trim()) return []
+  return value
+    .split(/\r?\n|[；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 const maskPhone = (phone?: string) => {
@@ -511,7 +537,7 @@ function handleUploadDrop(event: DragEvent) {
                     </div>
                   </div>
                   <button class="wo-detail-action" type="button" @click="openWODetail">
-                    查看完整测试详情 →
+                    查看完整工单详情 →
                   </button>
                 </div>
                 <div v-else class="text-muted">未选择工单</div>
@@ -620,199 +646,182 @@ function handleUploadDrop(event: DragEvent) {
       >
         <div class="wo-detail-drawer-header">
           <div>
-            <div class="drawer-eyebrow">完整测试详情</div>
+            <div class="drawer-eyebrow">完整工单详情</div>
             <h3>{{ currentWorkOrder.id }}</h3>
           </div>
           <button class="drawer-close" type="button" @click="closeWODetail">×</button>
         </div>
         <div class="wo-detail-drawer-body">
-          <div class="detail-report-head">
-            <div>
-              <p>报告类型</p>
-              <h4>Report of Vibration Test Operation</h4>
-            </div>
-            <span class="detail-status-chip">{{ testMode === 'pre' ? '预实验' : '正式测试' }}</span>
-          </div>
-
           <section class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:file-document-outline" />
-              <span>基本信息 Basic Information</span>
+              <span>基础信息</span>
             </div>
             <div class="detail-table-card">
               <div class="detail-table-cell">
-                <span>标题 Title</span>
-                <strong>{{ displayValue(currentWorkOrder.purpose || currentWorkOrder.testType) }}</strong>
+                <span>工单号</span>
+                <strong>{{ currentWorkOrder.id }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>试件 Specimen</span>
-                <strong>{{ displayValue(currentWorkOrder.device) }}</strong>
+                <span>工单类型</span>
+                <strong>{{ displayValue(currentWorkOrder.orderType || currentWorkOrder.type) }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>操作员 Operator</span>
-                <strong>{{ displayValue(currentWorkOrder.applicant) }}</strong>
+                <span>任务编号</span>
+                <strong>{{ displayValue(currentWorkOrder.taskNumber) }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>联系电话 Phone</span>
-                <strong>{{ maskPhone(currentWorkOrder.phone) }}</strong>
+                <span>表格编号</span>
+                <strong>{{ displayValue(currentWorkOrder.tableNo) }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>试验开始 Date of Test Start</span>
+                <span>计划时间</span>
                 <strong>{{ displayValue(currentWorkOrder.planTime || currentWorkOrder.testDate) }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>完成状态 State</span>
-                <strong>{{ analysisCompleted ? '测试完成' : sessionStarted ? '测试进行中' : '待开始' }}</strong>
+                <span>更新时间</span>
+                <strong>{{ displayValue(currentWorkOrder.updatedAt) }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>设备编号 Device No.</span>
+                <span>当前状态</span>
+                <strong>
+                  <span class="status-pill" :class="getStatusClass(getOrderStatusText(currentWorkOrder))">
+                    {{ getOrderStatusText(currentWorkOrder) }}
+                  </span>
+                </strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:account-details-outline" />
+              <span>申请信息</span>
+            </div>
+            <div class="detail-table-card">
+              <div class="detail-table-cell">
+                <span>申请人</span>
+                <strong>{{ displayValue(currentWorkOrder.applicant) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>联系电话</span>
+                <strong>{{ displayValue(currentWorkOrder.phone) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>申请单位</span>
+                <strong>{{ displayValue(currentWorkOrder.applicationUnit) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>单位负责人</span>
+                <strong>{{ displayValue(currentWorkOrder.applicationUnitManager) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>申请日期</span>
+                <strong>{{ displayValue(currentWorkOrder.applicationDate) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>测试日期</span>
+                <strong>{{ displayValue(currentWorkOrder.testDate) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>委托人</span>
+                <strong>{{ displayValue(currentWorkOrder.client) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>项目名称</span>
+                <strong>{{ displayValue(currentWorkOrder.projectName) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>科研编号</span>
+                <strong>{{ displayValue(currentWorkOrder.researchNumber) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>预算编号</span>
+                <strong>{{ displayValue(currentWorkOrder.projectBudgetNumber) }}</strong>
+              </div>
+              <div class="detail-table-cell detail-table-cell-wide">
+                <span>项目成员</span>
+                <strong>{{ displayValue(currentWorkOrder.projectMembers) }}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:tune-vertical" />
+              <span>测试参数</span>
+            </div>
+            <div class="detail-table-card">
+              <div class="detail-table-cell">
+                <span>使用设备</span>
+                <strong>{{ displayValue(currentWorkOrder.device) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>设备编号</span>
                 <strong>{{ displayValue(currentWorkOrder.deviceNumber) }}</strong>
               </div>
               <div class="detail-table-cell">
-                <span>备注 Comment</span>
-                <strong>{{ displayValue(currentWorkOrder.remark) }}</strong>
+                <span>振动量级</span>
+                <strong>{{ displayValue(currentWorkOrder.level) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>测试时长</span>
+                <strong>{{ durationText(currentWorkOrder.duration) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>测试类型</span>
+                <strong>{{ displayValue(currentWorkOrder.testType || currentWorkOrder.type) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>测试目的</span>
+                <strong>{{ displayValue(currentWorkOrder.purpose) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>振动方向</span>
+                <strong>{{ displayValue(currentWorkOrder.vibrationDirection) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>加速度</span>
+                <strong>{{ displayValue(currentWorkOrder.acceleration) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>斜率</span>
+                <strong>{{ displayValue(currentWorkOrder.slope) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>频率</span>
+                <strong>{{ displayValue(currentWorkOrder.frequency) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>振动次数</span>
+                <strong>{{ displayValue(currentWorkOrder.vibrationTimes) }}</strong>
+              </div>
+              <div class="detail-table-cell">
+                <span>创建时间</span>
+                <strong>{{ displayValue(currentWorkOrder.createdAt) }}</strong>
               </div>
             </div>
           </section>
 
           <section class="detail-section">
             <div class="detail-section-title">
-              <Icon icon="mdi:pulse" />
-              <span>测试条件 TEST CONDITION</span>
+              <Icon icon="mdi:clipboard-text-outline" />
+              <span>测试步骤与安全风险</span>
             </div>
-            <div class="detail-condition-card">
-              <div class="detail-metric-grid">
-                <div class="detail-metric">
-                  <span>加速度</span>
-                  <strong>10.081 <em>g rms</em></strong>
-                </div>
-                <div class="detail-metric">
-                  <span>速度</span>
-                  <strong>58.733 <em>cm/s rms</em></strong>
-                </div>
-                <div class="detail-metric">
-                  <span>位移</span>
-                  <strong>5.259 <em>mm rms</em></strong>
-                </div>
+            <div class="detail-text-wrap">
+              <div class="detail-text-block">
+                <div class="detail-text-title">测试步骤</div>
+                <ol v-if="multilineItems(currentWorkOrder.testSteps).length" class="detail-list">
+                  <li v-for="(item, idx) in multilineItems(currentWorkOrder.testSteps)" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="detail-empty">暂无测试步骤</div>
               </div>
-
-              <div class="detail-subtitle">交越点 PSD</div>
-              <div class="detail-data-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>No.</th>
-                      <th>频率 (Hz)</th>
-                      <th>量级 (g²/Hz)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr><td>1</td><td>10.00</td><td>8.823e-2</td></tr>
-                    <tr><td>2</td><td>18.00</td><td>8.8226</td></tr>
-                    <tr><td>3</td><td>22.00</td><td>0.8823</td></tr>
-                    <tr><td>4</td><td>100.00</td><td>0.8823</td></tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <div class="detail-subtitle">容差设置</div>
-              <div class="detail-data-table tolerance-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>类型</th>
-                      <th>上限 (dB)</th>
-                      <th>下限 (dB)</th>
-                      <th>允许宽度 (Hz)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr class="danger-row"><td>中断</td><td>+20.00</td><td>-15.00</td><td>0.00</td></tr>
-                    <tr class="warning-row"><td>警告</td><td>+6.00</td><td>-6.00</td><td>0.00</td></tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="detail-muted-strip">
-                <Icon icon="mdi:circle-off-outline" />
-                <span>扩张容差 0 件</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="detail-section">
-            <div class="detail-section-title">
-              <Icon icon="mdi:input" />
-              <span>输入条件 INPUT CONDITION</span>
-            </div>
-            <div class="detail-channel-card">
-              <div class="channel-head">
-                <span>Ch1</span>
-                <strong>中间位置</strong>
-                <em>000-Ch1</em>
-              </div>
-              <div class="channel-row"><span>输入类型</span><strong>电荷输入 (1 mV/pC)</strong></div>
-              <div class="channel-row"><span>输入灵敏度</span><strong>25.730 pC/g</strong></div>
-              <div class="channel-row"><span>极性</span><strong>正</strong></div>
-              <div class="channel-row"><span>输入通道类别</span><strong>未使用</strong></div>
-              <div class="channel-row"><span>平均化参数</span><strong>[M : 4 , E : 8 ( 120 DOF )]</strong></div>
-            </div>
-            <div class="detail-channel-card">
-              <div class="channel-head">
-                <span>Ch2</span>
-                <strong>边缘位置</strong>
-                <em>000-Ch2</em>
-              </div>
-              <div class="channel-row"><span>输入类型</span><strong>电荷输入 (1 mV/pC)</strong></div>
-              <div class="channel-row"><span>输入灵敏度</span><strong>28.910 pC/g</strong></div>
-              <div class="channel-row"><span>极性</span><strong>正</strong></div>
-              <div class="channel-row"><span>输入通道类别</span><strong>未使用</strong></div>
-              <div class="channel-row"><span>平均化参数</span><strong>[M : 4 , E : 8 ( 120 DOF )]</strong></div>
-            </div>
-          </section>
-
-          <section class="detail-section">
-            <div class="detail-section-title">
-              <Icon icon="mdi:tune-variant" />
-              <span>控制条件 CONTROL CONDITION</span>
-            </div>
-            <div class="detail-condition-card">
-              <div class="detail-metric-grid control-grid">
-                <div class="detail-metric"><span>控制对象</span><strong>加速度 (g)</strong></div>
-                <div class="detail-metric"><span>频率范围</span><strong>1000.00 Hz</strong></div>
-                <div class="detail-metric"><span>分析谱线</span><strong>400 lines</strong></div>
-                <div class="detail-metric"><span>Δf / 帧时间</span><strong>2.50 Hz / 400.00 ms</strong></div>
-                <div class="detail-metric"><span>最高参考频率</span><strong>1000.00 Hz</strong></div>
-                <div class="detail-metric"><span>平均化参数</span><strong>M:4, E:8 [120 DOF]</strong></div>
-              </div>
-
-              <div class="detail-subtitle">环检 <span>宽松</span></div>
-              <div class="detail-param-box">
-                <div><span>环境噪声的上限值</span><strong>[ 80.0% ]</strong></div>
-                <div><span>初始试验中的传递率变化检测值</span><strong>[ 90.0% ]</strong></div>
-                <div><span>试验运行中的传递率变化检测值</span><strong>[ 60.0% ]</strong></div>
-                <div><span>超载检测值</span><strong>[ 83.30% ]（对满量程rms比率）</strong></div>
-              </div>
-
-              <div class="detail-subtitle">均衡化模式 <span>标准</span></div>
-              <div class="detail-param-box">
-                <div><span>频谱的重合分析</span><strong>[ 50.0% ]</strong></div>
-                <div><span>初始EQ量级增加侧限制值</span><strong>[ 10.00 dB ]</strong></div>
-                <div><span>初始EQ量级减少侧限制值</span><strong>[ 15.00 dB ]</strong></div>
-                <div><span>传递特性更新比率</span><strong>[ 50.0% ]</strong></div>
-                <div><span>源于错误的控制对象敏感度</span><strong>[ 50.0% ]</strong></div>
-                <div><span>过去的控制量级的继承比率</span><strong>[ 100.0% ]</strong></div>
-                <div><span>根据错误的控制上限（增加侧）</span><strong>[ 4.00 dB ]</strong></div>
-                <div><span>根据错误的控制下限（减少侧）</span><strong>[ 5.00 dB ]</strong></div>
-              </div>
-
-              <div class="detail-subtitle">输出参数</div>
-              <div class="detail-param-box">
-                <div><span>试验时间</span><strong>01:00:00</strong></div>
-                <div><span>初始输出量级</span><strong>-20.00 dB</strong></div>
-                <div><span>量级增减值</span><strong>2.00 dB</strong></div>
-                <div><span>自动开始</span><strong>不运行</strong></div>
-                <div><span>输出停止过滤时间</span><strong>500.0 ms</strong></div>
-                <div><span>观测频率的限制</span><strong>仅目标频率范围</strong></div>
+              <div class="detail-text-block">
+                <div class="detail-text-title">安全风险及预防措施</div>
+                <ol v-if="multilineItems(currentWorkOrder.safetyRisks).length" class="detail-list">
+                  <li v-for="(item, idx) in multilineItems(currentWorkOrder.safetyRisks)" :key="idx">{{ item }}</li>
+                </ol>
+                <div v-else class="detail-empty">暂无安全风险说明</div>
               </div>
             </div>
           </section>
@@ -820,21 +829,53 @@ function handleUploadDrop(event: DragEvent) {
           <section class="detail-section">
             <div class="detail-section-title">
               <Icon icon="mdi:tools" />
-              <span>本次测试仪器 Instruments</span>
+              <span>仪器明细</span>
+              <em class="detail-section-count">{{ currentWorkOrder.instruments.length }} 台</em>
             </div>
-            <div class="detail-instrument-list">
-              <div
-                v-for="instrument in currentTestInstruments()"
-                :key="instrument.id"
-                class="detail-instrument-item"
-              >
-                <div>
-                  <strong>{{ instrument.name }}</strong>
-                  <span>{{ displayValue(instrument.sn) }}</span>
-                </div>
-                <em>{{ displayValue(instrument.model || instrument.maxDiameter || instrument.weight) }}</em>
+            <div class="detail-table-card detail-table-card-single">
+              <div class="detail-table-cell detail-table-cell-wide">
+                <span>设备清单</span>
+                <strong>{{ displayValue(currentWorkOrder.equipmentList) }}</strong>
+              </div>
+              <div class="detail-table-cell detail-table-cell-wide">
+                <span>仪器串组合</span>
+                <strong>{{ displayValue(currentWorkOrder.instrumentCombination) }}</strong>
               </div>
             </div>
+            <div class="detail-data-table instrument-detail-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>仪器</th>
+                    <th>SN/编号</th>
+                    <th>型号</th>
+                    <th>数量</th>
+                    <th>重量</th>
+                    <th>长度</th>
+                    <th>最大直径</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="instrument in currentWorkOrder.instruments" :key="instrument.id">
+                    <td>{{ instrument.name }}</td>
+                    <td>{{ displayValue(instrument.sn) }}</td>
+                    <td>{{ displayValue(instrument.model) }}</td>
+                    <td>{{ displayValue(instrument.quantity) }}</td>
+                    <td>{{ displayValue(instrument.weight) }}</td>
+                    <td>{{ displayValue(instrument.length) }}</td>
+                    <td>{{ displayValue(instrument.maxDiameter) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="detail-section">
+            <div class="detail-section-title">
+              <Icon icon="mdi:note-text-outline" />
+              <span>备注</span>
+            </div>
+            <div class="detail-note">{{ displayValue(currentWorkOrder.remark) }}</div>
           </section>
         </div>
       </aside>

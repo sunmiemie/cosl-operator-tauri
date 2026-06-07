@@ -2,12 +2,21 @@ import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { ElMessage } from 'element-plus'
 import type { ReportFile, ReportFileId } from '../types'
+import {
+  createVibrationTablePreExperiment,
+  type VibrationTablePreExperimentPayload,
+  type VibrationTablePreExperimentUploadFile,
+} from '@/services/vibration-table-report-api'
 
 interface UseVibrationReportOptions {
   getOscCanvas: () => HTMLCanvasElement | null
   getCsvContent: () => string
   getLatestCaptureBlob: () => Promise<Blob | null>
   getReportText: () => string
+  getTestMode?: () => 'formal' | 'pre'
+  ensureAuth?: () => Promise<boolean>
+  getAuthHeaders?: () => Record<string, string>
+  getPreExperimentPayload?: (exportDir: string) => VibrationTablePreExperimentPayload | null
   onComplete?: () => void
 }
 
@@ -73,6 +82,54 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     return []
   }
 
+  async function uploadPreExperimentIfNeeded() {
+    if (options.getTestMode?.() !== 'pre') return
+    if (!options.getPreExperimentPayload) return
+
+    const authOk = options.ensureAuth ? await options.ensureAuth() : true
+    if (!authOk) {
+      throw new Error('未登录或登录已失效，无法上传预实验数据')
+    }
+
+    const payload = options.getPreExperimentPayload(exportDir.value)
+    if (!payload) {
+      throw new Error('未找到振动台工单ID，无法上传预实验数据')
+    }
+
+    const files: VibrationTablePreExperimentUploadFile[] = [
+      {
+        fieldName: 'csv_file',
+        fileName: 'experiment.csv',
+        blob: new Blob([options.getCsvContent()], { type: 'text/csv;charset=utf-8' }),
+      },
+      {
+        fieldName: 'report_file',
+        fileName: 'report.txt',
+        blob: new Blob([options.getReportText()], { type: 'text/plain;charset=utf-8' }),
+      },
+    ]
+
+    const captureBlob = await options.getLatestCaptureBlob()
+    if (captureBlob) {
+      files.push({
+        fieldName: 'capture_image',
+        fileName: 'capture.jpg',
+        blob: captureBlob,
+      })
+    }
+
+    const res = await createVibrationTablePreExperiment(
+      payload,
+      files,
+      options.getAuthHeaders?.()
+    )
+    if (!res.success || !res.data || res.data.code !== 0) {
+      throw new Error(res.data?.msg || res.error || '预实验数据上传失败')
+    }
+    const label = res.data.data?.experiment_no ? `第 ${res.data.data.experiment_no} 次` : ''
+    ElMessage.success(`预实验数据已上传管理端${label ? `（${label}预实验）` : ''}`)
+  }
+
   function startFileGen() {
     if (fileGenRunning.value) return
     fileGenRunning.value = true
@@ -92,6 +149,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
         markFileDone('csv')
         markFileDone('png')
         markFileDone('doc')
+        await uploadPreExperimentIfNeeded()
         if (exportDir.value) ElMessage.success(`报告文件已写入 ${exportDir.value}`)
         options.onComplete?.()
       } catch (error) {

@@ -6,12 +6,13 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
 import type { VibrationAnalysisSummary, VibrationCaptureRecord, WorkOrder } from '../types'
+import type { VibrationTablePreExperimentPayload } from '@/services/vibration-table-report-api'
 
 interface UseVibrationTestingOptions {
   getCurrentWorkOrder: () => WorkOrder | null
   getTestMode: () => 'formal' | 'pre'
   onFinishToReport: (exportDir: string) => void
-  onFinishToDashboard: (finalStatus?: number) => void
+  onFinishToDashboard: (finalStatus?: number, options?: { resetRunningInstruments?: boolean }) => void
 }
 
 export function useVibrationTesting(options: UseVibrationTestingOptions) {
@@ -44,6 +45,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
   const exportOutputDir = ref('')
   const captureRecords = ref<VibrationCaptureRecord[]>([])
   const analysisSummary = ref<VibrationAnalysisSummary | null>(null)
+  const preExperimentClientSubmitId = ref('')
   let unlistenStream: UnlistenFn | null = null
   let capturePollTimer: number | null = null
   let latestCaptureObjectUrl = ''
@@ -80,6 +82,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     exportOutputDir.value = ''
     captureRecords.value = []
     analysisSummary.value = null
+    preExperimentClientSubmitId.value = ''
     analysisCompleted.value = false
     sessionStarted.value = false
     isPaused.value = false
@@ -572,7 +575,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     void invoke('stop_vibration_video_stream', { outputDir: captureOutputDir.value || null }).catch(() => undefined)
     const exportDir = String(exportOutputDir.value || '').trim()
     if (options.getTestMode() === 'pre' || !exportDir) {
-      options.onFinishToDashboard(1)
+      options.onFinishToDashboard(1, { resetRunningInstruments: true })
       return
     }
     options.onFinishToReport(exportDir)
@@ -627,6 +630,63 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     return analysisSummary.value
   }
 
+  function createPreExperimentClientSubmitId() {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return `vib-pre-${crypto.randomUUID()}`
+    }
+    return `vib-pre-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  function ensurePreExperimentClientSubmitId() {
+    if (!preExperimentClientSubmitId.value) {
+      preExperimentClientSubmitId.value = createPreExperimentClientSubmitId()
+    }
+    return preExperimentClientSubmitId.value
+  }
+
+  function getPreExperimentPayload(exportDir: string, tester: string): VibrationTablePreExperimentPayload | null {
+    const wo = options.getCurrentWorkOrder()
+    if (!wo?.dbId) return null
+    const summary = analysisSummary.value || buildSummary(captureRecords.value)
+    return {
+      order_id: wo.dbId,
+      order_number: String(wo.id || ''),
+      tester,
+      summary: {
+        source_video_name: summary.sourceVideoName,
+        sample_interval_seconds: summary.sampleIntervalSeconds,
+        duration_seconds: summary.durationSeconds,
+        record_count: summary.recordCount,
+        screen_detected_count: summary.screenDetectedCount,
+        avg_response: summary.avgResponse,
+        max_drive: summary.maxDrive,
+        last_elapsed_time: summary.lastElapsedTime,
+        video_file_name: videoFileName.value,
+        selected_instruments: (wo.selectedInstruments || wo.instruments || []).map((instrument) => ({
+          id: instrument.dbId ?? instrument.id,
+          name: instrument.name,
+          sn: instrument.sn,
+          model: instrument.model || '',
+        })),
+      },
+      records: captureRecords.value.map((record) => ({
+        time_sec: record.timeSec,
+        screen_detected: record.screenDetected,
+        chart_screenshot_url: record.chartScreenshotUrl,
+        values: record.values,
+      })),
+      attachments: [
+        {
+          type: 'export_dir',
+          name: '本地导出目录',
+          local_path: exportDir || exportOutputDir.value,
+        },
+      ].filter((item) => item.local_path),
+      export_dir: exportDir || exportOutputDir.value,
+      client_submit_id: ensurePreExperimentClientSubmitId(),
+    }
+  }
+
   onUnmounted(() => {
     revokeLatestCaptureObjectUrl()
     stopCapturePolling()
@@ -678,5 +738,6 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     getLatestCaptureBlob,
     getReportText,
     getAnalysisSummary,
+    getPreExperimentPayload,
   }
 }

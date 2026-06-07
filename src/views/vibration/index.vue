@@ -12,7 +12,7 @@ import { changeVibrationTableOrderStatus } from '@/services/vibration-table-orde
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import { useAuth } from '@/composables/useAuth'
 import { ElMessage } from 'element-plus'
-import type { Stage, WorkOrder } from './types'
+import type { Stage, VibrationInstrument, WorkOrder } from './types'
 
 const stage = ref<Stage>('dashboard')
 const currentWorkOrderId = ref<string | null>(null)
@@ -66,7 +66,7 @@ const {
   getScheduleChangePayload,
 } = useVibrationSchedule()
 
-const { initAuth, getAuthHeaders } = useAuth()
+const { initAuth, getAuthHeaders, userInfo } = useAuth()
 
 const {
   showStartupCheck,
@@ -90,6 +90,10 @@ const {
 const currentWorkOrder = computed(() => currentWorkOrderSnapshot.value)
 const forcedMode = ref<'formal' | 'pre'>('pre')
 const testMode = computed<'formal' | 'pre'>(() => forcedMode.value)
+
+type DashboardReturnOptions = {
+  resetRunningInstruments?: boolean
+}
 
 const productPickerRows = computed(() =>
   selectedScheduledOrders.value.flatMap((order) =>
@@ -136,8 +140,8 @@ const testing = useVibrationTesting({
     report.setExportDir(exportDir)
     report.startFileGen()
   },
-  onFinishToDashboard: (finalStatus = 5) => {
-    backToDashboard(finalStatus)
+  onFinishToDashboard: (finalStatus = 5, options = {}) => {
+    backToDashboard(finalStatus, options)
   },
 })
 
@@ -146,6 +150,13 @@ const report = useVibrationReport({
   getCsvContent: () => testing.getCsvContent(),
   getLatestCaptureBlob: () => testing.getLatestCaptureBlob(),
   getReportText: () => testing.getReportText(),
+  getTestMode: () => testMode.value,
+  ensureAuth: () => initAuth(),
+  getAuthHeaders: () => getAuthHeaders(),
+  getPreExperimentPayload: (exportDir: string) => {
+    const tester = userInfo.value?.username || userInfo.value?.nickName || currentWorkOrder.value?.applicant || ''
+    return testing.getPreExperimentPayload(exportDir, tester)
+  },
   onComplete: () => {
     stage.value = 'shutdown'
   },
@@ -197,6 +208,26 @@ async function confirmInstrumentSelection() {
     ElMessage.warning('未找到已选择的仪器')
     return
   }
+  beginSelectedVibrationExperiment(selected, selectedInstruments)
+  void syncVibrationSchedulePush(selected, selectedInstruments)
+}
+
+function beginSelectedVibrationExperiment(selected: WorkOrder, selectedInstruments: VibrationInstrument[]) {
+  markInstrumentsRunning(selected.id, selectedInstruments)
+  currentWorkOrderId.value = selected.id
+  currentWorkOrderSnapshot.value = {
+    ...selected,
+    selectedInstruments,
+    deviceNumber: selectedInstruments.map((instrument) => instrument.sn).join('、') || selected.deviceNumber,
+    device: selectedInstruments.map((instrument) => instrument.name).join('、') || selected.device,
+  }
+  forcedMode.value = 'pre'
+  productPickerVisible.value = false
+  resetStartupChecks()
+  showStartupCheck.value = true
+}
+
+async function syncVibrationSchedulePush(selected: WorkOrder, selectedInstruments: VibrationInstrument[]) {
   const authOk = await initAuth()
   const authHeaders = authOk ? getAuthHeaders() : undefined
   const scheduleInfo = getScheduleChangePayload(selected.id)
@@ -238,45 +269,55 @@ async function confirmInstrumentSelection() {
       }
     }
   }
+}
 
-  {
-    orderStatusMutating.value = true
-    try {
-      const runningInstrumentIds = selectedInstruments
-        .map((instrument) => instrument.dbId)
-        .filter((id): id is number | string => id !== undefined)
-      const resp = await changeVibrationTableOrderStatus(
-        selected.dbId!,
-        2,
-        authHeaders,
-        { runningInstrumentIds }
-      )
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
-        ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
-        return
-      } else {
-        void refreshWorkOrders()
-      }
-    } catch {
-      ElMessage.error('工单状态更新异常，请稍后重试')
-      return
-    } finally {
-      orderStatusMutating.value = false
+async function startSelectedVibrationOrder() {
+  if (orderStatusMutating.value) return false
+
+  const selected = currentWorkOrderSnapshot.value
+  const selectedInstruments = selected?.selectedInstruments || []
+  if (!selected || !selectedInstruments.length) {
+    ElMessage.error('未找到已选择的仪器')
+    return false
+  }
+
+  if (selected.dbId === undefined) {
+    ElMessage.error('未找到工单ID')
+    return false
+  }
+
+  const authOk = await initAuth()
+  if (!authOk) {
+    ElMessage.error('登录已失效，请重新登录后再开始实验')
+    return false
+  }
+
+  orderStatusMutating.value = true
+  try {
+    const authHeaders = getAuthHeaders()
+    const runningInstrumentIds = selectedInstruments
+      .map((instrument) => instrument.dbId)
+      .filter((id): id is number | string => id !== undefined)
+    const resp = await changeVibrationTableOrderStatus(
+      selected.dbId,
+      2,
+      authHeaders,
+      { runningInstrumentIds }
+    )
+    if (!resp.success || !resp.data || resp.data.code !== 0) {
+      ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
+      return false
+    } else {
+      void refreshWorkOrders()
     }
+  } catch {
+    ElMessage.error('工单状态更新异常，请稍后重试')
+    return false
+  } finally {
+    orderStatusMutating.value = false
   }
 
-  markInstrumentsRunning(selected.id, selectedInstruments)
-  currentWorkOrderId.value = selected.id
-  currentWorkOrderSnapshot.value = {
-    ...selected,
-    selectedInstruments,
-    deviceNumber: selectedInstruments.map((instrument) => instrument.sn).join('、') || selected.deviceNumber,
-    device: selectedInstruments.map((instrument) => instrument.name).join('、') || selected.device,
-  }
-  forcedMode.value = 'pre'
-  productPickerVisible.value = false
-  resetStartupChecks()
-  showStartupCheck.value = true
+  return true
 }
 
 function handleStartupCheckComplete() {
@@ -298,18 +339,24 @@ function continueAfterSafetyWarning() {
   stage.value = 'start'
 }
 
-async function backToDashboard(finalStatus: number = 1) {
+async function backToDashboard(finalStatus: number = 1, options: DashboardReturnOptions = {}) {
   if (orderStatusMutating.value) return
 
   const order = currentWorkOrderSnapshot.value
   const selectedInstruments = order?.selectedInstruments || []
+  const selectedInstrumentDbIds = selectedInstruments
+    .map((instrument) => instrument.dbId)
+    .filter((id): id is number | string => id !== undefined)
   let nextOrderStatus = finalStatus
   let shouldRemoveSchedule = finalStatus === 5
   const completedInstrumentIds = finalStatus === 5
-    ? selectedInstruments.map((instrument) => instrument.dbId).filter((id): id is number | string => id !== undefined)
+    ? selectedInstrumentDbIds
     : []
+  const runningInstrumentIds = options.resetRunningInstruments ? selectedInstrumentDbIds : []
   if (order && selectedInstruments.length) {
     if (finalStatus === 5) {
+      shouldRemoveSchedule = true
+    } else if (options.resetRunningInstruments) {
       shouldRemoveSchedule = true
     }
     clearRunningInstruments(order.id, selectedInstruments)
@@ -324,7 +371,7 @@ async function backToDashboard(finalStatus: number = 1) {
         order.dbId,
         nextOrderStatus,
         authHeaders,
-        { completedInstrumentIds }
+        { completedInstrumentIds, runningInstrumentIds }
       )
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
@@ -386,7 +433,10 @@ function goNextStage() {
   else if (stage.value === 'report') stage.value = 'shutdown'
 }
 
-function confirmStartVibration() {
+async function confirmStartVibration() {
+  const started = await startSelectedVibrationOrder()
+  if (!started) return
+
   showConfirmStartModal.value = false
   stage.value = 'calibration'
   calStep.value = 'amp'
@@ -402,7 +452,8 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  backToDashboard(5) // 完成整个测试，状态置为已完成(5)
+  const finalStatus = testMode.value === 'pre' ? 1 : 5
+  backToDashboard(finalStatus, { resetRunningInstruments: testMode.value === 'pre' })
 }
 
 function toggleShutdownCheck(id: number) {

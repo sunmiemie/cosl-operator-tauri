@@ -238,6 +238,18 @@ export type EngineerAssistantWriteOk = {
   code: number
   msg?: string
   data?: unknown
+  detail?: {
+    error?: string
+    text?: string
+    payload?: {
+      code?: number
+      msg?: string
+      message?: string
+      error?: string
+    }
+  }
+  upstreamStatus?: number | null
+  proxyStatus?: number
 }
 
 export async function pushEngineerAssistantProcesses(

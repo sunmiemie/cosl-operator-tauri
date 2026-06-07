@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { readFile } from '@tauri-apps/plugin-fs'
 import type { ScheduledSelection } from '../types'
+import { formatRuntimeHours } from '../utils/runtime'
 import { useAuth } from '@/composables/useAuth'
 import {
   createHighTempPressureReport,
@@ -17,6 +18,7 @@ const props = defineProps<{
   exportedCaptureDir: string
   curveChartImagePath: string
   curvePointCount: number
+  runtimeSeconds?: number
   ensureCurveChartImage?: () => Promise<string>
 }>()
 const emit = defineEmits<{
@@ -61,10 +63,8 @@ const submittedReportNo = ref('')
 const clientSubmitId = ref('')
 const shutdownChecks = ref([false, false, false, false, false])
 const shiftHours = ref('')
-const totalHours = computed(() => {
-  const value = Number(shiftHours.value)
-  return Number.isFinite(value) && value > 0 ? (475.18 + value).toFixed(2) : '475.18'
-})
+const runtimeHours = computed(() => formatRuntimeHours(props.runtimeSeconds ?? 0))
+const totalHours = computed(() => runtimeHours.value)
 const taskSummary = ref('')
 const generatedCurveChartImagePath = ref('')
 const activeCurveChartImagePath = computed(() => props.curveChartImagePath || generatedCurveChartImagePath.value)
@@ -183,6 +183,9 @@ onMounted(() => {
 watch(selectionSignature, () => {
   if (!uploadCompleted.value) resetReportStateForSelections()
 })
+watch(runtimeHours, (value) => {
+  shiftHours.value = value
+}, { immediate: true })
 
 const submitReport = async () => {
   if (!reportSelections.value.length) {
@@ -583,10 +586,10 @@ const finishShutdown = () => {
         <div class="shutdown-form-grid">
           <div class="form-group">
             <div class="form-label">本班运转时间（小时）<span class="req">*</span></div>
-            <input v-model="shiftHours" class="form-control" type="number" min="0" step="0.1" placeholder="请输入本班运转时间" />
+            <input v-model="shiftHours" class="form-control report-readonly" type="number" min="0" step="0.01" readonly />
           </div>
           <div class="form-group">
-            <div class="form-label">设备总运转时间</div>
+            <div class="form-label">设备总运转时间（小时）</div>
             <input class="form-control report-readonly" :value="totalHours" readonly />
           </div>
         </div>

@@ -92,6 +92,8 @@ export interface MutationResponse {
     after_status?: number
     completed_sns?: string[]
     remaining_sns?: string[]
+    reset_sns?: string[]
+    running_sns?: string[]
     remaining_count?: number
   }
 }
@@ -101,6 +103,10 @@ export interface FinishHighTempPressureOrderPayload {
 }
 
 export interface StartHighTempPressureOrderPayload {
+  instrument_sns?: string[]
+}
+
+export interface CancelHighTempPressureOrderPayload {
   instrument_sns?: string[]
 }
 
@@ -140,6 +146,18 @@ export async function finishHighTempPressureOrder(
 ): Promise<ApiResponse<MutationResponse>> {
   return http.post<MutationResponse>(
     `/test/high-temp-pressure/order/finish/${orderId}/`,
+    payload,
+    headers
+  )
+}
+
+export async function cancelHighTempPressureOrder(
+  orderId: number,
+  payload: CancelHighTempPressureOrderPayload = {},
+  headers?: Record<string, string>
+): Promise<ApiResponse<MutationResponse>> {
+  return http.post<MutationResponse>(
+    `/test/high-temp-pressure/order/cancel/${orderId}/`,
     payload,
     headers
   )

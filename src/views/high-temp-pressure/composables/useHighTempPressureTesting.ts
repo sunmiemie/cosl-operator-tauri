@@ -7,6 +7,7 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
 import type { HighTempPressureModal, HighTempPressurePanel } from '../types'
+import { formatRuntimeTimer, getElapsedRuntimeSeconds } from '../utils/runtime'
 
 export type HighTempPressureVideoChannel = {
   id: string
@@ -93,8 +94,8 @@ export function useHighTempPressureTesting() {
   const testRunning = ref(false)
   const testStartTime = ref<number | null>(null)
   const csvCount = ref(0)
-  const onlineSeconds = ref(54)
-  const onlineTimerStr = ref('0时0分54秒')
+  const onlineSeconds = ref(0)
+  const onlineTimerStr = ref(formatRuntimeTimer(0))
   const videoPath = ref('')
   const videoFileName = ref('')
   const videoUrl = ref('')
@@ -256,6 +257,12 @@ export function useHighTempPressureTesting() {
     videoUrl.value = ''
   }
 
+  function syncRuntime(nowMs = Date.now()) {
+    const seconds = getElapsedRuntimeSeconds(testStartTime.value, nowMs)
+    onlineSeconds.value = seconds
+    onlineTimerStr.value = formatRuntimeTimer(seconds)
+  }
+
   function resetTestSession() {
     stopCapturePolling()
     cleanupStreamListener()
@@ -268,6 +275,7 @@ export function useHighTempPressureTesting() {
     clearVideoSelection()
     testRunning.value = false
     testStartTime.value = null
+    syncRuntime()
     captureStatusText.value = '等待选择试验视频'
     disposeChart()
   }
@@ -702,6 +710,7 @@ export function useHighTempPressureTesting() {
     resetTestSession()
     closeModal()
     testStartTime.value = Date.now()
+    syncRuntime(testStartTime.value)
     switchPanel('testing')
     nextTick(() => initChart())
     captureStatusText.value = '等待选择试验视频并启动识别采集'
@@ -772,20 +781,18 @@ export function useHighTempPressureTesting() {
     return true
   }
 
-  function endTest() {
+  function endTest(endAtMs = Date.now()) {
     stopCapturePolling()
+    syncRuntime(endAtMs)
     testRunning.value = false
+    testStartTime.value = null
     closeModal()
     switchPanel('report')
   }
 
   onMounted(() => {
     timerInterval = window.setInterval(() => {
-      onlineSeconds.value++
-      const h = Math.floor(onlineSeconds.value / 3600)
-      const m = Math.floor((onlineSeconds.value % 3600) / 60)
-      const s = onlineSeconds.value % 60
-      onlineTimerStr.value = `${h}时${m}分${s}秒`
+      if (testStartTime.value !== null) syncRuntime()
     }, 1000)
   })
 

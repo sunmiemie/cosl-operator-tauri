@@ -54,6 +54,31 @@ export interface EquipmentReportUploadFile {
   blob: Blob
 }
 
+export interface VibrationTablePreExperimentPayload {
+  order_id: number
+  order_number?: string
+  tester?: string
+  summary: Record<string, unknown>
+  records: Array<Record<string, unknown>>
+  attachments?: Array<Record<string, unknown>>
+  export_dir?: string
+  client_submit_id: string
+}
+
+export interface VibrationTablePreExperimentItem extends VibrationTablePreExperimentPayload {
+  id: number
+  order: number
+  experiment_no: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface VibrationTablePreExperimentMutationResponse {
+  code: number
+  msg?: string
+  data?: VibrationTablePreExperimentItem
+}
+
 export function createHighTempPressureReport(
   payload: EquipmentReportPayload,
   headers?: Record<string, string>
@@ -89,6 +114,23 @@ export function createVibrationTableReport(
   return http.post<EquipmentReportMutationResponse>(
     '/test/vibration-table/report/create/',
     payload,
+    headers
+  )
+}
+
+export function createVibrationTablePreExperiment(
+  payload: VibrationTablePreExperimentPayload,
+  files: EquipmentReportUploadFile[],
+  headers?: Record<string, string>
+): Promise<ApiResponse<VibrationTablePreExperimentMutationResponse>> {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  files.forEach((file) => {
+    formData.append(file.fieldName, file.blob, file.fileName)
+  })
+  return http.postFormData<VibrationTablePreExperimentMutationResponse>(
+    '/test/vibration-table/pre-experiment/create/',
+    formData,
     headers
   )
 }
