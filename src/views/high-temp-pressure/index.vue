@@ -463,6 +463,7 @@ onMounted(async () => {
       <StartPanel
         v-if="testing.currentPanel.value === 'start'"
         :current-selected="schedule.currentSelected.value"
+        :selected-scheduled-orders="activeTestSelections.length ? activeTestSelections : schedule.selectedScheduledOrders.value"
         @back-to-startup-check="backToStartupCheck"
         @confirm-start="handleConfirmStart"
       />

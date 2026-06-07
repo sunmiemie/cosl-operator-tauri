@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
 import WorkOrderDetailModal from './WorkOrderDetailModal.vue'
 
 const props = defineProps<{
   currentSelected: ScheduledSelection | null
+  selectedScheduledOrders: ScheduledSelection[]
 }>()
 
 const emit = defineEmits<{
@@ -15,9 +16,31 @@ const emit = defineEmits<{
 
 const detailModalVisible = ref(false)
 const detailModuleCount = 6
+const activeSelectionIndex = ref(0)
+
+const previewSelections = computed(() => {
+  return props.selectedScheduledOrders.length
+    ? props.selectedScheduledOrders
+    : props.currentSelected
+      ? [props.currentSelected]
+      : []
+})
+
+const previewSelection = computed(() => {
+  return previewSelections.value[Math.min(activeSelectionIndex.value, previewSelections.value.length - 1)] || null
+})
+
+watch(
+  () => props.selectedScheduledOrders.length,
+  (count) => {
+    if (activeSelectionIndex.value >= count) {
+      activeSelectionIndex.value = Math.max(0, count - 1)
+    }
+  }
+)
 
 const safetyRiskItems = computed(() => {
-  const risks = props.currentSelected?.order.safetyRisks?.trim()
+  const risks = previewSelection.value?.order.safetyRisks?.trim()
   if (!risks) return []
   return risks
     .split(/\r?\n|[；;]/)
@@ -76,33 +99,45 @@ const safetyRiskItems = computed(() => {
       <div class="card start-order-card">
         <div class="card-header">
           <div class="card-title">工单信息</div>
+          <div v-if="selectedScheduledOrders.length > 1" class="start-order-switcher">
+            <button
+              v-for="(_, index) in selectedScheduledOrders"
+              :key="index"
+              type="button"
+              class="start-order-switcher__btn"
+              :class="{ active: activeSelectionIndex === index }"
+              @click="activeSelectionIndex = index"
+            >
+              {{ index + 1 }}
+            </button>
+          </div>
         </div>
         <div class="card-body">
-          <template v-if="currentSelected">
+          <template v-if="previewSelection">
             <div class="info-grid start-order-grid">
               <div class="info-item">
                 <div class="info-key">委托单号</div>
-                <div class="info-val">{{ currentSelected.order.entrustNo }}</div>
+                <div class="info-val">{{ previewSelection.order.entrustNo }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">工单编号</div>
-                <div class="info-val">{{ currentSelected.order.no }}</div>
+                <div class="info-val">{{ previewSelection.order.no }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">申请人</div>
-                <div class="info-val">{{ currentSelected.order.applicant }}</div>
+                <div class="info-val">{{ previewSelection.order.applicant }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">申请单位</div>
-                <div class="info-val">{{ currentSelected.order.applicantUnit }}</div>
+                <div class="info-val">{{ previewSelection.order.applicantUnit }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">申请日期</div>
-                <div class="info-val">{{ currentSelected.order.applyDate }}</div>
+                <div class="info-val">{{ previewSelection.order.applyDate }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">到检编号</div>
-                <div class="info-val">{{ currentSelected.order.receivingNo }}</div>
+                <div class="info-val">{{ previewSelection.order.receivingNo }}</div>
               </div>
             </div>
 
@@ -111,19 +146,19 @@ const safetyRiskItems = computed(() => {
             <div class="info-grid start-order-grid">
               <div class="info-item">
                 <div class="info-key">器皿类型</div>
-                <div class="info-val start-blue">{{ currentSelected.order.vesselType }}</div>
+                <div class="info-val start-blue">{{ previewSelection.order.vesselType }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">目标温度</div>
-                <div class="info-val start-red">{{ currentSelected.order.targetTemp }}</div>
+                <div class="info-val start-red">{{ previewSelection.order.targetTemp }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">目标压力</div>
-                <div class="info-val start-cyan">{{ currentSelected.order.targetPressure }}</div>
+                <div class="info-val start-cyan">{{ previewSelection.order.targetPressure }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">保温保压</div>
-                <div class="info-val">{{ currentSelected.order.keepCondition }}</div>
+                <div class="info-val">{{ previewSelection.order.keepCondition }}</div>
               </div>
             </div>
 
@@ -133,7 +168,7 @@ const safetyRiskItems = computed(() => {
               <div class="info-key start-products__title">待测产品列表</div>
               <div class="start-products__list">
                 <div
-                  v-for="item in currentSelected.order.items || []"
+                  v-for="item in previewSelection.order.items || []"
                   :key="item.id"
                   class="start-product-item"
                 >
@@ -158,7 +193,7 @@ const safetyRiskItems = computed(() => {
 
     <WorkOrderDetailModal
       :visible="detailModalVisible"
-      :order="currentSelected?.order || null"
+      :order="previewSelection?.order || null"
       @close="detailModalVisible = false"
     />
   </div>
@@ -212,6 +247,38 @@ const safetyRiskItems = computed(() => {
 .start-check-card,
 .start-order-card {
   background: var(--color-bg-secondary);
+}
+
+.start-order-card .card-header {
+  gap: 12px;
+}
+
+.start-order-switcher {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.start-order-switcher__btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 50%;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--color-accent-blue);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.start-order-switcher__btn.active,
+.start-order-switcher__btn:hover {
+  border-color: var(--color-accent-blue);
+  background: var(--color-accent-blue);
+  color: #fff;
 }
 
 .start-alert {
