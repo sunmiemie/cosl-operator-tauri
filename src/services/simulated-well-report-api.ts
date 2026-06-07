@@ -10,6 +10,12 @@ export interface SimulatedWellReportItem {
   status_text?: string
   submit_time: string
   audit_time?: string | null
+  reviewer_id?: number | null
+  report_json?: Record<string, unknown>
+  attachments?: Array<Record<string, unknown>>
+  order_ids?: number[]
+  order_numbers?: string[]
+  client_submit_id?: string | null
   remark?: string | null
 }
 
@@ -29,6 +35,7 @@ export interface ListSimulatedWellReportsParams {
   pageSize?: number
   taskNumber?: string
   tester?: string
+  status?: number | string
 }
 
 export async function listSimulatedWellReports(
@@ -40,6 +47,7 @@ export async function listSimulatedWellReports(
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.taskNumber) query.taskNumber = params.taskNumber
   if (params.tester) query.tester = params.tester
+  if (params.status !== undefined && params.status !== '') query.status = String(params.status)
 
   return http.get<SimulatedWellReportListResponse>(
     '/test/simulated-well/report/list/',
@@ -54,6 +62,11 @@ export interface CreateSimulatedWellReportPayload {
   test_date: string
   tester: string
   status?: number
+  report_json?: Record<string, unknown>
+  attachments?: Array<Record<string, unknown>>
+  order_ids?: number[]
+  order_numbers?: string[]
+  client_submit_id?: string | null
   remark?: string
 }
 
@@ -71,6 +84,29 @@ export async function createSimulatedWellReport(
   return http.post<SimulatedWellReportMutationResponse>(
     '/test/simulated-well/report/create/',
     payload,
+    headers
+  )
+}
+
+export interface SimulatedWellReportUploadFile {
+  fieldName: string
+  fileName: string
+  blob: Blob
+}
+
+export async function createSimulatedWellReportWithFiles(
+  payload: CreateSimulatedWellReportPayload,
+  files: SimulatedWellReportUploadFile[],
+  headers?: Record<string, string>
+): Promise<ApiResponse<SimulatedWellReportMutationResponse>> {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  files.forEach((file) => {
+    formData.append(file.fieldName, file.blob, file.fileName)
+  })
+  return http.postFormData<SimulatedWellReportMutationResponse>(
+    '/test/simulated-well/report/create/',
+    formData,
     headers
   )
 }

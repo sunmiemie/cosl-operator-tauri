@@ -1,4 +1,4 @@
-export type SimulationWellView = 'dashboard' | 'downhole-work' | 'equipment-package' | 'test-report'
+export type SimulationWellView = 'dashboard' | 'downhole-work' | 'equipment-package' | 'active-test' | 'test-report'
 
 export interface DeviceItem {
   id: string
@@ -20,6 +20,9 @@ export interface WorkOrder {
   createTime: string
   planTime: string
   taskDesc: string
+  testPurpose?: string
+  testSteps?: string
+  safetyRisks?: string
   deviceList: DeviceItem[]
   supportingTools?: DeviceItem[]
 }

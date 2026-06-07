@@ -209,14 +209,45 @@ const normalizeDeviceTools = (device: any) => {
   if (!Array.isArray(tools)) return []
   return tools
     .map((item: any) => {
-      if (typeof item === 'string') return { code: '', zh: item.trim(), en: '' }
+      if (typeof item === 'string') {
+        return {
+          code: '',
+          zh: item.trim(),
+          en: '',
+          internalInstrumentId: undefined,
+          internalInstrumentSn: '',
+          internalInstrumentName: '',
+          externalInstrumentModel: '',
+          modelNumber: '',
+          usedCount: undefined,
+          remainCount: undefined
+        }
+      }
       return {
-        code: String(item?.code || '').trim(),
-        zh: String(item?.zh || item?.nameCN || item?.name || '').trim(),
-        en: String(item?.en || item?.nameEN || '').trim()
+        code: String(item?.templateInstrumentCode || item?.code || item?.modelNumber || '').trim(),
+        zh: String(item?.templateInstrumentName || item?.zh || item?.nameCN || item?.name || '').trim(),
+        en: String(item?.en || item?.nameEN || '').trim(),
+        internalInstrumentId: item?.internalInstrumentId,
+        internalInstrumentSn: String(item?.internalInstrumentSn || '').trim(),
+        internalInstrumentName: String(item?.internalInstrumentName || '').trim(),
+        externalInstrumentModel: String(item?.externalInstrumentModel || item?.externalInstrument_model || '').trim(),
+        modelNumber: String(item?.modelNumber || item?.model_number || item?.code || '').trim(),
+        usedCount: item?.usedCount ?? item?.used_count,
+        remainCount: item?.remainCount ?? item?.remain_count
       }
     })
-    .filter((item: any) => item.code || item.zh || item.en)
+    .filter((item: any) => item.code || item.zh || item.en || item.internalInstrumentSn || item.externalInstrumentModel)
+}
+
+const formatDetailTool = (tool: any) => {
+  const templateText = [tool.code, tool.zh || tool.en].filter(Boolean).join(' ')
+  const internalText = [tool.internalInstrumentSn, tool.internalInstrumentName].filter(Boolean).join(' ')
+  const remainText =
+    tool.remainCount !== undefined && tool.remainCount !== null && `${tool.remainCount}` !== ''
+      ? `剩余 ${tool.remainCount} 次`
+      : ''
+  const externalText = tool.externalInstrumentModel ? `外部型号 ${tool.externalInstrumentModel}` : ''
+  return [templateText, internalText ? `SN ${internalText}` : '', externalText, remainText].filter(Boolean).join(' / ')
 }
 
 const detailOrderList = computed(() => normalizeTextList(detailRow.value?.order_ids))
@@ -505,10 +536,10 @@ onMounted(() => {
                   <div v-if="normalizeDeviceTools(device).length" class="detail-chip-list">
                     <span
                       v-for="tool in normalizeDeviceTools(device)"
-                      :key="`${tool.code}-${tool.zh}-${tool.en}`"
+                      :key="`${tool.code}-${tool.zh}-${tool.en}-${tool.internalInstrumentSn}`"
                       class="detail-chip"
                     >
-                      {{ [tool.code, tool.zh || tool.en].filter(Boolean).join(' ') }}
+                      {{ formatDetailTool(tool) }}
                     </span>
                   </div>
                   <div v-else class="detail-empty">暂无配接仪器</div>
