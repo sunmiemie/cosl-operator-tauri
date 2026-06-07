@@ -72,9 +72,13 @@ export function useAuth() {
    * 初始化认证状态（从 Store 加载）
    */
   const initAuth = async (): Promise<boolean> => {
-    // 避免重复初始化
+    // 已初始化时也要重新校验，避免页面长时间停留后继续使用过期 token
     if (isInitialized.value && token.value) {
-      return true
+      const valid = await validateToken()
+      if (!valid) {
+        await logout()
+      }
+      return valid
     }
 
     try {
