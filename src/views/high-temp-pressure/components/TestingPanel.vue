@@ -131,91 +131,93 @@ const testPurposeText = computed(() => {
       </div>
     </div>
 
-    <div class="video-capture-card">
-      <div class="video-capture-head">
-        <div class="capture-title-block">
-          <div class="capture-kicker">VIDEO OCR</div>
-          <div class="card-title">视频识别采集</div>
-          <div class="video-status">{{ captureStatusText }}</div>
-        </div>
-        <button class="select-video-btn" @click="emit('select-video')">
-          <Icon icon="mdi:video-switch-outline" />
-          {{ videoFileName ? '重新选择视频' : '选择视频并开始采集' }}
-        </button>
-      </div>
-
-      <div
-        class="capture-progress-track"
-        role="progressbar"
-        aria-label="视频识别采集进度"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-valuenow="captureProgressSafe"
-      >
-        <div class="capture-progress-fill" :style="{ width: `${captureProgressSafe}%` }"></div>
-      </div>
-
-      <div class="monitoring-board">
-        <div class="monitoring-chart-card">
-          <div class="monitoring-card-head">
-            <div class="monitoring-card-title">
-              <Icon icon="mdi:chart-line" />
-              <span>实时监控曲线</span>
-            </div>
-            <div class="monitoring-card-meta">
-              <span class="monitoring-series series-hot">上部水温</span>
-              <span class="monitoring-series series-warm">下部水温</span>
-              <span class="monitoring-series series-pressure">容器压力 x10</span>
-              <span class="monitoring-status">{{ captureStatusText }}</span>
-              <span class="monitoring-count">{{ csvCount }} 条</span>
-            </div>
+    <div class="testing-scroll-region">
+      <div class="video-capture-card">
+        <div class="video-capture-head">
+          <div class="capture-title-block">
+            <div class="capture-kicker">VIDEO OCR</div>
+            <div class="card-title">视频识别采集</div>
+            <div class="video-status">{{ captureStatusText }}</div>
           </div>
-          <div class="monitoring-chart-body">
-            <div id="htp-chart" class="monitoring-chart"></div>
-          </div>
+          <button class="select-video-btn" @click="emit('select-video')">
+            <Icon icon="mdi:video-switch-outline" />
+            {{ videoFileName ? '重新选择视频' : '选择视频并开始采集' }}
+          </button>
         </div>
 
-        <div class="monitoring-order-card compact-order-card">
-          <div class="monitoring-card-head compact-order-head">
-            <div class="monitoring-card-title">
-              <Icon icon="mdi:file-document-outline" />
-              <span>当前工单</span>
-            </div>
-            <span class="current-order-no">{{ currentOrderBadge }}</span>
-          </div>
+        <div
+          class="capture-progress-track"
+          role="progressbar"
+          aria-label="视频识别采集进度"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="captureProgressSafe"
+        >
+          <div class="capture-progress-fill" :style="{ width: `${captureProgressSafe}%` }"></div>
+        </div>
 
-          <div v-if="currentSelected" class="compact-order-body">
-            <div class="testing-item-block">
-              <div class="testing-item-kicker">Testing Item</div>
-              <div class="testing-item-name">{{ currentInstrument?.label || '-' }}</div>
-              <div class="testing-item-sn">SN: {{ currentInstrument?.sn || '-' }}</div>
-            </div>
-
-            <div class="metric-card-grid">
-              <div
-                v-for="metric in currentOrderMetrics"
-                :key="metric.label"
-                class="metric-card"
-                :class="`metric-${metric.tone}`"
-              >
-                <div class="metric-label">{{ metric.label }}</div>
-                <div class="metric-value">{{ metric.value }}</div>
+        <div class="monitoring-board">
+          <div class="monitoring-chart-card">
+            <div class="monitoring-card-head">
+              <div class="monitoring-card-title">
+                <Icon icon="mdi:chart-line" />
+                <span>实时监控曲线</span>
+              </div>
+              <div class="monitoring-card-meta">
+                <span class="monitoring-series series-hot">上部水温</span>
+                <span class="monitoring-series series-warm">下部水温</span>
+                <span class="monitoring-series series-pressure">容器压力 x10</span>
+                <span class="monitoring-status">{{ captureStatusText }}</span>
+                <span class="monitoring-count">{{ csvCount }} 条</span>
               </div>
             </div>
-
-            <button class="full-order-btn" @click="detailModalVisible = true">
-              <span>查看完整工单详情 · {{ detailModuleCount }} 模块</span>
-              <Icon icon="mdi:arrow-right" />
-            </button>
+            <div class="monitoring-chart-body">
+              <div id="htp-chart" class="monitoring-chart"></div>
+            </div>
           </div>
 
-          <div v-else class="monitoring-order-empty">
-            <Icon icon="mdi:clipboard-remove-outline" />
-            <span>未选择排程仪器</span>
+          <div class="monitoring-order-card compact-order-card">
+            <div class="monitoring-card-head compact-order-head">
+              <div class="monitoring-card-title">
+                <Icon icon="mdi:file-document-outline" />
+                <span>当前工单</span>
+              </div>
+              <span class="current-order-no">{{ currentOrderBadge }}</span>
+            </div>
+
+            <div v-if="currentSelected" class="compact-order-body">
+              <div class="testing-item-block">
+                <div class="testing-item-kicker">Testing Item</div>
+                <div class="testing-item-name">{{ currentInstrument?.label || '-' }}</div>
+                <div class="testing-item-sn">SN: {{ currentInstrument?.sn || '-' }}</div>
+              </div>
+
+              <div class="metric-card-grid">
+                <div
+                  v-for="metric in currentOrderMetrics"
+                  :key="metric.label"
+                  class="metric-card"
+                  :class="`metric-${metric.tone}`"
+                >
+                  <div class="metric-label">{{ metric.label }}</div>
+                  <div class="metric-value">{{ metric.value }}</div>
+                </div>
+              </div>
+
+              <button class="full-order-btn" @click="detailModalVisible = true">
+                <span>查看完整工单详情 · {{ detailModuleCount }} 模块</span>
+                <Icon icon="mdi:arrow-right" />
+              </button>
+            </div>
+
+            <div v-else class="monitoring-order-empty">
+              <Icon icon="mdi:clipboard-remove-outline" />
+              <span>未选择排程仪器</span>
+            </div>
           </div>
         </div>
+        <div v-if="exportedCaptureDir" class="export-path">已保存：{{ exportedCaptureDir }}</div>
       </div>
-      <div v-if="exportedCaptureDir" class="export-path">已保存：{{ exportedCaptureDir }}</div>
     </div>
 
     <div v-if="detailModalVisible && currentOrder" class="modal-overlay" @click.self="detailModalVisible = false">
@@ -460,6 +462,27 @@ const testPurposeText = computed(() => {
   --capture-amber: #2563eb;
   --capture-green: var(--color-accent-green, #10b981);
   --capture-red: #dc2626;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ocr-bar {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.testing-scroll-region {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .video-capture-card {
@@ -471,7 +494,8 @@ const testPurposeText = computed(() => {
     radial-gradient(circle at 18% 0%, rgba(245, 158, 11, 0.13), transparent 34%);
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
   padding: 18px;
-  margin: 14px 0;
+  margin: 0 0 12px;
+  min-height: 100%;
 }
 
 .video-capture-head {
@@ -1160,25 +1184,27 @@ const testPurposeText = computed(() => {
 }
 
 .test-controls {
+  flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  padding: 4px 0 2px;
+  grid-template-columns: repeat(3, minmax(160px, 210px));
+  justify-content: center;
+  gap: 12px;
+  padding: 4px 0 0;
 }
 
 .control-action {
   border: 1px solid rgba(148, 163, 184, 0.34);
-  border-radius: 18px;
+  border-radius: 14px;
   background: #fff;
   color: var(--capture-ink);
   cursor: pointer;
-  min-height: 74px;
-  padding: 14px 16px;
+  min-height: 58px;
+  padding: 10px 12px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   text-align: left;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
 }
 
@@ -1188,13 +1214,13 @@ const testPurposeText = computed(() => {
 }
 
 .control-icon {
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 14px;
-  font-size: 20px;
+  border-radius: 11px;
+  font-size: 17px;
 }
 
 .control-copy {
@@ -1204,13 +1230,13 @@ const testPurposeText = computed(() => {
 }
 
 .control-copy strong {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.15;
 }
 
 .control-copy small {
   color: var(--capture-muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .control-action-pause .control-icon {

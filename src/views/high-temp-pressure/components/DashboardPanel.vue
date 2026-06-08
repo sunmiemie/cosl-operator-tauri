@@ -103,18 +103,6 @@ const gridInnerWidth = computed(() => {
   return timeColWidth + base * widthFactor.value
 })
 
-const scheduledInstrumentIdSet = computed(() => {
-  const set = new Set<string>()
-  Object.values(props.scheduledOrders || {}).forEach((ids) => {
-    ids.forEach((id) => set.add(id))
-  })
-  return set
-})
-
-const getPendingInstruments = (order: WorkOrder) => {
-  return order.items.filter((item) => !scheduledInstrumentIdSet.value.has(item.id) && props.isInstrumentPending(item.id))
-}
-
 const selectedScheduledOrderGroups = computed(() => {
   const map = new Map<string, { order: WorkOrder; count: number }>()
   props.selectedScheduledOrders.forEach((selection) => {
@@ -128,16 +116,24 @@ const selectedScheduledOrderGroups = computed(() => {
   return Array.from(map.values())
 })
 
+const scheduledInstrumentIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(props.scheduledOrders || {}).forEach((ids) => {
+    ids.forEach((id) => set.add(id))
+  })
+  return set
+})
+
 const getActiveInstruments = (order: WorkOrder) => {
   return order.items.filter((item) => props.isInstrumentPending(item.id))
 }
 
-const getScheduledInstrumentCount = (order: WorkOrder) => {
-  return getActiveInstruments(order).length - getPendingInstruments(order).length
-}
-
 const getRunningInstrumentCount = (order: WorkOrder) => {
   return getActiveInstruments(order).filter((item) => props.isInstrumentRunning(item.id)).length
+}
+
+const getScheduledInstrumentCount = (order: WorkOrder) => {
+  return getActiveInstruments(order).filter((item) => scheduledInstrumentIdSet.value.has(item.id)).length
 }
 
 const getInstrumentStatusMeta = (instrumentId: string) => {

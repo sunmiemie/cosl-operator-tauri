@@ -302,11 +302,16 @@ export function useHighTempPressureSchedule() {
       .filter(Boolean) as ScheduledEvent[]
   }
 
+  function shouldRestoreInstrumentSchedule(order: WorkOrder, instrument: InstrumentItem) {
+    return order.statusCode === 2 || instrument.status === 1 || !!runningInstrumentIds.value[instrument.id]
+  }
+
   function restoreScheduledEvents(orders: WorkOrder[]) {
     const next: Record<string, ScheduledEvent[]> = {}
     orders.forEach((order) => {
       order.items.forEach((instrument) => {
         if (instrument.completed || completedInstrumentIds.value[instrument.id]) return
+        if (!shouldRestoreInstrumentSchedule(order, instrument)) return
         const events = eventsFromInstrument(instrument, order.id)
         if (events.length) next[instrument.id] = events
       })
@@ -406,6 +411,9 @@ export function useHighTempPressureSchedule() {
       const allInstrumentIdsFromServer = new Set(
         all.flatMap(order => order.items.map(item => item.id))
       )
+      const orderStatusByInstrumentId = new Map(
+        all.flatMap(order => order.items.map(item => [item.id, order.statusCode] as const))
+      )
       const completedInstrumentIdsFromServer = new Set(
         all.flatMap(order => order.items.filter(item => item.completed).map(item => item.id))
       )
@@ -418,7 +426,11 @@ export function useHighTempPressureSchedule() {
       const nextCompletedInstrumentIds = Object.fromEntries(nextCompletedEntries) as Record<string, true>
       const nextRunningEntries: Array<[string, true]> = [
         ...Object.entries(runningInstrumentIds.value)
-          .filter(([instrumentId]) => allInstrumentIdsFromServer.has(instrumentId) && !nextCompletedInstrumentIds[instrumentId])
+          .filter(([instrumentId]) =>
+            allInstrumentIdsFromServer.has(instrumentId) &&
+            !nextCompletedInstrumentIds[instrumentId] &&
+            orderStatusByInstrumentId.get(instrumentId) === 2
+          )
           .map(([instrumentId]) => [instrumentId, true] as [string, true]),
       ]
       const nextRunningInstrumentIds = Object.fromEntries(nextRunningEntries) as Record<string, true>
@@ -429,6 +441,7 @@ export function useHighTempPressureSchedule() {
 
       workOrders.value = all
       restoreScheduledEvents(all)
+      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => (scheduledEvents.value[id] || []).length)
       persistProgressState()
     } catch (error) {
       workOrdersError.value = error instanceof Error ? error.message : '加载高温高压井工单失败'
@@ -1219,7 +1232,10 @@ export function useHighTempPressureSchedule() {
 
   const isInstrumentRunning = (instrumentId: string) => {
     const instrument = getInstrumentById(instrumentId)
-    return isInstrumentPending(instrumentId) && (instrument?.status === 1 || !!runningInstrumentIds.value[instrumentId])
+    const order = getOrderByInstrumentId(instrumentId)
+    return isInstrumentPending(instrumentId) &&
+      order?.statusCode === 2 &&
+      (instrument?.status === 1 || !!runningInstrumentIds.value[instrumentId])
   }
 
   const markOrderStarted = (orderId: string) => {

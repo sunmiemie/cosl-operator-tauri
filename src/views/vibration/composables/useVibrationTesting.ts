@@ -401,6 +401,15 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     return `${orderId}_${videoName}_采集结果`
   }
 
+  async function getConfiguredDownloadDir() {
+    await initConfig()
+    const configuredDownloadDir = String(getConfigItem('downloadDir') || '').trim()
+    if (!configuredDownloadDir) {
+      return ''
+    }
+    return configuredDownloadDir
+  }
+
   function startVibTestMonitor() {
     if (!videoPath.value) {
       captureStatusText.value = '请先上传 .wmv 试验视频后再开始采集'
@@ -500,7 +509,6 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
     if (isFinalizing.value) return
     void (async () => {
       const wasRunning = isRunning.value
-      const wasPaused = isPaused.value
       const wasCompleted = analysisCompleted.value
       isFinalizing.value = true
       isRunning.value = false
@@ -523,26 +531,11 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
         return
       }
 
-      let selectedDir: string | string[] | null = null
-      try {
-        selectedDir = await open({
-          title: '选择测试结束后的保存目录',
-          directory: true,
-          multiple: false,
-          defaultPath: exportOutputDir.value || undefined,
-        })
-      } catch (error) {
+      const configuredDownloadDir = await getConfiguredDownloadDir()
+      if (!configuredDownloadDir) {
         isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
-        captureStatusText.value = formatInvokeError(error, '打开保存目录选择器失败，可继续采集或稍后重试')
+        captureStatusText.value = '请先在设置中配置下载文件保存目录'
         ElMessage.error(captureStatusText.value)
-        isFinalizing.value = false
-        return
-      }
-      if (!selectedDir || typeof selectedDir !== 'string') {
-        isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
-        captureStatusText.value = wasRunning || wasPaused || !wasCompleted
-          ? '已取消选择保存目录，可继续采集、重新上传视频，或再次点击结束重新选择保存目录'
-          : '已取消选择保存目录，可再次点击结束重新选择保存目录，或重新采集'
         isFinalizing.value = false
         return
       }
@@ -550,10 +543,10 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
       try {
         const exportResult = await invoke<any>('export_vibration_capture_output', {
           sourceOutputDir: captureOutputDir.value,
-          targetDir: selectedDir,
+          targetDir: configuredDownloadDir,
           folderName: buildExportFolderName(),
         })
-        exportOutputDir.value = String(exportResult?.export_dir || selectedDir)
+        exportOutputDir.value = String(exportResult?.export_dir || configuredDownloadDir)
         captureStatusText.value = `测试结果已保存到 ${exportOutputDir.value}`
         ElMessage.success(`测试结果已保存到 ${exportOutputDir.value}`)
         options.onFinishToReport(exportOutputDir.value)

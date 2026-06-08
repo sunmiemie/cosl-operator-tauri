@@ -745,6 +745,17 @@ export function useHighTempPressureTesting() {
     return `${source}_高温高压井视频采集结果`
   }
 
+  async function getConfiguredDownloadDir() {
+    await initConfig()
+    const configuredDownloadDir = String(getConfigItem('downloadDir') || '').trim()
+    if (!configuredDownloadDir) {
+      captureStatusText.value = '请先在设置中配置下载文件保存目录'
+      ElMessage.error(captureStatusText.value)
+      return ''
+    }
+    return configuredDownloadDir
+  }
+
   async function finalizeVideoCapture() {
     stopCapturePolling()
     if (!captureOutputDir.value) return true
@@ -754,23 +765,18 @@ export function useHighTempPressureTesting() {
     }).catch(() => undefined)
     await syncCaptureResultFromOutputDir().catch(() => undefined)
 
-    const selectedDir = await open({
-      title: '选择高温高压井视频识别结果保存目录',
-      directory: true,
-      multiple: false,
-    })
-    if (!selectedDir || typeof selectedDir !== 'string') {
-      captureStatusText.value = '已取消保存目录选择，仍停留在测试页面'
+    const configuredDownloadDir = await getConfiguredDownloadDir()
+    if (!configuredDownloadDir) {
       return false
     }
 
     try {
       const result = await invoke<any>('export_high_temp_pressure_capture_output', {
         sourceOutputDir: captureOutputDir.value,
-        targetDir: selectedDir,
+        targetDir: configuredDownloadDir,
         folderName: buildExportFolderName(),
       })
-      exportedCaptureDir.value = String(result?.export_dir || selectedDir)
+      exportedCaptureDir.value = String(result?.export_dir || configuredDownloadDir)
       await exportCurveChartImage(exportedCaptureDir.value)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || '视频识别结果导出失败')

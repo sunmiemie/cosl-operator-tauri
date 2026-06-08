@@ -88,7 +88,7 @@ const getOrderStatusText = (order: WorkOrder) => {
   if (order.status === 5) return '已完成'
   if (order.status === 6) return '异常'
   if (order.scheduledStartAt || order.scheduleSegments?.length) return '已排程'
-  return order.statusText || '待排程'
+  return '待排程'
 }
 
 const getStatusClass = (statusText: string) => {

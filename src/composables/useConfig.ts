@@ -39,6 +39,7 @@ export interface AppConfig {
   
   // 离线功能设置
   dataDir: string          // 离线数据存储目录
+  downloadDir: string      // 下载文件保存目录
   autoSave: boolean        // 测试过程自动保存
   autoReUpload: boolean    // 网络恢复自动回传
   
@@ -74,6 +75,7 @@ const defaultConfig: AppConfig = {
   },
   // 离线功能默认值
   dataDir: '',
+  downloadDir: '',
   autoSave: true,
   autoReUpload: true,
   // 隐藏菜单默认值（默认全部显示）
@@ -126,6 +128,7 @@ export async function initializeConfig(): Promise<AppConfig> {
       const xrayDevice = await store.get<number>('xrayDevice')
       const xrayCropArea = await store.get<XrayCropArea>('xrayCropArea')
       const dataDir = await store.get<string>('dataDir')
+      const downloadDir = await store.get<string>('downloadDir')
       const autoSave = await store.get<boolean>('autoSave')
       const autoReUpload = await store.get<boolean>('autoReUpload')
       const hiddenMenus = await store.get<string[]>('hiddenMenus')
@@ -177,6 +180,10 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('dataDir', defaultConfig.dataDir)
         needsSave = true
       }
+      if (downloadDir === null || downloadDir === undefined) {
+        await store.set('downloadDir', defaultConfig.downloadDir)
+        needsSave = true
+      }
       if (autoSave === null || autoSave === undefined) {
         await store.set('autoSave', defaultConfig.autoSave)
         needsSave = true
@@ -225,6 +232,7 @@ export async function initializeConfig(): Promise<AppConfig> {
         xrayDevice: xrayDevice ?? defaultConfig.xrayDevice,
         xrayCropArea: xrayCropArea ?? defaultConfig.xrayCropArea,
         dataDir: dataDir ?? defaultConfig.dataDir,
+        downloadDir: downloadDir ?? defaultConfig.downloadDir,
         autoSave: autoSave ?? defaultConfig.autoSave,
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,
         hiddenMenus: hiddenMenus ?? defaultConfig.hiddenMenus,

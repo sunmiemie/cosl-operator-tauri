@@ -59,6 +59,7 @@ const isRestartingCameras = ref(false)
 
 // 离线功能设置
 const dataDir = ref('')
+const downloadDir = ref('')
 const autoSave = ref(true)
 const autoReUpload = ref(true)
 
@@ -151,6 +152,7 @@ onMounted(async () => {
   planeDevice.value = config.value.planeDevice ?? -1
   xrayDevice.value = config.value.xrayDevice ?? -1
   dataDir.value = config.value.dataDir ?? ''
+  downloadDir.value = config.value.downloadDir ?? ''
   autoSave.value = config.value.autoSave ?? true
   autoReUpload.value = config.value.autoReUpload ?? true
   language.value = config.value.language ?? 'zh-CN'
@@ -388,6 +390,8 @@ async function saveDeviceSetting(type: 'micro' | 'plane' | 'xray', value: number
 // 选择数据存储目录（使用手动输入）
 const isEditingDataDir = ref(false)
 const tempDataDir = ref('')
+const isEditingDownloadDir = ref(false)
+const tempDownloadDir = ref('')
 
 function startEditDataDir() {
   tempDataDir.value = dataDir.value
@@ -402,6 +406,44 @@ async function saveDataDir() {
 
 function cancelEditDataDir() {
   isEditingDataDir.value = false
+}
+
+function startEditDownloadDir() {
+  tempDownloadDir.value = downloadDir.value
+  isEditingDownloadDir.value = true
+}
+
+async function saveDownloadDir() {
+  const nextDir = tempDownloadDir.value.trim()
+  downloadDir.value = nextDir
+  await setConfigItem('downloadDir', nextDir)
+  isEditingDownloadDir.value = false
+  ElMessage.success('下载文件保存目录已保存')
+}
+
+function cancelEditDownloadDir() {
+  isEditingDownloadDir.value = false
+  tempDownloadDir.value = ''
+}
+
+async function selectDownloadDir() {
+  try {
+    const selected = await open({
+      title: '选择下载文件保存目录',
+      directory: true,
+      multiple: false,
+    })
+    if (!selected || typeof selected !== 'string') return
+
+    downloadDir.value = selected
+    tempDownloadDir.value = selected
+    await setConfigItem('downloadDir', selected)
+    isEditingDownloadDir.value = false
+    ElMessage.success('下载文件保存目录已保存')
+  } catch (error) {
+    console.error('选择下载文件保存目录失败:', error)
+    ElMessage.error('选择下载文件保存目录失败')
+  }
 }
 
 // 保存离线设置
@@ -1031,6 +1073,66 @@ function getFlojoyInitStatusText(): string {
                 title="编辑"
               >
                 <Icon icon="mdi:pencil" />
+              </button>
+            </div>
+          </div>
+          <div class="settings-item">
+            <span class="item-label">下载文件保存目录</span>
+            <div class="dir-selector">
+              <input
+                v-if="isEditingDownloadDir"
+                v-model="tempDownloadDir"
+                class="dir-input editable"
+                placeholder="输入下载文件保存目录"
+                @keyup.enter="saveDownloadDir"
+                @keyup.escape="cancelEditDownloadDir"
+              />
+              <input
+                v-else
+                :value="downloadDir || '未设置'"
+                readonly
+                class="dir-input"
+                @click="startEditDownloadDir"
+              />
+              <button
+                v-if="isEditingDownloadDir"
+                class="browse-btn"
+                @click="selectDownloadDir"
+                title="选择目录"
+              >
+                <Icon icon="mdi:folder-open-outline" />
+              </button>
+              <button
+                v-if="isEditingDownloadDir"
+                class="browse-btn save"
+                @click="saveDownloadDir"
+                title="保存"
+              >
+                <Icon icon="mdi:check" />
+              </button>
+              <button
+                v-if="isEditingDownloadDir"
+                class="browse-btn"
+                @click="cancelEditDownloadDir"
+                title="取消"
+              >
+                <Icon icon="mdi:close" />
+              </button>
+              <button
+                v-if="!isEditingDownloadDir"
+                class="browse-btn"
+                @click="startEditDownloadDir"
+                title="编辑"
+              >
+                <Icon icon="mdi:pencil" />
+              </button>
+              <button
+                v-if="!isEditingDownloadDir"
+                class="browse-btn"
+                @click="selectDownloadDir"
+                title="选择目录"
+              >
+                <Icon icon="mdi:folder-open-outline" />
               </button>
             </div>
           </div>
