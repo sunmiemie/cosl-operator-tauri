@@ -1,5 +1,4 @@
 import { computed, ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { ElMessage } from 'element-plus'
 import type { ReportFile, ReportFileId } from '../types'
 import {
@@ -20,27 +19,24 @@ interface UseVibrationReportOptions {
   onComplete?: () => void
 }
 
+const createReportFiles = (): ReportFile[] => [
+  { id: 'screenshots', name: 'chart_screenshots', status: '待确认', done: false },
+  { id: 'json', name: 'top_readings_0.5s.json', status: '待确认', done: false },
+]
+
 export function useVibrationReport(options: UseVibrationReportOptions) {
   const exportDir = ref('')
-  const reportFiles = ref<ReportFile[]>([
-    { id: 'csv', name: '振动测试数据.csv', status: '待生成', done: false },
-    { id: 'png', name: '实时波形.png', status: '待生成', done: false },
-    { id: 'doc', name: '测试报告.docx', status: '待生成', done: false },
-  ])
+  const reportFiles = ref<ReportFile[]>(createReportFiles())
   const fileGenRunning = ref(false)
   const allFilesDone = computed(() => reportFiles.value.every(f => f.done))
   const reportProgress = computed(() => {
-    const total = reportFiles.value.length
+    const total = reportFiles.value.length || 1
     const done = reportFiles.value.filter(f => f.done).length
     return Math.round((done / total) * 100)
   })
 
   function resetReportFiles() {
-    reportFiles.value = [
-      { id: 'csv', name: '振动测试数据.csv', status: '待生成', done: false },
-      { id: 'png', name: '实时波形.png', status: '待生成', done: false },
-      { id: 'doc', name: '测试报告.docx', status: '待生成', done: false },
-    ]
+    reportFiles.value = createReportFiles()
     fileGenRunning.value = false
   }
 
@@ -52,7 +48,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
   function markFileDone(id: ReportFileId) {
     const f = reportFiles.value.find(x => x.id === id)
     if (f) {
-      f.status = '已生成 ✓'
+      f.status = '已保留 ✓'
       f.done = true
     }
   }
@@ -65,21 +61,6 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     if (!exportDir.value) {
       throw new Error('未设置测试结果保存目录')
     }
-  }
-
-  async function buildImageBytes() {
-    const captureBlob = await options.getLatestCaptureBlob()
-    if (captureBlob) {
-      return Array.from(new Uint8Array(await captureBlob.arrayBuffer()))
-    }
-    const canvas = options.getOscCanvas()
-    if (canvas) {
-      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res))
-      if (blob) {
-        return Array.from(new Uint8Array(await blob.arrayBuffer()))
-      }
-    }
-    return []
   }
 
   async function uploadPreExperimentIfNeeded() {
@@ -136,27 +117,16 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     void (async () => {
       try {
         ensureExportDir()
-        updateFileStatus('csv', '生成中...')
-        updateFileStatus('png', '生成中...')
-        updateFileStatus('doc', '生成中...')
-        const imageBytes = await buildImageBytes()
-        await invoke('write_vibration_report_files', {
-          exportDir: exportDir.value,
-          csvContent: options.getCsvContent(),
-          reportText: options.getReportText(),
-          imageBytes,
-        })
-        markFileDone('csv')
-        markFileDone('png')
-        markFileDone('doc')
+        updateFileStatus('screenshots', '已输出')
+        updateFileStatus('json', '已输出')
+        markFileDone('screenshots')
+        markFileDone('json')
         await uploadPreExperimentIfNeeded()
-        if (exportDir.value) ElMessage.success(`报告文件已写入 ${exportDir.value}`)
+        if (exportDir.value) ElMessage.success(`报告输出已保留 ${exportDir.value}`)
         options.onComplete?.()
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        updateFileStatus('csv', message)
-        updateFileStatus('png', message)
-        updateFileStatus('doc', message)
+        reportFiles.value.forEach(file => updateFileStatus(file.id, message))
       } finally {
         fileGenRunning.value = false
       }

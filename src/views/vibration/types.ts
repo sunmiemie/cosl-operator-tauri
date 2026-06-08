@@ -102,7 +102,7 @@ export interface TimeSlot {
   isHalf: boolean
 }
 
-export type ReportFileId = 'csv' | 'png' | 'doc'
+export type ReportFileId = 'screenshots' | 'json'
 
 export interface ReportFile {
   id: ReportFileId

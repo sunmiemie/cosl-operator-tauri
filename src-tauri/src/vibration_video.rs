@@ -291,6 +291,44 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_legacy_vibration_report_file(export_path: &Path) -> Result<(), String> {
+    for file_name in [
+        "experiment_summary.json",
+        "experiment_data.csv",
+        "capture_progress.json",
+        "振动测试数据.csv",
+        "图像采集结果.png",
+        "测试报告.docx",
+    ] {
+        let path = export_path.join(file_name);
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| format!("清理旧报告文件失败: {} ({})", path.to_string_lossy(), e))?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_vibration_report_output(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|e| format!("创建导出目录失败: {}", e))?;
+
+    let json_source = source.join("top_readings_0.5s.json");
+    if !json_source.exists() {
+        return Err(format!("采样JSON不存在: {}", json_source.to_string_lossy()));
+    }
+    fs::copy(&json_source, target.join("top_readings_0.5s.json"))
+        .map_err(|e| format!("复制采样JSON失败: {}", e))?;
+
+    let screenshots_source = source.join("chart_screenshots");
+    if !screenshots_source.exists() {
+        return Err(format!("截图目录不存在: {}", screenshots_source.to_string_lossy()));
+    }
+    copy_dir_recursive(&screenshots_source, &target.join("chart_screenshots"))?;
+
+    remove_legacy_vibration_report_file(target)?;
+    Ok(())
+}
+
 fn sanitize_folder_name(input: &str) -> String {
     let invalid = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
     let mut sanitized = input
@@ -613,7 +651,7 @@ pub fn export_vibration_capture_output(
         fs::remove_dir_all(&final_target).map_err(|e| format!("清理旧导出目录失败: {}", e))?;
     }
 
-    copy_dir_recursive(&source, &final_target)?;
+    copy_vibration_report_output(&source, &final_target)?;
 
     Ok(serde_json::json!({
         "export_dir": final_target.to_string_lossy(),
@@ -624,29 +662,17 @@ pub fn export_vibration_capture_output(
 #[tauri::command]
 pub fn write_vibration_report_files(
     export_dir: String,
-    csv_content: String,
-    report_text: String,
-    image_bytes: Option<Vec<u8>>,
+    _csv_content: String,
+    _report_text: String,
+    _image_bytes: Option<Vec<u8>>,
 ) -> Result<serde_json::Value, String> {
     ensure_exists(&export_dir, "导出目录")?;
     let export_path = PathBuf::from(&export_dir);
-
-    let csv_path = export_path.join("振动测试数据.csv");
-    fs::write(&csv_path, csv_content).map_err(|e| format!("写入 CSV 失败: {}", e))?;
-
-    let image_path = export_path.join("图像采集结果.png");
-    match image_bytes {
-        Some(bytes) => fs::write(&image_path, bytes).map_err(|e| format!("写入 PNG 失败: {}", e))?,
-        None => fs::write(&image_path, []).map_err(|e| format!("写入 PNG 失败: {}", e))?,
-    }
-
-    let doc_path = export_path.join("测试报告.docx");
-    fs::write(&doc_path, report_text).map_err(|e| format!("写入 DOCX 失败: {}", e))?;
+    remove_legacy_vibration_report_file(&export_path)?;
 
     Ok(serde_json::json!({
         "export_dir": export_dir,
-        "csv_path": csv_path.to_string_lossy(),
-        "image_path": image_path.to_string_lossy(),
-        "doc_path": doc_path.to_string_lossy(),
+        "json_path": export_path.join("top_readings_0.5s.json").to_string_lossy(),
+        "screenshots_dir": export_path.join("chart_screenshots").to_string_lossy(),
     }))
 }

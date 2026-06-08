@@ -584,7 +584,7 @@ function handleUploadDrop(event: DragEvent) {
           <div class="content-pad">
             <div class="alert info" style="margin-bottom:12px">
               <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">点击“生成文件”后将依次输出实验数据 CSV、图像采集结果 PNG 和测试报告 DOC，完成后自动进入关机检查。</div>
+              <div class="alert-text">点击“确认输出”后仅保留 chart_screenshots 和 top_readings_0.5s.json，完成后自动进入关机检查。</div>
             </div>
             <div v-if="analysisSummary" class="report-summary-grid">
               <div class="meta-card"><span class="meta-label">采样记录</span><span class="meta-value">{{ analysisSummary.recordCount }} 条</span></div>
@@ -593,14 +593,14 @@ function handleUploadDrop(event: DragEvent) {
               <div class="meta-card"><span class="meta-label">最大驱动</span><span class="meta-value">{{ analysisSummary.maxDrive }}</span></div>
             </div>
             <div class="kv" style="margin-top:8px">
-              <div class="k">{{ reportFiles[0].name }}</div><div class="v">{{ reportFiles[0].status }}</div>
-              <div class="k">{{ reportFiles[1].name }}</div><div class="v">{{ reportFiles[1].status }}</div>
-              <div class="k">{{ reportFiles[2].name }}</div><div class="v">{{ reportFiles[2].status }}</div>
+              <template v-for="file in reportFiles" :key="file.id">
+                <div class="k">{{ file.name }}</div><div class="v">{{ file.status }}</div>
+              </template>
             </div>
           </div>
           <div class="modal-actions">
             <button class="cancel-btn" @click="emit('set-stage-testing')">返回测试</button>
-            <button class="next-btn" :disabled="fileGenRunning" @click="emit('start-file-gen')">生成文件</button>
+            <button class="next-btn" :disabled="fileGenRunning" @click="emit('start-file-gen')">确认输出</button>
           </div>
         </div>
       </div>
