@@ -771,6 +771,24 @@ export function useVibrationSchedule() {
     if (val) calBase.value = getMonday(new Date(val))
   }
 
+  function loadPresetSchedule() {
+    const base = calBase.value
+    const scheduled = new Set(Object.keys(scheduledEvents.value))
+    const presets = workOrders.value
+      .slice(0, 3)
+      .filter((order) => !scheduled.has(order.id))
+      .map((order, index) => ({
+        d: index,
+        t: ['0800', '1000', '1400'][index] || '0800',
+        id: order.id,
+      }))
+
+    presets.forEach((preset) => {
+      const dateStr = fmtDate(addDays(base, preset.d))
+      void scheduleOrder(preset.id, dateStr, preset.t, false)
+    })
+  }
+
   function handleDragStart(e: DragEvent, order: WorkOrder) {
     draggedOrder.value = order
     isDragging.value = true
@@ -1021,6 +1039,7 @@ export function useVibrationSchedule() {
     prevWeek,
     nextWeek,
     gotoDate,
+    loadPresetSchedule,
     handleDragStart,
     handleDragEnd,
     handleDragOver,

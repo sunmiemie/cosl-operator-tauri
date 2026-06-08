@@ -53,6 +53,7 @@ const emit = defineEmits<{
   'prev-week': []
   'next-week': []
   'goto-date': [event: Event]
+  'load-preset-schedule': []
   'drag-over': [event: DragEvent, isPast: boolean]
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
   'select-scheduled-order': [orderId: string]
@@ -457,6 +458,7 @@ const getScheduledStyle = (item: any) => {
           <input type="date" class="week-cal-date-input" :value="fmtDate(calBase)" @change="emit('goto-date', $event)" title="跳转到指定日期所在周">
           <span class="week-cal-label">{{ weekLabel }}</span>
           <button class="week-cal-nav" @click="emit('next-week')">下一周 ›</button>
+          <button class="week-cal-nav" @click="emit('load-preset-schedule')">读取本周排程</button>
         </div>
         <div class="legend">
           <div class="legend-item"><span class="dot pending"></span>空闲</div>

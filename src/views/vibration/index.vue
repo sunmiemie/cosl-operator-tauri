@@ -47,6 +47,7 @@ const {
   prevWeek,
   nextWeek,
   gotoDate,
+  loadPresetSchedule,
   handleDragStart,
   handleDragEnd,
   handleDragOver,
@@ -516,6 +517,7 @@ function toggleShutdownCheck(id: number) {
         @prev-week="prevWeek"
         @next-week="nextWeek"
         @goto-date="gotoDate"
+        @load-preset-schedule="loadPresetSchedule"
         @drag-over="handleDragOver"
         @drop="handleDrop"
         @select-scheduled-order="selectScheduledOrder"
