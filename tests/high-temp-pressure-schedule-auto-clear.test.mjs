@@ -11,6 +11,23 @@ assert.match(
   'schedule restore should have an explicit rule for whether backend schedule fields are still active'
 )
 
+const restoreRuleStart = schedule.indexOf('function shouldRestoreInstrumentSchedule')
+const restoreEventsStart = schedule.indexOf('function restoreScheduledEvents', restoreRuleStart)
+assert.ok(restoreRuleStart >= 0 && restoreEventsStart > restoreRuleStart, 'schedule restore helpers should be ordered')
+const restoreRuleBlock = schedule.slice(restoreRuleStart, restoreEventsStart)
+
+assert.match(
+  restoreRuleBlock,
+  /eventsFromInstrument\(instrument,\s*order\.id\)\.length\s*>\s*0/,
+  'refresh should restore calendar blocks when backend still returns valid schedule fields'
+)
+
+assert.doesNotMatch(
+  restoreRuleBlock,
+  /order\.statusCode\s*===\s*2|instrument\.status\s*===\s*1|runningInstrumentIds\.value/,
+  'refresh should not require testing/running status to restore backend schedule fields'
+)
+
 assert.match(
   schedule,
   /if\s*\(!shouldRestoreInstrumentSchedule\(order,\s*instrument\)\)\s*return/,

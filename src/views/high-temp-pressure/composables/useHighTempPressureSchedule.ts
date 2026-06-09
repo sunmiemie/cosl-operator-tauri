@@ -303,7 +303,7 @@ export function useHighTempPressureSchedule() {
   }
 
   function shouldRestoreInstrumentSchedule(order: WorkOrder, instrument: InstrumentItem) {
-    return order.statusCode === 2 || instrument.status === 1 || !!runningInstrumentIds.value[instrument.id]
+    return eventsFromInstrument(instrument, order.id).length > 0
   }
 
   function restoreScheduledEvents(orders: WorkOrder[]) {
