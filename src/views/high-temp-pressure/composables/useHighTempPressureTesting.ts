@@ -505,7 +505,7 @@ export function useHighTempPressureTesting() {
   async function ensureCurveChartImage() {
     if (curveChartImagePath.value) return curveChartImagePath.value
     await syncCaptureResultFromOutputDir().catch(() => undefined)
-    const outputDir = exportedCaptureDir.value || captureOutputDir.value
+    const outputDir = captureOutputDir.value
     if (!outputDir) {
       throw new Error('未找到视频识别结果目录，无法生成温度/压力测试曲线图')
     }
@@ -777,7 +777,6 @@ export function useHighTempPressureTesting() {
         folderName: buildExportFolderName(),
       })
       exportedCaptureDir.value = String(result?.export_dir || configuredDownloadDir)
-      await exportCurveChartImage(exportedCaptureDir.value)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error || '视频识别结果导出失败')
       console.warn('[high-temp-pressure] export capture output failed:', error)

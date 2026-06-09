@@ -254,28 +254,16 @@ fn read_progress_file(output_dir: &Path) -> Result<serde_json::Value, String> {
     Ok(progress)
 }
 
-fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+fn copy_high_temp_pressure_report_output(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|e| format!("创建导出目录失败: {}", e))?;
-    for entry in fs::read_dir(source).map_err(|e| format!("读取导出源目录失败: {}", e))? {
-        let entry = entry.map_err(|e| format!("读取导出目录项失败: {}", e))?;
-        let entry_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let metadata = entry
-            .metadata()
-            .map_err(|e| format!("读取导出文件信息失败: {}", e))?;
-        if metadata.is_dir() {
-            copy_dir_recursive(&entry_path, &target_path)?;
-        } else {
-            fs::copy(&entry_path, &target_path).map_err(|e| {
-                format!(
-                    "复制文件失败: {} -> {} ({})",
-                    entry_path.to_string_lossy(),
-                    target_path.to_string_lossy(),
-                    e
-                )
-            })?;
-        }
+
+    let json_source = source.join("video_readings_0.5s.json");
+    if !json_source.exists() {
+        return Err(format!("采样JSON不存在: {}", json_source.to_string_lossy()));
     }
+    fs::copy(&json_source, target.join("video_readings_0.5s.json"))
+        .map_err(|e| format!("复制采样JSON失败: {}", e))?;
+
     Ok(())
 }
 
@@ -571,7 +559,7 @@ pub fn export_high_temp_pressure_capture_output(
         fs::remove_dir_all(&final_target).map_err(|e| format!("清理旧导出目录失败: {}", e))?;
     }
 
-    copy_dir_recursive(&source, &final_target)?;
+    copy_high_temp_pressure_report_output(&source, &final_target)?;
 
     Ok(serde_json::json!({
         "export_dir": final_target.to_string_lossy(),
