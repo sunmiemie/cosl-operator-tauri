@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 const root = resolve(import.meta.dirname, '..')
 const rust = readFileSync(resolve(root, 'src-tauri/src/high_temp_pressure_video.rs'), 'utf8')
 const testing = readFileSync(resolve(root, 'src/views/high-temp-pressure/composables/useHighTempPressureTesting.ts'), 'utf8')
+const reportPanel = readFileSync(resolve(root, 'src/views/high-temp-pressure/components/ReportPanel.vue'), 'utf8')
 
 assert.match(
   rust,
@@ -22,6 +23,12 @@ assert.match(
   rust,
   /video_readings_0\.5s\.json/,
   'high-temp-pressure export should keep video_readings_0.5s.json'
+)
+
+assert.match(
+  rust,
+  /write_high_temp_pressure_word_report\(&json_source,\s*&target\.join\("高温高压测试报告\.doc"\)\)\?/,
+  'high-temp-pressure export should generate the Word report next to the JSON output'
 )
 
 const copierStart = rust.indexOf('fn copy_high_temp_pressure_report_output')
@@ -70,5 +77,26 @@ assert.match(
   /const\s+outputDir\s*=\s*captureOutputDir\.value/,
   'on-demand curve generation may use the internal capture directory for report upload previews'
 )
+
+assert.match(
+  reportPanel,
+  /type\s+FileKey\s*=\s*'json'\s*\|\s*'report'/,
+  'high-temp-pressure report panel should track only JSON and Word report file generation'
+)
+
+assert.match(reportPanel, /video_readings_0\.5s\.json/, 'file generation UI should show the JSON readings file')
+assert.match(reportPanel, /高温高压测试报告\.doc/, 'file generation UI should show the Word report')
+
+for (const removedUiName of [
+  '高温高压监控数据.csv',
+  '高温高压测试结果曲线.png',
+  'JSON 配置文件',
+]) {
+  assert.doesNotMatch(
+    reportPanel,
+    new RegExp(removedUiName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    `high-temp-pressure report panel should not show ${removedUiName}`
+  )
+}
 
 console.log('high-temp-pressure output assertions passed')

@@ -254,6 +254,78 @@ fn read_progress_file(output_dir: &Path) -> Result<serde_json::Value, String> {
     Ok(progress)
 }
 
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn write_high_temp_pressure_word_report(
+    readings_json_path: &Path,
+    report_path: &Path,
+) -> Result<(), String> {
+    let payload_text =
+        fs::read_to_string(readings_json_path).map_err(|e| format!("读取采样JSON失败: {}", e))?;
+    let payload: serde_json::Value =
+        serde_json::from_str(&payload_text).map_err(|e| format!("解析采样JSON失败: {}", e))?;
+    let records = payload
+        .get("records")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let record_count = records.len();
+    let first_time = records
+        .first()
+        .and_then(|record| record.get("time_sec"))
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let last_time = records
+        .last()
+        .and_then(|record| record.get("time_sec"))
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let generated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "-".to_string());
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>高温高压测试报告</title>
+  <style>
+    body {{ font-family: "Microsoft YaHei", Arial, sans-serif; line-height: 1.7; }}
+    h1 {{ text-align: center; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 18px; }}
+    td, th {{ border: 1px solid #666; padding: 8px 10px; }}
+    th {{ background: #f1f5f9; }}
+  </style>
+</head>
+<body>
+  <h1>高温高压测试报告</h1>
+  <table>
+    <tr><th>项目</th><th>内容</th></tr>
+    <tr><td>采样 JSON</td><td>{}</td></tr>
+    <tr><td>采样记录数</td><td>{}</td></tr>
+    <tr><td>首条时间秒</td><td>{}</td></tr>
+    <tr><td>末条时间秒</td><td>{}</td></tr>
+    <tr><td>生成时间戳</td><td>{}</td></tr>
+  </table>
+</body>
+</html>"#,
+        escape_html(&readings_json_path.to_string_lossy()),
+        record_count,
+        escape_html(&first_time),
+        escape_html(&last_time),
+        escape_html(&generated_at)
+    );
+    fs::write(report_path, html).map_err(|e| format!("写入高温高压测试报告失败: {}", e))
+}
+
 fn copy_high_temp_pressure_report_output(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|e| format!("创建导出目录失败: {}", e))?;
 
@@ -263,6 +335,7 @@ fn copy_high_temp_pressure_report_output(source: &Path, target: &Path) -> Result
     }
     fs::copy(&json_source, target.join("video_readings_0.5s.json"))
         .map_err(|e| format!("复制采样JSON失败: {}", e))?;
+    write_high_temp_pressure_word_report(&json_source, &target.join("高温高压测试报告.doc"))?;
 
     Ok(())
 }

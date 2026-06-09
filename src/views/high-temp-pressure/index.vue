@@ -496,10 +496,7 @@ onMounted(async () => {
         :selected-scheduled-orders="completedSelections.length ? completedSelections : schedule.selectedScheduledOrders.value"
         :csv-count="testing.csvCount.value"
         :exported-capture-dir="testing.exportedCaptureDir.value"
-        :curve-chart-image-path="testing.curveChartImagePath.value"
-        :curve-point-count="testing.curveData.timeSec.length"
         :runtime-seconds="testing.onlineSeconds.value"
-        :ensure-curve-chart-image="testing.ensureCurveChartImage"
         @shutdown-complete="handleShutdownComplete"
       />
     </div>

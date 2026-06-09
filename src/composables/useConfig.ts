@@ -39,7 +39,9 @@ export interface AppConfig {
   
   // 离线功能设置
   dataDir: string          // 离线数据存储目录
-  downloadDir: string      // 下载文件保存目录
+  downloadDir: string      // 旧版通用下载文件保存目录（兼容历史配置）
+  highTempPressureDownloadDir: string // 高温高压井下载文件保存目录
+  vibrationDownloadDir: string // 振动台下载文件保存目录
   autoSave: boolean        // 测试过程自动保存
   autoReUpload: boolean    // 网络恢复自动回传
   
@@ -76,6 +78,8 @@ const defaultConfig: AppConfig = {
   // 离线功能默认值
   dataDir: '',
   downloadDir: '',
+  highTempPressureDownloadDir: '',
+  vibrationDownloadDir: '',
   autoSave: true,
   autoReUpload: true,
   // 隐藏菜单默认值（默认全部显示）
@@ -129,6 +133,8 @@ export async function initializeConfig(): Promise<AppConfig> {
       const xrayCropArea = await store.get<XrayCropArea>('xrayCropArea')
       const dataDir = await store.get<string>('dataDir')
       const downloadDir = await store.get<string>('downloadDir')
+      const highTempPressureDownloadDir = await store.get<string>('highTempPressureDownloadDir')
+      const vibrationDownloadDir = await store.get<string>('vibrationDownloadDir')
       const autoSave = await store.get<boolean>('autoSave')
       const autoReUpload = await store.get<boolean>('autoReUpload')
       const hiddenMenus = await store.get<string[]>('hiddenMenus')
@@ -184,6 +190,14 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('downloadDir', defaultConfig.downloadDir)
         needsSave = true
       }
+      if (highTempPressureDownloadDir === null || highTempPressureDownloadDir === undefined) {
+        await store.set('highTempPressureDownloadDir', downloadDir ?? defaultConfig.highTempPressureDownloadDir)
+        needsSave = true
+      }
+      if (vibrationDownloadDir === null || vibrationDownloadDir === undefined) {
+        await store.set('vibrationDownloadDir', downloadDir ?? defaultConfig.vibrationDownloadDir)
+        needsSave = true
+      }
       if (autoSave === null || autoSave === undefined) {
         await store.set('autoSave', defaultConfig.autoSave)
         needsSave = true
@@ -233,6 +247,8 @@ export async function initializeConfig(): Promise<AppConfig> {
         xrayCropArea: xrayCropArea ?? defaultConfig.xrayCropArea,
         dataDir: dataDir ?? defaultConfig.dataDir,
         downloadDir: downloadDir ?? defaultConfig.downloadDir,
+        highTempPressureDownloadDir: highTempPressureDownloadDir ?? downloadDir ?? defaultConfig.highTempPressureDownloadDir,
+        vibrationDownloadDir: vibrationDownloadDir ?? downloadDir ?? defaultConfig.vibrationDownloadDir,
         autoSave: autoSave ?? defaultConfig.autoSave,
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,
         hiddenMenus: hiddenMenus ?? defaultConfig.hiddenMenus,

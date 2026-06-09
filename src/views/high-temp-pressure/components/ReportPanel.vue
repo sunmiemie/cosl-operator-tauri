@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { readFile } from '@tauri-apps/plugin-fs'
 import type { ScheduledSelection } from '../types'
 import { formatRuntimeHours } from '../utils/runtime'
 import { useAuth } from '@/composables/useAuth'
 import {
   createHighTempPressureReport,
-  createHighTempPressureReportWithFiles,
   type HighTempPressureReportResult,
 } from '@/services/high-temp-pressure-report-api'
 
@@ -16,17 +14,14 @@ const props = defineProps<{
   selectedScheduledOrders: ScheduledSelection[]
   csvCount: number
   exportedCaptureDir: string
-  curveChartImagePath: string
-  curvePointCount: number
   runtimeSeconds?: number
-  ensureCurveChartImage?: () => Promise<string>
 }>()
 const emit = defineEmits<{
   'shutdown-complete': []
 }>()
 
 type FileStatus = 'pending' | 'generating' | 'done'
-type FileKey = 'csv' | 'chart' | 'report'
+type FileKey = 'json' | 'report'
 type InstrumentResultState = {
   result: HighTempPressureReportResult
   observation: string
@@ -35,8 +30,7 @@ type InstrumentResultState = {
 const { initAuth, getAuthHeaders } = useAuth()
 
 const fileStatuses = ref<Record<FileKey, FileStatus>>({
-  csv: 'pending',
-  chart: 'pending',
+  json: 'pending',
   report: 'pending',
 })
 const instrumentResultMap = ref<Record<string, InstrumentResultState>>({})
@@ -66,8 +60,6 @@ const shiftHours = ref('')
 const runtimeHours = computed(() => formatRuntimeHours(props.runtimeSeconds ?? 0))
 const totalHours = computed(() => runtimeHours.value)
 const taskSummary = ref('')
-const generatedCurveChartImagePath = ref('')
-const activeCurveChartImagePath = computed(() => props.curveChartImagePath || generatedCurveChartImagePath.value)
 
 const reportSelections = computed(() => {
   return props.selectedScheduledOrders.length ? props.selectedScheduledOrders : props.currentSelected ? [props.currentSelected] : []
@@ -81,10 +73,8 @@ const instruments = computed(() => reportSelections.value.map((item) => `${item.
 const allFilesDone = computed(() => Object.values(fileStatuses.value).every((status) => status === 'done'))
 const savePath = computed(() => props.exportedCaptureDir || '未获取到保存目录，请先完成视频识别结果保存')
 const savedFiles = [
-  { icon: '📊', name: '高温高压监控数据.csv' },
-  { icon: '📈', name: '高温高压测试结果曲线.png' },
+  { icon: '🗂', name: 'video_readings_0.5s.json' },
   { icon: '📄', name: '高温高压测试报告.doc' },
-  { icon: '🗂', name: 'JSON 配置文件' },
 ]
 const shutdownItems = [
   '确定配电柜总电源开关关闭',
@@ -137,15 +127,6 @@ const createClientSubmitId = () => {
   return `htp-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-async function buildCurveChartUploadFile() {
-  const bytes = await readFile(activeCurveChartImagePath.value)
-  return {
-    fieldName: 'testing_curve',
-    fileName: '高温高压测试结果曲线.png',
-    blob: new Blob([bytes], { type: 'image/png' }),
-  }
-}
-
 function getInstrumentKey(selection: ScheduledSelection) {
   return `${selection.order.dbId ?? selection.order.id}:${selection.instrument.id}:${selection.instrument.sn}`
 }
@@ -165,9 +146,8 @@ function resetReportStateForSelections() {
 onMounted(() => {
   resetReportStateForSelections()
   const steps: Array<[FileKey, number]> = [
-    ['csv', 250],
-    ['chart', 1300],
-    ['report', 2400],
+    ['json', 250],
+    ['report', 1100],
   ]
   steps.forEach(([key, delay], index) => {
     window.setTimeout(() => {
@@ -207,19 +187,6 @@ const submitReport = async () => {
   if (!confirmChecks.value.every(Boolean)) {
     ElMessage.warning('请勾选所有确认项')
     return
-  }
-  if (!activeCurveChartImagePath.value) {
-    if (!props.ensureCurveChartImage) {
-      ElMessage.warning('未生成温度/压力测试曲线图，不能上传报告')
-      return
-    }
-    try {
-      generatedCurveChartImagePath.value = await props.ensureCurveChartImage()
-      ElMessage.success('已生成温度/压力测试曲线图')
-    } catch (error) {
-      ElMessage.warning(error instanceof Error ? error.message : '未生成温度/压力测试曲线图，不能上传报告')
-      return
-    }
   }
   const curveCopies = normalizeCopyCount(paperReportChecks.value.testingCurveCopies, 2, 1)
   const otherCopies = normalizeCopyCount(paperReportChecks.value.otherCopies, 5, 0)
@@ -278,8 +245,6 @@ const finishReportUpload = async () => {
         module: 'high-temp-pressure',
         capture_dir: props.exportedCaptureDir,
         csv_count: props.csvCount,
-        curve_chart_path: activeCurveChartImagePath.value,
-        curve_point_count: props.curvePointCount,
         curve_phases: ['升温升压', '保温保压', '降温降压'],
         operator_name: operatorName.value.trim(),
         reviewer_name: reviewerName.value.trim(),
@@ -316,7 +281,6 @@ const finishReportUpload = async () => {
           attachments: {
             testing_curve: {
               copies: testingCurveCopies,
-              local_path: activeCurveChartImagePath.value,
             },
             others: {
               copies: otherCopies,
@@ -331,23 +295,7 @@ const finishReportUpload = async () => {
       remark: observation.value.trim(),
       client_submit_id: clientSubmitId.value,
     }
-    let res
-    try {
-      const curveFile = await buildCurveChartUploadFile()
-      res = await createHighTempPressureReportWithFiles(payload, [curveFile], getAuthHeaders())
-    } catch (error) {
-      ElMessage.warning('测试曲线文件读取失败，已改为提交本地路径附件')
-      res = await createHighTempPressureReport(
-        {
-          ...payload,
-          attachments: [
-            ...(payload.attachments || []),
-            { type: 'testing_curve', name: '高温高压测试结果曲线.png', local_path: activeCurveChartImagePath.value, copies: testingCurveCopies },
-          ],
-        },
-        getAuthHeaders()
-      )
-    }
+    const res = await createHighTempPressureReport(payload, getAuthHeaders())
     if (!res.success || !res.data || res.data.code !== 0) {
       throw new Error(res.data?.msg || res.error || '报告上传失败')
     }
@@ -401,14 +349,9 @@ const finishShutdown = () => {
         <div class="card-header"><div class="card-title">📁 测试文件生成进度</div></div>
         <div class="file-gen-list">
           <div class="file-gen-item">
-            <div class="file-gen-icon csv">📊</div>
-            <div class="file-gen-info"><div class="file-gen-name">高温高压监控数据.csv</div><div class="file-gen-desc">测试数据记录文件 · {{ csvCount }} 条</div></div>
-            <div class="file-gen-status" :class="fileStatuses.csv">{{ statusText(fileStatuses.csv) }}</div>
-          </div>
-          <div class="file-gen-item">
-            <div class="file-gen-icon png">📈</div>
-            <div class="file-gen-info"><div class="file-gen-name">高温高压测试结果曲线.png</div><div class="file-gen-desc">测试曲线图表文件</div></div>
-            <div class="file-gen-status" :class="fileStatuses.chart">{{ statusText(fileStatuses.chart) }}</div>
+            <div class="file-gen-icon json">🗂</div>
+            <div class="file-gen-info"><div class="file-gen-name">video_readings_0.5s.json</div><div class="file-gen-desc">视频识别采样 JSON · {{ csvCount }} 条</div></div>
+            <div class="file-gen-status" :class="fileStatuses.json">{{ statusText(fileStatuses.json) }}</div>
           </div>
           <div class="file-gen-item">
             <div class="file-gen-icon doc">📄</div>
@@ -531,9 +474,6 @@ const finishShutdown = () => {
                 <input v-model="paperReportChecks.otherDescriptions" class="form-control" placeholder="无" />
               </div>
             </div>
-            <div class="curve-file-hint" :class="{ ok: activeCurveChartImagePath }">
-              温度/压力曲线图：{{ activeCurveChartImagePath || '未生成' }}（采样点 {{ curvePointCount }} 个）
-            </div>
           </div>
 
           <div class="report-section">
@@ -647,11 +587,16 @@ const finishShutdown = () => {
 }
 
 .report-layout {
+  grid-template-columns: minmax(420px, 0.8fr) minmax(0, 1.2fr);
   align-items: flex-start;
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+}
+
+.report-layout > .card {
+  min-width: 0;
 }
 
 .step-indicator {
@@ -1235,6 +1180,12 @@ const finishShutdown = () => {
 
 .shutdown-card .report-actions {
   box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.04);
+}
+
+@media (max-width: 1100px) {
+  .report-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {

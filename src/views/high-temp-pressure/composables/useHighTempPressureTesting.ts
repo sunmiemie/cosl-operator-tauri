@@ -747,9 +747,9 @@ export function useHighTempPressureTesting() {
 
   async function getConfiguredDownloadDir() {
     await initConfig()
-    const configuredDownloadDir = String(getConfigItem('downloadDir') || '').trim()
+    const configuredDownloadDir = String(getConfigItem('highTempPressureDownloadDir') || '').trim()
     if (!configuredDownloadDir) {
-      captureStatusText.value = '请先在设置中配置下载文件保存目录'
+      captureStatusText.value = '请先在设置中配置高温高压井下载文件保存目录'
       ElMessage.error(captureStatusText.value)
       return ''
     }

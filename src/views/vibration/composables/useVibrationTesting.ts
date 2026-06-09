@@ -403,7 +403,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
 
   async function getConfiguredDownloadDir() {
     await initConfig()
-    const configuredDownloadDir = String(getConfigItem('downloadDir') || '').trim()
+    const configuredDownloadDir = String(getConfigItem('vibrationDownloadDir') || '').trim()
     if (!configuredDownloadDir) {
       return ''
     }
@@ -534,7 +534,7 @@ export function useVibrationTesting(options: UseVibrationTestingOptions) {
       const configuredDownloadDir = await getConfiguredDownloadDir()
       if (!configuredDownloadDir) {
         isPaused.value = Boolean(captureOutputDir.value) && !wasCompleted
-        captureStatusText.value = '请先在设置中配置下载文件保存目录'
+        captureStatusText.value = '请先在设置中配置振动台下载文件保存目录'
         ElMessage.error(captureStatusText.value)
         isFinalizing.value = false
         return

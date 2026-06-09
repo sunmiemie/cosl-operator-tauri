@@ -59,7 +59,8 @@ const isRestartingCameras = ref(false)
 
 // 离线功能设置
 const dataDir = ref('')
-const downloadDir = ref('')
+const highTempPressureDownloadDir = ref('')
+const vibrationDownloadDir = ref('')
 const autoSave = ref(true)
 const autoReUpload = ref(true)
 
@@ -152,7 +153,8 @@ onMounted(async () => {
   planeDevice.value = config.value.planeDevice ?? -1
   xrayDevice.value = config.value.xrayDevice ?? -1
   dataDir.value = config.value.dataDir ?? ''
-  downloadDir.value = config.value.downloadDir ?? ''
+  highTempPressureDownloadDir.value = config.value.highTempPressureDownloadDir ?? ''
+  vibrationDownloadDir.value = config.value.vibrationDownloadDir ?? ''
   autoSave.value = config.value.autoSave ?? true
   autoReUpload.value = config.value.autoReUpload ?? true
   language.value = config.value.language ?? 'zh-CN'
@@ -390,8 +392,11 @@ async function saveDeviceSetting(type: 'micro' | 'plane' | 'xray', value: number
 // 选择数据存储目录（使用手动输入）
 const isEditingDataDir = ref(false)
 const tempDataDir = ref('')
-const isEditingDownloadDir = ref(false)
-const tempDownloadDir = ref('')
+type ModuleDownloadDirKey = 'highTempPressureDownloadDir' | 'vibrationDownloadDir'
+const isEditingHighTempPressureDownloadDir = ref(false)
+const tempHighTempPressureDownloadDir = ref('')
+const isEditingVibrationDownloadDir = ref(false)
+const tempVibrationDownloadDir = ref('')
 
 function startEditDataDir() {
   tempDataDir.value = dataDir.value
@@ -408,41 +413,70 @@ function cancelEditDataDir() {
   isEditingDataDir.value = false
 }
 
-function startEditDownloadDir() {
-  tempDownloadDir.value = downloadDir.value
-  isEditingDownloadDir.value = true
+function getModuleDownloadDirState(key: ModuleDownloadDirKey) {
+  if (key === 'highTempPressureDownloadDir') {
+    return {
+      label: '高温高压井',
+      current: highTempPressureDownloadDir,
+      temp: tempHighTempPressureDownloadDir,
+      editing: isEditingHighTempPressureDownloadDir,
+    }
+  }
+  return {
+    label: '振动台',
+    current: vibrationDownloadDir,
+    temp: tempVibrationDownloadDir,
+    editing: isEditingVibrationDownloadDir,
+  }
 }
 
-async function saveDownloadDir() {
-  const nextDir = tempDownloadDir.value.trim()
-  downloadDir.value = nextDir
-  await setConfigItem('downloadDir', nextDir)
-  isEditingDownloadDir.value = false
-  ElMessage.success('下载文件保存目录已保存')
+function startEditModuleDownloadDir(key: ModuleDownloadDirKey) {
+  const state = getModuleDownloadDirState(key)
+  state.temp.value = state.current.value
+  state.editing.value = true
 }
 
-function cancelEditDownloadDir() {
-  isEditingDownloadDir.value = false
-  tempDownloadDir.value = ''
+async function saveModuleDownloadDir(key: ModuleDownloadDirKey) {
+  const state = getModuleDownloadDirState(key)
+  const nextDir = state.temp.value.trim()
+  state.current.value = nextDir
+  if (key === 'highTempPressureDownloadDir') {
+    await setConfigItem('highTempPressureDownloadDir', nextDir)
+  } else {
+    await setConfigItem('vibrationDownloadDir', nextDir)
+  }
+  state.editing.value = false
+  ElMessage.success(`${state.label}下载文件保存目录已保存`)
 }
 
-async function selectDownloadDir() {
+function cancelEditModuleDownloadDir(key: ModuleDownloadDirKey) {
+  const state = getModuleDownloadDirState(key)
+  state.editing.value = false
+  state.temp.value = ''
+}
+
+async function selectModuleDownloadDir(key: ModuleDownloadDirKey) {
+  const state = getModuleDownloadDirState(key)
   try {
     const selected = await open({
-      title: '选择下载文件保存目录',
+      title: `选择${state.label}下载文件保存目录`,
       directory: true,
       multiple: false,
     })
     if (!selected || typeof selected !== 'string') return
 
-    downloadDir.value = selected
-    tempDownloadDir.value = selected
-    await setConfigItem('downloadDir', selected)
-    isEditingDownloadDir.value = false
-    ElMessage.success('下载文件保存目录已保存')
+    state.current.value = selected
+    state.temp.value = selected
+    if (key === 'highTempPressureDownloadDir') {
+      await setConfigItem('highTempPressureDownloadDir', selected)
+    } else {
+      await setConfigItem('vibrationDownloadDir', selected)
+    }
+    state.editing.value = false
+    ElMessage.success(`${state.label}下载文件保存目录已保存`)
   } catch (error) {
-    console.error('选择下载文件保存目录失败:', error)
-    ElMessage.error('选择下载文件保存目录失败')
+    console.error(`选择${state.label}下载文件保存目录失败:`, error)
+    ElMessage.error(`选择${state.label}下载文件保存目录失败`)
   }
 }
 
@@ -1077,59 +1111,119 @@ function getFlojoyInitStatusText(): string {
             </div>
           </div>
           <div class="settings-item">
-            <span class="item-label">下载文件保存目录</span>
+            <span class="item-label">高温高压井下载文件保存目录</span>
             <div class="dir-selector">
               <input
-                v-if="isEditingDownloadDir"
-                v-model="tempDownloadDir"
+                v-if="isEditingHighTempPressureDownloadDir"
+                v-model="tempHighTempPressureDownloadDir"
                 class="dir-input editable"
-                placeholder="输入下载文件保存目录"
-                @keyup.enter="saveDownloadDir"
-                @keyup.escape="cancelEditDownloadDir"
+                placeholder="输入高温高压井下载文件保存目录"
+                @keyup.enter="saveModuleDownloadDir('highTempPressureDownloadDir')"
+                @keyup.escape="cancelEditModuleDownloadDir('highTempPressureDownloadDir')"
               />
               <input
                 v-else
-                :value="downloadDir || '未设置'"
+                :value="highTempPressureDownloadDir || '未设置'"
                 readonly
                 class="dir-input"
-                @click="startEditDownloadDir"
+                @click="startEditModuleDownloadDir('highTempPressureDownloadDir')"
               />
               <button
-                v-if="isEditingDownloadDir"
+                v-if="isEditingHighTempPressureDownloadDir"
                 class="browse-btn"
-                @click="selectDownloadDir"
+                @click="selectModuleDownloadDir('highTempPressureDownloadDir')"
                 title="选择目录"
               >
                 <Icon icon="mdi:folder-open-outline" />
               </button>
               <button
-                v-if="isEditingDownloadDir"
+                v-if="isEditingHighTempPressureDownloadDir"
                 class="browse-btn save"
-                @click="saveDownloadDir"
+                @click="saveModuleDownloadDir('highTempPressureDownloadDir')"
                 title="保存"
               >
                 <Icon icon="mdi:check" />
               </button>
               <button
-                v-if="isEditingDownloadDir"
+                v-if="isEditingHighTempPressureDownloadDir"
                 class="browse-btn"
-                @click="cancelEditDownloadDir"
+                @click="cancelEditModuleDownloadDir('highTempPressureDownloadDir')"
                 title="取消"
               >
                 <Icon icon="mdi:close" />
               </button>
               <button
-                v-if="!isEditingDownloadDir"
+                v-if="!isEditingHighTempPressureDownloadDir"
                 class="browse-btn"
-                @click="startEditDownloadDir"
+                @click="startEditModuleDownloadDir('highTempPressureDownloadDir')"
                 title="编辑"
               >
                 <Icon icon="mdi:pencil" />
               </button>
               <button
-                v-if="!isEditingDownloadDir"
+                v-if="!isEditingHighTempPressureDownloadDir"
                 class="browse-btn"
-                @click="selectDownloadDir"
+                @click="selectModuleDownloadDir('highTempPressureDownloadDir')"
+                title="选择目录"
+              >
+                <Icon icon="mdi:folder-open-outline" />
+              </button>
+            </div>
+          </div>
+          <div class="settings-item">
+            <span class="item-label">振动台下载文件保存目录</span>
+            <div class="dir-selector">
+              <input
+                v-if="isEditingVibrationDownloadDir"
+                v-model="tempVibrationDownloadDir"
+                class="dir-input editable"
+                placeholder="输入振动台下载文件保存目录"
+                @keyup.enter="saveModuleDownloadDir('vibrationDownloadDir')"
+                @keyup.escape="cancelEditModuleDownloadDir('vibrationDownloadDir')"
+              />
+              <input
+                v-else
+                :value="vibrationDownloadDir || '未设置'"
+                readonly
+                class="dir-input"
+                @click="startEditModuleDownloadDir('vibrationDownloadDir')"
+              />
+              <button
+                v-if="isEditingVibrationDownloadDir"
+                class="browse-btn"
+                @click="selectModuleDownloadDir('vibrationDownloadDir')"
+                title="选择目录"
+              >
+                <Icon icon="mdi:folder-open-outline" />
+              </button>
+              <button
+                v-if="isEditingVibrationDownloadDir"
+                class="browse-btn save"
+                @click="saveModuleDownloadDir('vibrationDownloadDir')"
+                title="保存"
+              >
+                <Icon icon="mdi:check" />
+              </button>
+              <button
+                v-if="isEditingVibrationDownloadDir"
+                class="browse-btn"
+                @click="cancelEditModuleDownloadDir('vibrationDownloadDir')"
+                title="取消"
+              >
+                <Icon icon="mdi:close" />
+              </button>
+              <button
+                v-if="!isEditingVibrationDownloadDir"
+                class="browse-btn"
+                @click="startEditModuleDownloadDir('vibrationDownloadDir')"
+                title="编辑"
+              >
+                <Icon icon="mdi:pencil" />
+              </button>
+              <button
+                v-if="!isEditingVibrationDownloadDir"
+                class="browse-btn"
+                @click="selectModuleDownloadDir('vibrationDownloadDir')"
                 title="选择目录"
               >
                 <Icon icon="mdi:folder-open-outline" />
