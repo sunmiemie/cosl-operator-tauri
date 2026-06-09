@@ -21,7 +21,12 @@ export function loadPendingHaltHassReports(): PendingHaltHassBoardReport[] {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const value = JSON.parse(raw)
-    return Array.isArray(value) ? value : []
+    if (!Array.isArray(value)) return []
+    // 保留可恢复的有效报告；损坏缓存本身不在读取时覆盖，便于人工恢复。
+    return value.filter(item => item && typeof item === 'object' &&
+      typeof item.clientSubmitId === 'string' && item.clientSubmitId.trim() &&
+      item.reportJson && typeof item.reportJson === 'object' && !Array.isArray(item.reportJson) &&
+      [item.sessionId, item.targetBoardId, item.orderId].every(id => Number.isSafeInteger(id) && id > 0))
   } catch (error) {
     console.warn('[HALT-HASS] 读取待上传逐板报告失败:', error)
     return []
