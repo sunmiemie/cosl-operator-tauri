@@ -287,6 +287,11 @@ async function startSelectedVibrationOrder() {
     return false
   }
 
+  if (selected.status === 2) {
+    void refreshWorkOrders()
+    return true
+  }
+
   const authOk = await initAuth()
   if (!authOk) {
     ElMessage.error('登录已失效，请重新登录后再开始实验')
@@ -309,6 +314,7 @@ async function startSelectedVibrationOrder() {
       ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
       return false
     } else {
+      currentWorkOrderSnapshot.value = { ...selected, status: 2 }
       void refreshWorkOrders()
     }
   } catch {

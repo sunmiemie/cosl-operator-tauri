@@ -75,6 +75,16 @@ assert.match(
 )
 assert.match(
   startOrderBody,
+  /selected\.status\s*===\s*2[\s\S]*?return\s+true[\s\S]*?await\s+initAuth/,
+  'final start should skip backend status synchronization when the order is already testing'
+)
+assert.match(
+  startOrderBody,
+  /currentWorkOrderSnapshot\.value\s*=\s*\{\s*\.\.\.selected,\s*status:\s*2\s*\}/,
+  'final start should mark the local order snapshot as testing after successful pre-experiment startup'
+)
+assert.match(
+  startOrderBody,
   /return\s+true/,
   'final start should report successful status synchronization'
 )
