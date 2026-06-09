@@ -139,7 +139,6 @@ const testing = useVibrationTesting({
     stage.value = 'report'
     report.resetReportFiles()
     report.setExportDir(exportDir)
-    report.startFileGen()
   },
   onFinishToDashboard: (finalStatus = 5, options = {}) => {
     backToDashboard(finalStatus, options)
@@ -569,6 +568,9 @@ function toggleShutdownCheck(id: number) {
         :analysis-preview-records="testing.analysisPreviewRecords.value"
         :report-progress="report.reportProgress.value"
         :report-files="report.reportFiles.value"
+        :report-process-steps="report.reportProcessSteps.value"
+        :report-processing="report.reportProcessing.value"
+        :report-ready-to-process="report.reportReadyToProcess.value"
         :file-gen-running="report.fileGenRunning.value"
         :all-files-done="report.allFilesDone.value"
         :shutdown-checks="shutdownChecks"
@@ -590,7 +592,7 @@ function toggleShutdownCheck(id: number) {
         @convert-to-formal="convertToFormal"
         @set-stage-testing="stage = 'testing'"
         @set-stage-shutdown="stage = 'shutdown'"
-        @start-file-gen="report.startFileGen"
+        @process-report="report.processReport"
         @toggle-shutdown-check="toggleShutdownCheck"
         @finish-shutdown="finishShutdown"
       />

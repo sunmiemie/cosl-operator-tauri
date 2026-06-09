@@ -14,7 +14,7 @@ const preChecks = [
   '启动外循环冷却系统，确认工作正常',
 ]
 
-const postChecks = [
+const shutdownPostChecks = [
   '确认各处电源，关闭电源总开关',
   '设备外观检查并整理试验现场',
 ]
@@ -29,7 +29,7 @@ export function useVibrationChecks() {
   )
 
   const shutdownChecks = ref<ShutdownCheckItem[]>(
-    postChecks.map((text, idx) => ({ id: idx + 1, text, checked: false }))
+    shutdownPostChecks.map((text, idx) => ({ id: idx + 1, text, checked: false }))
   )
 
   const showSafetyWarning = ref(false)

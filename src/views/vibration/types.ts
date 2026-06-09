@@ -111,6 +111,14 @@ export interface ReportFile {
   done: boolean
 }
 
+export type ReportProcessStepStatus = 'pending' | 'active' | 'done'
+
+export interface ReportProcessStep {
+  id: number
+  text: string
+  status: ReportProcessStepStatus
+}
+
 export interface VibrationCaptureFieldValue {
   raw: string
   value: number | null

@@ -4,6 +4,7 @@ import { Icon } from '@iconify/vue'
 import type {
   DevCheckItem,
   ReportFile,
+  ReportProcessStep,
   ShutdownCheckItem,
   Stage,
   VibrationAnalysisSummary,
@@ -48,6 +49,9 @@ const props = defineProps<{
   analysisPreviewRecords: VibrationCaptureRecord[]
   reportProgress: number
   reportFiles: ReportFile[]
+  reportProcessSteps: ReportProcessStep[]
+  reportProcessing: boolean
+  reportReadyToProcess: boolean
   fileGenRunning: boolean
   allFilesDone: boolean
   shutdownChecks: ShutdownCheckItem[]
@@ -72,7 +76,7 @@ const emit = defineEmits<{
   'convert-to-formal': []
   'set-stage-testing': []
   'set-stage-shutdown': []
-  'start-file-gen': []
+  'process-report': []
   'toggle-shutdown-check': [id: number]
   'finish-shutdown': []
 }>()
@@ -576,38 +580,74 @@ function handleUploadDrop(event: DragEvent) {
       </div>
 
       <div v-else-if="stage === 'report'" class="modal-overlay">
-        <div class="startup-check-modal" style="max-width: 700px; width: 95vw;">
-          <div class="modal-header-simple">
-            <h3>报告处理（{{ reportProgress }}%）</h3>
-            <button class="modal-close-simple" @click="emit('set-stage-testing')">×</button>
-          </div>
-          <div class="content-pad">
-            <div class="alert info" style="margin-bottom:12px">
-              <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">点击“确认输出”后仅保留 chart_screenshots 和 top_readings_0.5s.json，完成后自动进入关机检查。</div>
+        <div class="startup-check-modal report-process-modal">
+          <button class="modal-close-simple report-close" type="button" aria-label="关闭报告处理" @click="emit('set-stage-testing')">×</button>
+          <div class="report-process-card report-process-head">
+            <div>
+              <div class="report-process-title">测试报告处理</div>
+              <div class="report-process-desc">报告文件来源：共享文件夹自动获取。系统将直接整理测试结果并执行上传流程。</div>
             </div>
-            <div v-if="analysisSummary" class="report-summary-grid">
-              <div class="meta-card"><span class="meta-label">采样记录</span><span class="meta-value">{{ analysisSummary.recordCount }} 条</span></div>
-              <div class="meta-card"><span class="meta-label">有效图像</span><span class="meta-value">{{ analysisSummary.screenDetectedCount }} 张</span></div>
-              <div class="meta-card"><span class="meta-label">平均响应</span><span class="meta-value">{{ analysisSummary.avgResponse }}</span></div>
-              <div class="meta-card"><span class="meta-label">最大驱动</span><span class="meta-value">{{ analysisSummary.maxDrive }}</span></div>
+            <div class="report-progress-pill">{{ reportProgress }}%</div>
+          </div>
+
+          <div v-if="analysisSummary" class="report-summary-grid report-summary-inline">
+            <div class="meta-card"><span class="meta-label">采样记录</span><span class="meta-value">{{ analysisSummary.recordCount }} 条</span></div>
+            <div class="meta-card"><span class="meta-label">有效图像</span><span class="meta-value">{{ analysisSummary.screenDetectedCount }} 张</span></div>
+            <div class="meta-card"><span class="meta-label">平均响应</span><span class="meta-value">{{ analysisSummary.avgResponse }}</span></div>
+            <div class="meta-card"><span class="meta-label">最大驱动</span><span class="meta-value">{{ analysisSummary.maxDrive }}</span></div>
+          </div>
+
+          <div class="report-process-card">
+            <div class="report-step-title">自动处理流程</div>
+            <div class="alert info report-alert">
+              <Icon icon="mdi:folder-sync-outline" class="alert-icon blue" />
+              <div class="alert-text">后续接入共享文件夹后，系统会从指定位置获取报告文件；当前点击下方按钮即可进入自动处理流程。</div>
             </div>
-            <div class="kv" style="margin-top:8px">
-              <template v-for="file in reportFiles" :key="file.id">
-                <div class="k">{{ file.name }}</div><div class="v">{{ file.status }}</div>
-              </template>
+            <div class="report-process-list">
+              <div
+                v-for="step in reportProcessSteps"
+                :key="step.id"
+                class="report-process-row"
+                :class="step.status"
+              >
+                <Icon
+                  :icon="step.status === 'done' ? 'mdi:check-circle' : step.status === 'active' ? 'mdi:progress-clock' : 'mdi:clock-outline'"
+                  class="report-process-icon"
+                />
+                <span>{{ step.text }}</span>
+              </div>
+              <div v-if="!reportProcessSteps.length" class="report-process-row pending">
+                <Icon icon="mdi:clock-outline" class="report-process-icon" />
+                <span>等待开始处理...</span>
+              </div>
             </div>
           </div>
-          <div class="modal-actions">
-            <button class="cancel-btn" @click="emit('set-stage-testing')">返回测试</button>
-            <button class="next-btn" :disabled="fileGenRunning" @click="emit('start-file-gen')">确认输出</button>
+
+          <div class="report-output-list">
+            <div v-for="file in reportFiles" :key="file.id" class="report-output-row">
+              <div>
+                <div class="report-output-name">{{ file.name }}</div>
+                <div class="report-output-desc">{{ file.id === 'screenshots' ? '图表截图目录' : 'Top readings 数据文件' }}</div>
+              </div>
+              <span class="report-output-status" :class="{ done: file.done }">{{ file.status }}</span>
+            </div>
           </div>
+
+          <button class="btn btn-success btn-lg btn-full report-upload-btn" :disabled="!reportReadyToProcess" type="button" @click="emit('process-report')">
+            <Icon :icon="reportProcessing || fileGenRunning ? 'mdi:loading' : 'mdi:cloud-upload-outline'" />
+            {{ reportProcessing || fileGenRunning ? '处理中...' : '开始处理并上传报告' }}
+          </button>
+          <button class="cancel-btn report-back-btn" type="button" @click="emit('set-stage-testing')">返回测试</button>
         </div>
       </div>
 
       <div v-else class="modal-overlay">
-        <div class="startup-check-modal" style="max-width: 700px; width: 95vw;">
+        <div class="startup-check-modal shutdown-check-modal">
           <h2 class="modal-title">关机检查</h2>
+          <div class="shutdown-check-meta">
+            <span>报告处理已完成</span>
+            <span>检查进度：{{ shutdownChecks.filter(i => i.checked).length }}/{{ shutdownChecks.length }}</span>
+          </div>
           <div class="check-list-container">
             <div class="check-list">
               <label
