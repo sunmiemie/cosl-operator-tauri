@@ -78,6 +78,8 @@ export function useFlojoyBackend() {
   
   // 健康检查定时器
   let healthCheckTimer: number | null = null
+  // 共享初始化 Promise，避免页面挂载和启动后端时并发初始化
+  let initPromise: Promise<void> | null = null
 
   // ========== 计算属性 ==========
   
@@ -254,6 +256,14 @@ export function useFlojoyBackend() {
   // 启动后端
   async function start(): Promise<boolean> {
     try {
+      await init()
+
+      if (!pythonPath.value) {
+        status.value = BackendStatus.ERROR
+        errorMessage.value = '请先配置 Python 解释器路径'
+        return false
+      }
+
       status.value = BackendStatus.STARTING
       errorMessage.value = null
       
@@ -394,61 +404,72 @@ export function useFlojoyBackend() {
 
   // 初始化：加载配置并检查后端状态
   async function init() {
-    try {
-      // 先初始化应用配置
-      await initConfig()
-      
-      // 从配置文件加载 Python 路径
-      const savedPythonPath = config.value.flojoyPythonPath
-      if (savedPythonPath) {
-        pythonPath.value = savedPythonPath
-        // 配置 Rust 端
-        await invoke('configure_python', { pythonPath: savedPythonPath })
-      }
-      
-      // 从配置文件加载环境初始化状态
-      const savedEnvInitialized = config.value.flojoyEnvInitialized
-      if (savedEnvInitialized) {
-        dependenciesInstalled.value = true
-        poetryInstalled.value = true // 如果依赖已安装，Poetry 肯定也安装了
-      }
-      
-      // 获取 Rust 端配置
-      const rustConfig = await invoke<[string, string, number, boolean, boolean]>('get_flojoy_config')
-      // 如果配置文件有 Python 路径，使用配置文件的；否则使用 Rust 端的
-      if (!pythonPath.value) {
-        pythonPath.value = rustConfig[0]
-      }
-      backendDir.value = rustConfig[1]
-      port.value = rustConfig[2]
-      // 如果配置文件中没有标记已初始化，则使用 Rust 端的状态
-      if (!savedEnvInitialized) {
-        poetryInstalled.value = rustConfig[3]
-        dependenciesInstalled.value = rustConfig[4]
-      }
-      
-      // 如果有 Python 路径，检查版本
-      if (pythonPath.value) {
-        await checkPythonVersion(pythonPath.value)
-      }
-      
-      // 检查后端是否已在运行
-      const running = await checkRunning()
-      if (running) {
-        await getPid()
-        const healthy = await healthCheck()
-        if (healthy) {
-          startHealthCheck()
-        }
-      }
-      
-      // 更新初始化状态
-      if (isEnvironmentReady.value) {
-        initStatus.value = InitStatus.READY
-      }
-    } catch (error) {
-      console.error('初始化 Flojoy 后端状态失败:', error)
+    if (initPromise) {
+      await initPromise
+      return
     }
+
+    initPromise = (async () => {
+      try {
+        // 先初始化应用配置
+        await initConfig()
+        
+        // 从配置文件加载 Python 路径
+        const savedPythonPath = config.value.flojoyPythonPath
+        if (savedPythonPath) {
+          pythonPath.value = savedPythonPath
+          // 配置 Rust 端
+          await invoke('configure_python', { pythonPath: savedPythonPath })
+        }
+        
+        // 从配置文件加载环境初始化状态
+        const savedEnvInitialized = config.value.flojoyEnvInitialized
+        if (savedEnvInitialized) {
+          dependenciesInstalled.value = true
+          poetryInstalled.value = true // 如果依赖已安装，Poetry 肯定也安装了
+        }
+        
+        // 获取 Rust 端配置
+        const rustConfig = await invoke<[string, string, number, boolean, boolean]>('get_flojoy_config')
+        // 如果配置文件有 Python 路径，使用配置文件的；否则使用 Rust 端的
+        if (!pythonPath.value) {
+          pythonPath.value = rustConfig[0]
+        }
+        backendDir.value = rustConfig[1]
+        port.value = rustConfig[2]
+        // 如果配置文件中没有标记已初始化，则使用 Rust 端的状态
+        if (!savedEnvInitialized) {
+          poetryInstalled.value = rustConfig[3]
+          dependenciesInstalled.value = rustConfig[4]
+        }
+        
+        // 如果有 Python 路径，检查版本
+        if (pythonPath.value) {
+          await checkPythonVersion(pythonPath.value)
+        }
+        
+        // 检查后端是否已在运行
+        const running = await checkRunning()
+        if (running) {
+          await getPid()
+          const healthy = await healthCheck()
+          if (healthy) {
+            startHealthCheck()
+          }
+        }
+        
+        // 更新初始化状态
+        if (isEnvironmentReady.value) {
+          initStatus.value = InitStatus.READY
+        }
+      } catch (error) {
+        console.error('初始化 Flojoy 后端状态失败:', error)
+      }
+    })().finally(() => {
+      initPromise = null
+    })
+
+    await initPromise
   }
 
   // 生命周期钩子
