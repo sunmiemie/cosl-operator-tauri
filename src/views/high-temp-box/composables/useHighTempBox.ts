@@ -22,6 +22,8 @@ export interface WorkOrder {
   remark: string
   status: number
   statusText?: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
   priority?: 'high' | 'normal' | 'low'
   instruments: HighTempBoxInstrument[]
   selectedInstruments?: HighTempBoxInstrument[]
@@ -213,10 +215,13 @@ export function useHighTempBox() {
       }
 
       const mockOnlyNew = mockWorkOrders.filter((mock) => !all.some((order) => order.id === mock.id))
-      workOrders.value = (all.length ? [...all, ...mockOnlyNew] : mockWorkOrders).map(withInstrumentState)
+      const scheduledOrders = (all.length ? [...all, ...mockOnlyNew] : mockWorkOrders).map(withInstrumentState)
+      workOrders.value = scheduledOrders
+      restoreScheduledEvents(scheduledOrders)
     } catch (e) {
       workOrdersError.value = e instanceof Error ? e.message : '获取高温箱工单失败'
       workOrders.value = mockWorkOrders.map(withInstrumentState)
+      restoreScheduledEvents(workOrders.value)
     } finally {
       workOrdersLoading.value = false
     }
@@ -428,6 +433,43 @@ export function useHighTempBox() {
     return map
   })
 
+  function parseBackendDateTime(value?: string | null) {
+    if (!value) return null
+    const text = value.includes('T') ? value : value.replace(' ', 'T')
+    const parsed = new Date(text)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  function eventFromOrderSchedule(order: WorkOrder): ScheduledEvent | null {
+    const start = parseBackendDateTime(order.scheduledStartAt)
+    const end = parseBackendDateTime(order.scheduledEndAt)
+    if (!start || !end || end <= start) return null
+
+    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+    const startIdx = timeKeyToIndex.value[startTimeKey]
+    if (startIdx === undefined || startIdx >= timeSlots.value.length - 1) return null
+
+    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+    const maxSpan = Math.max(1, timeSlots.value.length - 1 - startIdx)
+    const dateStr = fmtDate(start)
+    return {
+      eventId: `${order.id}-${dateStr}-${startTimeKey}-${end.getTime()}`,
+      orderId: order.id,
+      dateStr,
+      startTimeKey,
+      span: Math.min(span, maxSpan),
+    }
+  }
+
+  function restoreScheduledEvents(orders: WorkOrder[]) {
+    const next: Record<string, ScheduledEvent> = {}
+    orders.forEach((order) => {
+      const event = eventFromOrderSchedule(order)
+      if (event) next[event.eventId] = event
+    })
+    scheduledEvents.value = next
+  }
+
   const timeKeyToHour = (timeKey: string) => {
     const hh = timeKey.slice(0, 2)
     if (!/^\d{2}$/.test(hh)) return ''
@@ -566,20 +608,8 @@ export function useHighTempBox() {
     if (val) calBase.value = getMonday(new Date(val))
   }
 
-  function loadPresetSchedule() {
-    const base = calBase.value
-    const presets = [
-      { d: 0, t: '0800', id: 'HT-2024-001' },
-      { d: 0, t: '1000', id: 'HT-2024-002' },
-      { d: 1, t: '1400', id: 'HT-2024-003' },
-    ]
-    const scheduled = new Set(Object.values(scheduledEvents.value).map((event) => `${event.orderId}-${event.dateStr}-${event.startTimeKey}`))
-    presets.forEach(p => {
-      const d = addDays(base, p.d)
-      const dateStr = fmtDate(d)
-      if (scheduled.has(`${p.id}-${dateStr}-${p.t}`)) return
-      scheduleOrder(p.id, dateStr, p.t, false)
-    })
+  async function loadPresetSchedule() {
+    await refreshWorkOrders()
   }
 
   function handleUnschedule(cellKey: string, orderId: string, eventId = orderId) {
