@@ -61,6 +61,7 @@ const isRestartingCameras = ref(false)
 const dataDir = ref('')
 const highTempPressureDownloadDir = ref('')
 const vibrationDownloadDir = ref('')
+const vibrationSharedReportDir = ref('')
 const autoSave = ref(true)
 const autoReUpload = ref(true)
 
@@ -155,6 +156,7 @@ onMounted(async () => {
   dataDir.value = config.value.dataDir ?? ''
   highTempPressureDownloadDir.value = config.value.highTempPressureDownloadDir ?? ''
   vibrationDownloadDir.value = config.value.vibrationDownloadDir ?? ''
+  vibrationSharedReportDir.value = config.value.vibrationSharedReportDir ?? ''
   autoSave.value = config.value.autoSave ?? true
   autoReUpload.value = config.value.autoReUpload ?? true
   language.value = config.value.language ?? 'zh-CN'
@@ -392,11 +394,13 @@ async function saveDeviceSetting(type: 'micro' | 'plane' | 'xray', value: number
 // 选择数据存储目录（使用手动输入）
 const isEditingDataDir = ref(false)
 const tempDataDir = ref('')
-type ModuleDownloadDirKey = 'highTempPressureDownloadDir' | 'vibrationDownloadDir'
+type ModuleDownloadDirKey = 'highTempPressureDownloadDir' | 'vibrationDownloadDir' | 'vibrationSharedReportDir'
 const isEditingHighTempPressureDownloadDir = ref(false)
 const tempHighTempPressureDownloadDir = ref('')
 const isEditingVibrationDownloadDir = ref(false)
 const tempVibrationDownloadDir = ref('')
+const isEditingVibrationSharedReportDir = ref(false)
+const tempVibrationSharedReportDir = ref('')
 
 function startEditDataDir() {
   tempDataDir.value = dataDir.value
@@ -416,14 +420,22 @@ function cancelEditDataDir() {
 function getModuleDownloadDirState(key: ModuleDownloadDirKey) {
   if (key === 'highTempPressureDownloadDir') {
     return {
-      label: '高温高压井',
+      label: '高温高压井下载文件保存目录',
       current: highTempPressureDownloadDir,
       temp: tempHighTempPressureDownloadDir,
       editing: isEditingHighTempPressureDownloadDir,
     }
   }
+  if (key === 'vibrationSharedReportDir') {
+    return {
+      label: '振动台共享报告文件夹',
+      current: vibrationSharedReportDir,
+      temp: tempVibrationSharedReportDir,
+      editing: isEditingVibrationSharedReportDir,
+    }
+  }
   return {
-    label: '振动台',
+    label: '振动台下载文件保存目录',
     current: vibrationDownloadDir,
     temp: tempVibrationDownloadDir,
     editing: isEditingVibrationDownloadDir,
@@ -438,15 +450,11 @@ function startEditModuleDownloadDir(key: ModuleDownloadDirKey) {
 
 async function saveModuleDownloadDir(key: ModuleDownloadDirKey) {
   const state = getModuleDownloadDirState(key)
-  const nextDir = state.temp.value.trim()
+  const nextDir = normalizeModuleDirectoryInput(state.temp.value)
   state.current.value = nextDir
-  if (key === 'highTempPressureDownloadDir') {
-    await setConfigItem('highTempPressureDownloadDir', nextDir)
-  } else {
-    await setConfigItem('vibrationDownloadDir', nextDir)
-  }
+  await setConfigItem(key, nextDir)
   state.editing.value = false
-  ElMessage.success(`${state.label}下载文件保存目录已保存`)
+  ElMessage.success(`${state.label}已保存`)
 }
 
 function cancelEditModuleDownloadDir(key: ModuleDownloadDirKey) {
@@ -455,28 +463,29 @@ function cancelEditModuleDownloadDir(key: ModuleDownloadDirKey) {
   state.temp.value = ''
 }
 
+function normalizeModuleDirectoryInput(value: string) {
+  return value.trim().replace(/^\\\\\s+/, '\\\\')
+}
+
 async function selectModuleDownloadDir(key: ModuleDownloadDirKey) {
   const state = getModuleDownloadDirState(key)
   try {
-    const selected = await open({
-      title: `选择${state.label}下载文件保存目录`,
+    let selected = await open({
+      title: `选择${state.label}`,
       directory: true,
       multiple: false,
     })
     if (!selected || typeof selected !== 'string') return
 
+    selected = normalizeModuleDirectoryInput(selected)
     state.current.value = selected
     state.temp.value = selected
-    if (key === 'highTempPressureDownloadDir') {
-      await setConfigItem('highTempPressureDownloadDir', selected)
-    } else {
-      await setConfigItem('vibrationDownloadDir', selected)
-    }
+    await setConfigItem(key, selected)
     state.editing.value = false
-    ElMessage.success(`${state.label}下载文件保存目录已保存`)
+    ElMessage.success(`${state.label}已保存`)
   } catch (error) {
-    console.error(`选择${state.label}下载文件保存目录失败:`, error)
-    ElMessage.error(`选择${state.label}下载文件保存目录失败`)
+    console.error(`选择${state.label}失败:`, error)
+    ElMessage.error(`选择${state.label}失败`)
   }
 }
 
@@ -1224,6 +1233,66 @@ function getFlojoyInitStatusText(): string {
                 v-if="!isEditingVibrationDownloadDir"
                 class="browse-btn"
                 @click="selectModuleDownloadDir('vibrationDownloadDir')"
+                title="选择目录"
+              >
+                <Icon icon="mdi:folder-open-outline" />
+              </button>
+            </div>
+          </div>
+          <div class="settings-item">
+            <span class="item-label">振动台共享报告文件夹</span>
+            <div class="dir-selector">
+              <input
+                v-if="isEditingVibrationSharedReportDir"
+                v-model="tempVibrationSharedReportDir"
+                class="dir-input editable"
+                placeholder="输入 UNC 路径，例如 \\192.168.1.50\VibrationReports"
+                @keyup.enter="saveModuleDownloadDir('vibrationSharedReportDir')"
+                @keyup.escape="cancelEditModuleDownloadDir('vibrationSharedReportDir')"
+              />
+              <input
+                v-else
+                :value="vibrationSharedReportDir || '未设置'"
+                readonly
+                class="dir-input"
+                @click="startEditModuleDownloadDir('vibrationSharedReportDir')"
+              />
+              <button
+                v-if="isEditingVibrationSharedReportDir"
+                class="browse-btn"
+                @click="selectModuleDownloadDir('vibrationSharedReportDir')"
+                title="选择目录"
+              >
+                <Icon icon="mdi:folder-open-outline" />
+              </button>
+              <button
+                v-if="isEditingVibrationSharedReportDir"
+                class="browse-btn save"
+                @click="saveModuleDownloadDir('vibrationSharedReportDir')"
+                title="保存"
+              >
+                <Icon icon="mdi:check" />
+              </button>
+              <button
+                v-if="isEditingVibrationSharedReportDir"
+                class="browse-btn"
+                @click="cancelEditModuleDownloadDir('vibrationSharedReportDir')"
+                title="取消"
+              >
+                <Icon icon="mdi:close" />
+              </button>
+              <button
+                v-if="!isEditingVibrationSharedReportDir"
+                class="browse-btn"
+                @click="startEditModuleDownloadDir('vibrationSharedReportDir')"
+                title="编辑"
+              >
+                <Icon icon="mdi:pencil" />
+              </button>
+              <button
+                v-if="!isEditingVibrationSharedReportDir"
+                class="browse-btn"
+                @click="selectModuleDownloadDir('vibrationSharedReportDir')"
                 title="选择目录"
               >
                 <Icon icon="mdi:folder-open-outline" />

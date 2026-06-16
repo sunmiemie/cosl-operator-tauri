@@ -54,6 +54,9 @@ const props = defineProps<{
   reportReadyToProcess: boolean
   fileGenRunning: boolean
   allFilesDone: boolean
+  selectedThirdPartyReportName: string
+  selectedThirdPartyReportSizeText: string
+  selectedThirdPartyReportModifiedAt: string
   shutdownChecks: ShutdownCheckItem[]
 }>()
 
@@ -76,6 +79,8 @@ const emit = defineEmits<{
   'convert-to-formal': []
   'set-stage-testing': []
   'set-stage-shutdown': []
+  'select-third-party-report': []
+  'clear-third-party-report': []
   'process-report': []
   'toggle-shutdown-check': [id: number]
   'finish-shutdown': []
@@ -585,7 +590,7 @@ function handleUploadDrop(event: DragEvent) {
           <div class="report-process-card report-process-head">
             <div>
               <div class="report-process-title">测试报告处理</div>
-              <div class="report-process-desc">报告文件来源：共享文件夹自动获取。系统将直接整理测试结果并执行上传流程。</div>
+              <div class="report-process-desc">报告文件来源：共享文件夹中的第三方 Word 报告。请选择本次实验对应的 .doc 或 .docx 文件后上传。</div>
             </div>
             <div class="report-progress-pill">{{ reportProgress }}%</div>
           </div>
@@ -601,7 +606,37 @@ function handleUploadDrop(event: DragEvent) {
             <div class="report-step-title">自动处理流程</div>
             <div class="alert info report-alert">
               <Icon icon="mdi:folder-sync-outline" class="alert-icon blue" />
-              <div class="alert-text">后续接入共享文件夹后，系统会从指定位置获取报告文件；当前点击下方按钮即可进入自动处理流程。</div>
+              <div class="alert-text">系统会保留本地采集结果，并将选中的第三方 Word 报告作为正式报告附件上传。</div>
+            </div>
+            <div class="third-party-report">
+              <div class="third-party-report-main">
+                <Icon icon="mdi:file-word-outline" class="third-party-report-icon" />
+                <div>
+                  <div class="third-party-report-title">
+                    {{ selectedThirdPartyReportName || '未选择第三方报告' }}
+                  </div>
+                  <div class="third-party-report-meta">
+                    <span v-if="selectedThirdPartyReportName">{{ selectedThirdPartyReportSizeText }}</span>
+                    <span v-if="selectedThirdPartyReportModifiedAt">{{ selectedThirdPartyReportModifiedAt }}</span>
+                    <span v-if="!selectedThirdPartyReportName">请从振动台共享报告文件夹选择本次实验的 Word 报告</span>
+                  </div>
+                </div>
+              </div>
+              <div class="third-party-report-actions">
+                <button class="btn btn-secondary" type="button" @click="emit('select-third-party-report')">
+                  <Icon icon="mdi:folder-open-outline" />
+                  选择第三方报告
+                </button>
+                <button
+                  v-if="selectedThirdPartyReportName"
+                  class="btn btn-secondary"
+                  type="button"
+                  @click="emit('clear-third-party-report')"
+                >
+                  <Icon icon="mdi:close" />
+                  清除
+                </button>
+              </div>
             </div>
             <div class="report-process-list">
               <div

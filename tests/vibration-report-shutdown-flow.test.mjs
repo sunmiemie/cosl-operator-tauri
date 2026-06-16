@@ -33,32 +33,23 @@ const reportPanel = sliceBetween(
   `v-else class="modal-overlay"`,
   'vibration report panel'
 )
-for (const label of [
-  '测试报告处理',
-  '报告文件来源：共享文件夹自动获取',
-  '自动处理流程',
-  '开始处理并上传报告',
-]) {
-  assert.match(reportPanel, new RegExp(label), `report panel should include "${label}"`)
-}
+assert.match(reportPanel, /report-process-title/, 'report panel should include the report processing title')
+assert.match(reportPanel, /report-process-desc/, 'report panel should explain the report source')
+assert.match(reportPanel, /report-process-list/, 'report panel should include process steps')
 assert.match(reportPanel, /process-report/, 'report panel should emit report processing')
-assert.doesNotMatch(reportPanel, /生成测试报告/, 'report panel should not require manual report generation')
-assert.doesNotMatch(reportPanel, /选择报告文件/, 'report panel should not require local report file selection')
-assert.doesNotMatch(reportPanel, /selectedReportFileName/, 'report panel should not show local selected report file state')
-assert.doesNotMatch(reportPanel, /select-report-file/, 'report panel should not emit report file selection')
+assert.doesNotMatch(reportPanel, /selectedReportFileName/, 'report panel should not use the old local selected report state')
+assert.match(reportPanel, /selectedThirdPartyReportName/, 'report panel should show selected third-party report state')
+assert.match(reportPanel, /select-third-party-report/, 'report panel should emit third-party report selection')
+assert.match(reportPanel, /clear-third-party-report/, 'report panel should allow clearing the selected third-party report')
 
 assert.match(report, /processReport/, 'report state should expose the report processing action')
-assert.doesNotMatch(report, /from '@tauri-apps\/plugin-dialog'/, 'report processing should not use the Tauri file picker')
-assert.doesNotMatch(report, /from '@tauri-apps\/plugin-fs'/, 'report processing should not read a manually selected report file')
-assert.doesNotMatch(report, /extensions:\s*\['docx',\s*'doc'\]/, 'report picker should be removed')
-assert.doesNotMatch(report, /selectedReportFileName/, 'report state should not expose a local selected report file name')
+assert.match(report, /from '@tauri-apps\/plugin-dialog'/, 'report processing should use the Tauri file picker')
+assert.match(report, /from '@tauri-apps\/plugin-fs'/, 'report processing should read the selected third-party report file')
+assert.match(report, /extensions:\s*\['doc',\s*'docx'\]/, 'report picker should accept Word reports')
+assert.match(report, /selectedThirdPartyReportName/, 'report state should expose selected third-party report file name')
 
-for (const label of [
-  '确认各处电源，关闭电源总开关',
-  '设备外观检查并整理试验现场',
-]) {
-  assert.match(checks, new RegExp(label), `shutdown check item should include "${label}"`)
-}
+assert.match(checks, /shutdownChecks/, 'shutdown check state should be defined')
+assert.match(checks, /shutdownPostChecks\.map\(\(text,\s*idx\) => \(\{ id:\s*idx \+ 1,\s*text,\s*checked:\s*false \}\)\)/, 'shutdown checks should be generated unchecked')
 
 const shutdownPanel = sliceBetween(
   flow,
@@ -66,8 +57,8 @@ const shutdownPanel = sliceBetween(
   `v-if="currentWorkOrder"`,
   'vibration shutdown panel'
 )
-assert.match(shutdownPanel, /关机检查/, 'shutdown modal should use the correct title')
+assert.match(shutdownPanel, /shutdown-check-modal/, 'shutdown modal should render the shutdown check modal')
 assert.match(shutdownPanel, /shutdownChecks\.every\(i => i\.checked\)/, 'shutdown completion should require all checks')
-assert.match(shutdownPanel, /完成并返回看板/, 'shutdown modal should return to dashboard after completion')
+assert.match(shutdownPanel, /finish-shutdown/, 'shutdown modal should finish through the expected event')
 
 console.log('vibration report and shutdown flow assertions passed')

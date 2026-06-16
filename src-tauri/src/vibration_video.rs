@@ -88,6 +88,32 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
     })
 }
 
+fn ensure_video_dependencies(python_program: &str) -> Result<(), String> {
+    let import_check = create_hidden_command(python_program)
+        .args(["-c", "import av, cv2, numpy; from PIL import Image, ImageDraw, ImageFont"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("检查振动视频识别依赖失败: {}", e))?;
+
+    if import_check.status.success() {
+        return Ok(());
+    }
+
+    let detail = String::from_utf8_lossy(&import_check.stderr)
+        .trim()
+        .to_string();
+    Err(format!(
+        "当前 Python 缺少振动视频识别依赖，请在设置中选择已安装 av、opencv-python-headless、numpy、Pillow 的 Python，或执行 python -m pip install av opencv-python-headless numpy Pillow。Python: {}{}",
+        python_program,
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!("；详情: {}", detail)
+        }
+    ))
+}
+
 fn resolve_vibration_script_path(app: &AppHandle) -> Result<PathBuf, String> {
     let bundled = app
         .path()
@@ -353,6 +379,7 @@ pub fn extract_vibration_video_data(
     ensure_exists(&video_path, "视频文件路径")?;
 
     let python_program = resolve_python_program(python_path)?;
+    ensure_video_dependencies(&python_program)?;
     let script_path = resolve_vibration_script_path(&app)?;
     let output_dir = create_output_dir(&app)?;
     let script_path_str = script_path.to_string_lossy().to_string();
@@ -396,6 +423,7 @@ pub fn start_vibration_video_stream(
 ) -> Result<serde_json::Value, String> {
     ensure_exists(&video_path, "视频文件路径")?;
     let python_program = resolve_python_program(python_path)?;
+    ensure_video_dependencies(&python_program)?;
     let script_path = resolve_vibration_script_path(&app)?;
     let resume_mode = resume.unwrap_or(false);
     let output_dir = if let Some(existing) = output_dir {

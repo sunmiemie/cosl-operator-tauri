@@ -1,5 +1,8 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { open } from '@tauri-apps/plugin-dialog'
+import { readFile, stat } from '@tauri-apps/plugin-fs'
+import { useConfig } from '@/composables/useConfig'
 import type { ReportFile, ReportFileId, ReportProcessStep } from '../types'
 import {
   createVibrationTablePreExperiment,
@@ -25,7 +28,7 @@ const createReportFiles = (): ReportFile[] => [
 ]
 
 const createReportProcessSteps = (): ReportProcessStep[] => [
-  { id: 1, text: '从共享文件夹同步报告文件...', status: 'pending' },
+  { id: 1, text: '确认第三方报告文件...', status: 'pending' },
   { id: 2, text: '整理测试结果到工单文件夹...', status: 'pending' },
   { id: 3, text: '备份报告到历史文件夹...', status: 'pending' },
   { id: 4, text: '上传工单全部文件到管理服务器...', status: 'pending' },
@@ -34,17 +37,52 @@ const createReportProcessSteps = (): ReportProcessStep[] => [
 
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
+function getFileName(path: string) {
+  return path.split(/[\\/]/).pop() || path
+}
+
+function getWordMimeType(fileName: string) {
+  return fileName.toLowerCase().endsWith('.docx')
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : 'application/msword'
+}
+
+function formatFileSize(size: number) {
+  if (!size) return '--'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(2)} MB`
+}
+
+function normalizeSharedReportDir(value: string) {
+  return value.trim().replace(/^\\\\\s+/, '\\\\')
+}
+
 export function useVibrationReport(options: UseVibrationReportOptions) {
+  const { initConfig, config } = useConfig()
   const exportDir = ref('')
   const reportFiles = ref<ReportFile[]>(createReportFiles())
   const reportProcessSteps = ref<ReportProcessStep[]>([])
   const fileGenRunning = ref(false)
   const reportProcessing = ref(false)
+  const selectedThirdPartyReportPath = ref('')
+  const selectedThirdPartyReportName = ref('')
+  const selectedThirdPartyReportSize = ref(0)
+  const selectedThirdPartyReportModifiedAt = ref('')
+  const selectedThirdPartyReportBlob = ref<Blob | null>(null)
 
+  const sharedReportDir = computed(() => normalizeSharedReportDir(String(config.value.vibrationSharedReportDir || '')))
+  const thirdPartyReportReady = computed(() =>
+    Boolean(selectedThirdPartyReportName.value && selectedThirdPartyReportBlob.value)
+  )
+  const selectedThirdPartyReportSizeText = computed(() =>
+    formatFileSize(selectedThirdPartyReportSize.value)
+  )
   const allFilesDone = computed(() => reportFiles.value.every(f => f.done))
   const reportReadyToProcess = computed(() =>
     !fileGenRunning.value
     && !reportProcessing.value
+    && thirdPartyReportReady.value
   )
   const reportProgress = computed(() => {
     const total = reportFiles.value.length || 1
@@ -57,6 +95,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     reportProcessSteps.value = []
     fileGenRunning.value = false
     reportProcessing.value = false
+    clearThirdPartyReport()
   }
 
   function updateFileStatus(id: ReportFileId, status: string) {
@@ -88,11 +127,80 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     )
   }
 
-  async function getReportUploadFile(): Promise<VibrationTablePreExperimentUploadFile> {
+  function clearThirdPartyReport() {
+    selectedThirdPartyReportPath.value = ''
+    selectedThirdPartyReportName.value = ''
+    selectedThirdPartyReportSize.value = 0
+    selectedThirdPartyReportModifiedAt.value = ''
+    selectedThirdPartyReportBlob.value = null
+  }
+
+  async function ensureSharedReportDirAccessible(dir: string) {
+    if (!dir) return true
+    try {
+      const info = await stat(dir)
+      if (!info.isDirectory) {
+        ElMessage.warning(`振动台共享报告路径不是文件夹：${dir}`)
+        return false
+      }
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      ElMessage.warning(`无法访问振动台共享报告文件夹：${dir}。请检查路径、网络连接和 Windows 共享凭据。${message}`)
+      return false
+    }
+  }
+
+  async function selectThirdPartyReport() {
+    await initConfig()
+    try {
+      const defaultSharedReportDir = sharedReportDir.value
+      if (!(await ensureSharedReportDirAccessible(defaultSharedReportDir))) return
+
+      const selected = await open({
+        title: '选择振动台第三方报告',
+        multiple: false,
+        directory: false,
+        defaultPath: defaultSharedReportDir || undefined,
+        filters: [
+          { name: 'Word 报告文件', extensions: ['doc', 'docx'] },
+        ],
+      })
+      if (!selected || typeof selected !== 'string') return
+
+      if (!/\.(doc|docx)$/i.test(selected)) {
+        ElMessage.error('请选择 .doc 或 .docx 格式的第三方报告')
+        return
+      }
+
+      const info = await stat(selected)
+      if (!info.isFile) {
+        ElMessage.error('请选择第三方报告文件，而不是文件夹')
+        return
+      }
+
+      const bytes = await readFile(selected)
+      const fileName = getFileName(selected)
+      selectedThirdPartyReportPath.value = selected
+      selectedThirdPartyReportName.value = fileName
+      selectedThirdPartyReportSize.value = info.size || bytes.byteLength
+      selectedThirdPartyReportModifiedAt.value = info.mtime ? info.mtime.toLocaleString() : ''
+      selectedThirdPartyReportBlob.value = new Blob([bytes], { type: getWordMimeType(fileName) })
+      ElMessage.success(`已选择第三方报告：${fileName}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      ElMessage.error(`读取第三方报告失败：${message}`)
+    }
+  }
+
+  async function getThirdPartyReportUploadFile(): Promise<VibrationTablePreExperimentUploadFile> {
+    if (!thirdPartyReportReady.value || !selectedThirdPartyReportBlob.value) {
+      throw new Error('请先从共享文件夹选择第三方报告文件')
+    }
     return {
       fieldName: 'report_file',
-      fileName: 'report.txt',
-      blob: new Blob([options.getReportText()], { type: 'text/plain;charset=utf-8' }),
+      fileName: selectedThirdPartyReportName.value,
+      blob: selectedThirdPartyReportBlob.value,
     }
   }
 
@@ -116,7 +224,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
         fileName: 'experiment.csv',
         blob: new Blob([options.getCsvContent()], { type: 'text/csv;charset=utf-8' }),
       },
-      await getReportUploadFile(),
+      await getThirdPartyReportUploadFile(),
     ]
 
     const captureBlob = await options.getLatestCaptureBlob()
@@ -166,6 +274,10 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
 
   function processReport() {
     if (reportProcessing.value || fileGenRunning.value) return
+    if (!thirdPartyReportReady.value) {
+      ElMessage.warning('请先从共享文件夹选择第三方报告文件')
+      return
+    }
 
     reportProcessing.value = true
     fileGenRunning.value = true
@@ -192,9 +304,17 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     reportReadyToProcess,
     allFilesDone,
     reportProgress,
+    selectedThirdPartyReportPath,
+    selectedThirdPartyReportName,
+    selectedThirdPartyReportSize,
+    selectedThirdPartyReportSizeText,
+    selectedThirdPartyReportModifiedAt,
+    thirdPartyReportReady,
     exportDir,
     setExportDir,
     resetReportFiles,
+    selectThirdPartyReport,
+    clearThirdPartyReport,
     processReport,
   }
 }

@@ -42,6 +42,7 @@ export interface AppConfig {
   downloadDir: string      // 旧版通用下载文件保存目录（兼容历史配置）
   highTempPressureDownloadDir: string // 高温高压井下载文件保存目录
   vibrationDownloadDir: string // 振动台下载文件保存目录
+  vibrationSharedReportDir: string // 振动台第三方报告共享文件夹
   autoSave: boolean        // 测试过程自动保存
   autoReUpload: boolean    // 网络恢复自动回传
   
@@ -80,6 +81,7 @@ const defaultConfig: AppConfig = {
   downloadDir: '',
   highTempPressureDownloadDir: '',
   vibrationDownloadDir: '',
+  vibrationSharedReportDir: '',
   autoSave: true,
   autoReUpload: true,
   // 隐藏菜单默认值（默认全部显示）
@@ -135,6 +137,7 @@ export async function initializeConfig(): Promise<AppConfig> {
       const downloadDir = await store.get<string>('downloadDir')
       const highTempPressureDownloadDir = await store.get<string>('highTempPressureDownloadDir')
       const vibrationDownloadDir = await store.get<string>('vibrationDownloadDir')
+      const vibrationSharedReportDir = await store.get<string>('vibrationSharedReportDir')
       const autoSave = await store.get<boolean>('autoSave')
       const autoReUpload = await store.get<boolean>('autoReUpload')
       const hiddenMenus = await store.get<string[]>('hiddenMenus')
@@ -198,6 +201,10 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('vibrationDownloadDir', downloadDir ?? defaultConfig.vibrationDownloadDir)
         needsSave = true
       }
+      if (vibrationSharedReportDir === null || vibrationSharedReportDir === undefined) {
+        await store.set('vibrationSharedReportDir', defaultConfig.vibrationSharedReportDir)
+        needsSave = true
+      }
       if (autoSave === null || autoSave === undefined) {
         await store.set('autoSave', defaultConfig.autoSave)
         needsSave = true
@@ -249,6 +256,7 @@ export async function initializeConfig(): Promise<AppConfig> {
         downloadDir: downloadDir ?? defaultConfig.downloadDir,
         highTempPressureDownloadDir: highTempPressureDownloadDir ?? downloadDir ?? defaultConfig.highTempPressureDownloadDir,
         vibrationDownloadDir: vibrationDownloadDir ?? downloadDir ?? defaultConfig.vibrationDownloadDir,
+        vibrationSharedReportDir: vibrationSharedReportDir ?? defaultConfig.vibrationSharedReportDir,
         autoSave: autoSave ?? defaultConfig.autoSave,
         autoReUpload: autoReUpload ?? defaultConfig.autoReUpload,
         hiddenMenus: hiddenMenus ?? defaultConfig.hiddenMenus,
