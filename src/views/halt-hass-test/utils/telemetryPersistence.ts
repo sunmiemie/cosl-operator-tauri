@@ -12,7 +12,13 @@ export function loadHaltHassPeriodicRecords(
   if (sessionId === null || sessionId === undefined || sessionId === '') return []
   try {
     const value = JSON.parse(localStorage.getItem(storageKey(sessionId)) || '[]')
-    return Array.isArray(value) ? value : []
+    if (!Array.isArray(value)) return []
+    return value.filter(record => record && typeof record === 'object' &&
+      Number.isSafeInteger(record.intervalIndex) && record.intervalIndex > 0 &&
+      Number.isFinite(record.elapsedSeconds) && record.elapsedSeconds >= 0 &&
+      typeof record.recordedAt === 'string' && Number.isFinite(Date.parse(record.recordedAt)) &&
+      record.communications && typeof record.communications === 'object' && !Array.isArray(record.communications) &&
+      Array.isArray(record.missingReasons))
   } catch (error) {
     console.warn('[HALT-HASS] 读取三分钟测试记录失败:', error)
     return []
