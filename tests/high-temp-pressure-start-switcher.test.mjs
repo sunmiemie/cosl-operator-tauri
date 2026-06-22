@@ -42,4 +42,34 @@ assert.match(
   'high-temp-pressure page should pass the active selected work orders into StartPanel'
 )
 
+const startHandlerStart = indexPage.indexOf('async function handleConfirmStart()')
+assert.notEqual(startHandlerStart, -1, 'handleConfirmStart should be present')
+const startHandlerEnd = indexPage.indexOf('async function handleConfirmEnd()', startHandlerStart)
+assert.notEqual(startHandlerEnd, -1, 'handleConfirmStart should have a following boundary')
+const startHandlerBody = indexPage.slice(startHandlerStart, startHandlerEnd)
+
+assert.match(
+  startHandlerBody,
+  /const\s+ordersNeedingStart\s*=\s*uniqueOrders\.filter\(\(order\)\s*=>\s*order\.statusCode\s*!==\s*2\)/,
+  'high-temp-pressure final start should skip backend start calls for orders that are already testing'
+)
+
+assert.match(
+  startHandlerBody,
+  /const\s+missingDbOrder\s*=\s*ordersNeedingStart\.find/,
+  'high-temp-pressure final start should only require backend IDs for orders that still need a start call'
+)
+
+assert.match(
+  startHandlerBody,
+  /if\s*\(!ordersNeedingStart\.length\)\s*\{[\s\S]*?uniqueOrders\.forEach\(\(order\)\s*=>\s*schedule\.markOrderStarted\(order\.id\)\)[\s\S]*?schedule\.markInstrumentsRunning\(runningInstrumentIds\)[\s\S]*?testing\.confirmStart\(\)[\s\S]*?return/,
+  'high-temp-pressure final start should enter the test directly when every selected order is already testing'
+)
+
+assert.match(
+  startHandlerBody,
+  /uniqueOrders\.forEach\(\(order\)\s*=>\s*schedule\.markOrderStarted\(order\.id\)\)[\s\S]*?schedule\.markInstrumentsRunning\(runningInstrumentIds\)[\s\S]*?testing\.confirmStart\(\)/,
+  'high-temp-pressure final start should mark every selected order as started after any needed backend start calls'
+)
+
 console.log('high-temp-pressure start switcher assertions passed')

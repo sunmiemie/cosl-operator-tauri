@@ -194,7 +194,7 @@ async function handleConfirmStart() {
   const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
   completedSelections.value = []
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
-  const ordersNeedingStart = uniqueOrders
+  const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
   const missingDbOrder = ordersNeedingStart.find((order) => typeof order.dbId !== 'number')
   if (missingDbOrder) {
     ElMessage.error('未找到工单ID')
@@ -202,14 +202,10 @@ async function handleConfirmStart() {
   }
 
   if (!ordersNeedingStart.length) {
-    const authOk = await initAuth()
-    if (!authOk) {
-      ElMessage.error('登录已失效，请重新登录后再开始实验')
-      return
-    }
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
     schedule.markInstrumentsRunning(runningInstrumentIds)
     testing.confirmStart()
+    refreshWorkOrdersInBackground()
     return
   }
 
@@ -241,7 +237,7 @@ async function handleConfirmStart() {
       return
     }
 
-    startResults.forEach(({ order }) => schedule.markOrderStarted(order.id))
+    uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
     schedule.markInstrumentsRunning(runningInstrumentIds)
     testing.confirmStart()
     refreshWorkOrdersInBackground()
