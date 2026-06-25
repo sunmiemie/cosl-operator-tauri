@@ -553,8 +553,10 @@ async function confirmInstrumentSelection() {
 .expand-icon { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; flex:0 0 auto; color:var(--color-text-secondary); cursor:pointer; }
 .device-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cell-task-detail .device-summary { overflow:visible; text-overflow:clip; white-space:normal; word-break:break-word; overflow-wrap:anywhere; line-height:1.35; }
-.op-btn { border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg-primary); color:var(--color-text-primary); cursor:pointer; font-size:12px; padding:4px 8px; white-space:nowrap; }
-.op-btn:hover { background:var(--color-bg-hover); }
+.cell-action, .cell-status { text-align:center; }
+.op-btn { min-width:48px; height:26px; padding:0 8px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; transition:all .18s ease; white-space:nowrap; }
+.op-btn.view { color:#006be6; border:1px solid rgba(37,99,235,.25); background:rgba(59,130,246,.1); }
+.op-btn.view:hover { background:rgba(59,130,246,.18); }
 .status-pill { display:inline-flex; align-items:center; justify-content:center; max-width:100%; padding:3px 7px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
 .status-pending { color:#d97706; border:1px solid rgba(245,158,11,.35); background:rgba(245,158,11,.12); }
 .status-scheduled { color:#2563eb; border:1px solid rgba(59,130,246,.35); background:rgba(59,130,246,.12); }
