@@ -12,6 +12,7 @@ import type {
 import { TEST_RESULT } from '@/views/halt-hass-test/types'
 import { uploadReport, buildReportJson } from '@/services/halt-hass-order'
 import { useAuth } from '@/composables/useAuth'
+import { isMockHaltHassOrderId } from '../mock-halt-hass-fixture'
 
 export function useHaltHassReport() {
   const { userInfo } = useAuth()
@@ -131,8 +132,22 @@ export function useHaltHassReport() {
    * 上传报告
    */
   async function upload(): Promise<boolean> {
-    if (!reportJson.value || !userInfo.value) {
-      uploadError.value = '报告数据或用户信息不存在'
+    if (!reportJson.value) {
+      uploadError.value = '报告数据不存在'
+      return false
+    }
+
+    if (isMockHaltHassOrderId(reportJson.value.orderId)) {
+      isUploading.value = true
+      uploadProgress.value = 100
+      uploadError.value = ''
+      uploadedReportId.value = reportJson.value.orderId
+      isUploading.value = false
+      return true
+    }
+
+    if (!userInfo.value) {
+      uploadError.value = '用户信息不存在'
       return false
     }
 

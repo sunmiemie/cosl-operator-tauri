@@ -9,9 +9,10 @@ import type { BoardModelItem, HaltHassProcessJson } from '@/views/process-halt-h
 
 /**
  * 测试页面阶段
- * detect -> scan -> download -> install -> test -> upload -> complete
+ * schedule -> detect -> scan -> download -> install -> test -> upload -> complete
  */
 export type PagePhase =
+  | 'schedule'  // 排程
   | 'detect'    // 设备检测
   | 'scan'      // 扫码
   | 'download'  // 下载工艺
@@ -75,6 +76,8 @@ export interface HaltHassOrder {
   createdAt: string
   startedAt?: string
   completedAt?: string
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
 }
 
 /**

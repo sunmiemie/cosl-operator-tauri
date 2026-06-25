@@ -14,9 +14,11 @@ import InstallGuideViewer from './components/InstallGuideViewer.vue'
 import FlowchartRunner from './components/FlowchartRunner.vue'
 import TestResultPanel from './components/TestResultPanel.vue'
 import ReportUploader from './components/ReportUploader.vue'
+import HaltHassScheduleDashboard from './components/HaltHassScheduleDashboard.vue'
 
 // 导入 composables
 import { useHaltHassTest } from './composables/useHaltHassTest'
+import { useHaltHassSchedule } from './composables/useHaltHassSchedule'
 import { useMultiBoardScan } from './composables/useMultiBoardScan'
 import { useHaltHassReport } from './composables/useHaltHassReport'
 import { useScanner } from '@/composables/useScanner'
@@ -26,9 +28,10 @@ import { useLayout } from '@/composables/useLayout'
 import { runFlowchart, cancelFlowchartRun, configureApi } from '@/services/flojoy-api'
 import { prepareRunFlowchartArgs } from '@/services/flojoy-adapter'
 import { v4 as uuidv4 } from 'uuid'
+import { getMockScannedBoards, isMockHaltHassOrder } from './mock-halt-hass-fixture'
 
 // 导入类型
-import type { PagePhase } from './types'
+import type { HaltHassOrder, PagePhase } from './types'
 import type { BlockData } from '@/views/process-halt-hass/types'
 import type { Node } from '@vue-flow/core'
 
@@ -66,14 +69,18 @@ const {
   reset: resetTest,
 } = useHaltHassTest()
 
+const schedule = useHaltHassSchedule()
+
 // 多板扫码
 const {
+  currentOrder: scannedOrder,
   scannedBoards,
   lastScanError,
   isComplete: isScanComplete,
   handleScan,
   removeScannedBoard,
   reset: resetScan,
+  setOrder: setScanOrder,
   getAllSerials,
 } = useMultiBoardScan()
 
@@ -129,6 +136,7 @@ const currentJobId = ref<string>('')
 
 // 阶段标签配置
 const phaseLabels: Record<PagePhase, { label: string; icon: string }> = {
+  schedule: { label: '排程管理', icon: 'mdi:calendar-clock' },
   detect: { label: '设备检测', icon: 'mdi:radar' },
   scan: { label: '扫描电路板', icon: 'mdi:barcode-scan' },
   download: { label: '下载工艺', icon: 'mdi:cloud-download-outline' },
@@ -206,17 +214,34 @@ async function onScanData(data: string) {
   if (result.success) {
     ElMessage.success(result.message)
 
-    // 如果扫码完成，自动设置工单
-    if (result.isComplete) {
-      // 获取扫码组件设置的工单
-      const scanOrder = (await import('./composables/useMultiBoardScan')).useMultiBoardScan()
-      if (scanOrder.currentOrder.value) {
-        setOrder(scanOrder.currentOrder.value)
-      }
+    if (scannedOrder.value && (!currentOrder.value || currentOrder.value.id !== scannedOrder.value.id)) {
+      setOrder(scannedOrder.value)
     }
   } else {
     ElMessage.warning(result.message)
   }
+}
+
+function handleStartScheduledTest(order: HaltHassOrder) {
+  stopScanning()
+  resetTest()
+  resetScan()
+  resetReport()
+
+  if (isMockHaltHassOrder(order)) {
+    const boards = getMockScannedBoards(order)
+    const hydratedOrder = { ...order, scannedBoards: boards }
+    setOrder(hydratedOrder)
+    setScanOrder(hydratedOrder, boards)
+    setPhase('scan')
+    ElMessage.success('已载入演示工单 HH-DEMO-001，可直接测试全流程')
+    return
+  }
+
+  setOrder(order)
+  setScanOrder(order)
+  setPhase('detect')
+  void checkDevices()
 }
 
 function handleRemoveBoard(serial: string) {
@@ -256,9 +281,56 @@ function handleStartFlowchartTest() {
 
 // ==================== 流程图运行 ====================
 
+async function simulateMockFlowchartRun() {
+  if (!processJson.value || !currentOrder.value || !flowchartStartTime.value) {
+    ElMessage.warning('演示工单数据不存在')
+    return
+  }
+
+  clearNodeStatuses()
+  const nodes = processJson.value.flowchart.nodes
+
+  for (const node of nodes) {
+    const startTime = new Date()
+    await new Promise(resolve => setTimeout(resolve, 180))
+    const endTime = new Date()
+    const nodeData = node.data as { label?: unknown } | undefined
+    const nodeName = typeof nodeData?.label === 'string' ? nodeData.label : node.id
+
+    updateNodeResult({
+      nodeId: node.id,
+      nodeName,
+      status: 'success',
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      duration: endTime.getTime() - startTime.getTime(),
+      output: { source: 'mock' },
+    })
+  }
+
+  onFlowchartComplete(true)
+  generateReport({
+    order: currentOrder.value,
+    boards: [...scannedBoards.value],
+    startTime: flowchartStartTime.value,
+    endTime: new Date(),
+    nodeResults: [...nodeResults.value],
+    testData: {
+      mode: 'mock',
+      note: 'HALT-HASS 演示工单模拟完成',
+    },
+  })
+  ElMessage.success('演示流程图运行完成')
+}
+
 async function handleRunFlowchart() {
   if (!processJson.value) {
     ElMessage.warning('工艺数据不存在')
+    return
+  }
+
+  if (isMockHaltHassOrder(currentOrder.value)) {
+    await simulateMockFlowchartRun()
     return
   }
 
@@ -405,8 +477,8 @@ function handleNewTest() {
   resetTest()
   resetScan()
   resetReport()
-  setPhase('detect')
-  checkDevices()
+  setPhase('schedule')
+  void schedule.refreshWorkOrders()
 }
 
 // ==================== 生命周期 ====================
@@ -421,8 +493,10 @@ watch(phase, (newPhase) => {
 })
 
 onMounted(() => {
-  // 准备阶段不隐藏侧边栏
-  checkDevices()
+  // 排程页不提前弹出设备检测，进入已排程工单后再检测设备。
+  if (phase.value !== 'schedule') {
+    checkDevices()
+  }
 })
 
 onUnmounted(() => {
@@ -447,8 +521,28 @@ onUnmounted(() => {
       @skip="onDeviceCheckSkip"
     />
 
+    <!-- 排程阶段 -->
+    <template v-if="phase === 'schedule'">
+      <header class="page-header">
+        <div class="header-left">
+          <div class="header-icon">
+            <Icon icon="mdi:snowflake-thermometer" />
+          </div>
+          <div>
+            <h1 class="header-title">HALT-HASS 测试</h1>
+            <p class="header-subtitle">HALT-HASS 测试排程管理</p>
+          </div>
+        </div>
+      </header>
+
+      <HaltHassScheduleDashboard
+        :ctx="schedule"
+        @start-scheduled-test="handleStartScheduledTest"
+      />
+    </template>
+
     <!-- 准备阶段：扫码、下载 - 显示侧边栏 -->
-    <template v-if="phase === 'scan' || phase === 'download' || phase === 'detect'">
+    <template v-else-if="phase === 'scan' || phase === 'download' || phase === 'detect'">
       <!-- 页面头部 -->
       <header class="page-header">
         <div class="header-left">

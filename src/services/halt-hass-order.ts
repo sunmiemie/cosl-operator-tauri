@@ -12,6 +12,79 @@ import type {
 } from '@/views/halt-hass-test/types'
 import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
 
+export type HaltHassOrderDTO = Record<string, any>
+
+export type HaltHassOrderListResponse = {
+  code: number
+  data: {
+    list: HaltHassOrderDTO[]
+    total: number
+    page: number
+    pageSize: number
+  }
+  msg?: string
+}
+
+export type ListHaltHassOrdersParams = {
+  page?: number
+  pageSize?: number
+  orderNo?: string
+  status?: number | string
+}
+
+export type HaltHassOrderWriteResponse = {
+  code: number
+  msg?: string
+  data?: HaltHassOrderDTO
+}
+
+export type HaltHassOrderScheduleBody = {
+  scheduled_start_at: string
+  scheduled_end_at: string
+}
+
+function normalizeScannedBoards(value: unknown): ScannedBoard[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => ({
+    serial: String(item?.serial || item?.sn || ''),
+    boardModelId: item?.board_model_id ?? item?.boardModelId,
+    boardModelName: item?.board_model_name || item?.boardModelName,
+    scannedAt: item?.scanned_at || item?.scannedAt ? new Date(item.scanned_at || item.scannedAt) : new Date(),
+  }))
+}
+
+export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
+  const boardGroup = dto.board_group || dto.boardGroup || {}
+  const process = dto.process || dto.process_info || dto.processInfo || {}
+  const scannedBoards = normalizeScannedBoards(dto.scanned_boards || dto.scannedBoards)
+  const orderNo = String(dto.order_no || dto.orderNo || dto.task_number || dto.taskNumber || dto.id || '')
+
+  return {
+    id: Number(dto.id),
+    orderNo,
+    status: Number(dto.status ?? 0),
+    boardCount: Number(dto.board_count ?? dto.boardCount ?? scannedBoards.length ?? 0),
+    boardGroup: {
+      id: Number(boardGroup.id ?? dto.board_group_id ?? dto.boardGroupId ?? 0),
+      name: String(boardGroup.name || dto.board_group_name || dto.boardGroupName || '-'),
+      boards: Array.isArray(boardGroup.boards) ? boardGroup.boards : [],
+    },
+    process: {
+      id: Number(process.id ?? dto.process_id ?? dto.processId ?? 0),
+      name: String(process.name || dto.process_name || dto.processName || '-'),
+      version: String(process.version || dto.process_version || dto.processVersion || ''),
+    },
+    scannedBoards,
+    feedbackReason: String(dto.feedback_reason || dto.feedbackReason || ''),
+    remark: String(dto.remark || ''),
+    createdAt: String(dto.created_at || dto.createdAt || ''),
+    startedAt: dto.started_at || dto.startedAt,
+    completedAt: dto.completed_at || dto.completedAt,
+    scheduledStartAt: dto.scheduled_start_at || dto.scheduledStartAt || null,
+    scheduledEndAt: dto.scheduled_end_at || dto.scheduledEndAt || null,
+  }
+}
+
 // ==================== 工单 API ====================
 
 /**
@@ -22,6 +95,20 @@ export async function getOrderBySerial(
   serial: string
 ): Promise<ApiResponse<HaltHassOrder[]>> {
   return http.get<HaltHassOrder[]>('/test/halt-hass/order/by-serial/', {}, { serial })
+}
+
+/**
+ * 获取 HALT-HASS 工单列表
+ */
+export async function listHaltHassOrders(
+  params: ListHaltHassOrdersParams
+): Promise<ApiResponse<HaltHassOrderListResponse>> {
+  const query: Record<string, string> = {}
+  if (params.page !== undefined) query.page = String(params.page)
+  if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
+  if (params.orderNo) query.orderNo = params.orderNo
+  if (params.status !== undefined) query.status = String(params.status)
+  return http.get<HaltHassOrderListResponse>('/test/halt-hass/order/list/', {}, query)
 }
 
 /**
@@ -50,6 +137,34 @@ export async function startOrder(
       operator_id: data.operatorId,
       board_serials: data.boardSerials,
     }
+  )
+}
+
+/**
+ * 保存 HALT-HASS 工单排程
+ */
+export async function saveHaltHassOrderSchedule(
+  orderId: number,
+  data: HaltHassOrderScheduleBody,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HaltHassOrderWriteResponse>> {
+  return http.post<HaltHassOrderWriteResponse>(
+    `/test/halt-hass/order/schedule/${orderId}/`,
+    data,
+    headers
+  )
+}
+
+/**
+ * 清除 HALT-HASS 工单排程
+ */
+export async function clearHaltHassOrderSchedule(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HaltHassOrderWriteResponse>> {
+  return http.delete<HaltHassOrderWriteResponse>(
+    `/test/halt-hass/order/schedule/${orderId}/`,
+    headers
   )
 }
 

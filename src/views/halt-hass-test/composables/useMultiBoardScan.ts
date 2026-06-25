@@ -53,6 +53,14 @@ export function useMultiBoardScan() {
         return { success: false, message: '序列号为空' }
       }
 
+      // 已经从排程选择了工单时，首块板也按当前工单做本地校验，避免重新匹配到其它工单。
+      if (currentOrder.value) {
+        if (phase.value === 'idle' || phase.value === 'first_scan') {
+          phase.value = 'scanning'
+        }
+        return handleSubsequentScan(trimmedSerial)
+      }
+
       // 首次扫码：调用 API 查询工单
       if (phase.value === 'idle' || phase.value === 'first_scan') {
         phase.value = 'first_scan'

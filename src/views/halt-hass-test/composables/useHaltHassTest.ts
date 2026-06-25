@@ -20,6 +20,7 @@ import {
   downloadProcessData,
 } from '@/services/halt-hass-order'
 import { useAuth } from '@/composables/useAuth'
+import { isMockHaltHassOrder, MOCK_HALT_HASS_PROCESS } from '../mock-halt-hass-fixture'
 
 export function useHaltHassTest() {
   const { userInfo } = useAuth()
@@ -27,7 +28,7 @@ export function useHaltHassTest() {
   // ==================== 核心状态 ====================
 
   // 当前阶段
-  const phase = ref<PagePhase>('detect')
+  const phase = ref<PagePhase>('schedule')
 
   // 测试模式
   const testMode = ref<TestMode>('normal')
@@ -100,7 +101,7 @@ export function useHaltHassTest() {
    * 进入下一阶段
    */
   function nextPhase(): void {
-    const phases: PagePhase[] = ['detect', 'scan', 'download', 'install', 'test', 'upload', 'complete']
+    const phases: PagePhase[] = ['schedule', 'detect', 'scan', 'download', 'install', 'test', 'upload', 'complete']
     const currentIndex = phases.indexOf(phase.value)
     if (currentIndex < phases.length - 1) {
       phase.value = phases[currentIndex + 1]
@@ -111,7 +112,7 @@ export function useHaltHassTest() {
    * 返回上一阶段
    */
   function prevPhase(): void {
-    const phases: PagePhase[] = ['detect', 'scan', 'download', 'install', 'test', 'upload', 'complete']
+    const phases: PagePhase[] = ['schedule', 'detect', 'scan', 'download', 'install', 'test', 'upload', 'complete']
     const currentIndex = phases.indexOf(phase.value)
     if (currentIndex > 0) {
       phase.value = phases[currentIndex - 1]
@@ -149,8 +150,13 @@ export function useHaltHassTest() {
    * 开始测试（调用 API）
    */
   async function startTest(boardSerials: string[]): Promise<boolean> {
-    if (!currentOrder.value || !userInfo.value) {
-      errorMessage.value = '工单或用户信息不存在'
+    if (!currentOrder.value) {
+      errorMessage.value = '工单不存在'
+      return false
+    }
+
+    if (!isMockHaltHassOrder(currentOrder.value) && !userInfo.value) {
+      errorMessage.value = '用户信息不存在'
       return false
     }
 
@@ -158,8 +164,13 @@ export function useHaltHassTest() {
     errorMessage.value = ''
 
     try {
+      if (isMockHaltHassOrder(currentOrder.value)) {
+        setPhase('download')
+        return true
+      }
+
       const result = await startOrder(currentOrder.value.id, {
-        operatorId: userInfo.value.id,
+        operatorId: userInfo.value!.id,
         boardSerials,
       })
 
@@ -191,6 +202,12 @@ export function useHaltHassTest() {
     errorMessage.value = ''
 
     try {
+      if (isMockHaltHassOrder(currentOrder.value)) {
+        processJson.value = MOCK_HALT_HASS_PROCESS
+        setPhase('install')
+        return true
+      }
+
       const result = await downloadProcessData(currentOrder.value.process.id)
 
       if (!result.success || !result.data) {
@@ -415,7 +432,7 @@ export function useHaltHassTest() {
    * 重置所有状态
    */
   function reset(): void {
-    phase.value = 'detect'
+    phase.value = 'schedule'
     testMode.value = 'normal'
     currentOrder.value = null
     processJson.value = null
