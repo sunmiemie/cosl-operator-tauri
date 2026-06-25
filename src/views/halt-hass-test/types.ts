@@ -60,6 +60,22 @@ export interface ScannedBoard {
   scannedAt: Date
 }
 
+export type OrderBoardSerial = string | {
+  serial?: string
+  sn?: string
+  serialNumber?: string
+  serial_num?: string
+  boardModelId?: number
+  board_model_id?: number
+}
+
+export interface OrderScheduleSegment {
+  scheduledStartAt?: string | null
+  scheduledEndAt?: string | null
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
+}
+
 /**
  * HALT-HASS 工单
  */
@@ -70,6 +86,7 @@ export interface HaltHassOrder {
   boardCount: number
   boardGroup: OrderBoardGroup
   process: OrderProcess
+  boardSerials?: OrderBoardSerial[]
   scannedBoards: ScannedBoard[]
   feedbackReason: string
   remark: string
@@ -78,6 +95,7 @@ export interface HaltHassOrder {
   completedAt?: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  scheduleSegments?: OrderScheduleSegment[]
 }
 
 /**

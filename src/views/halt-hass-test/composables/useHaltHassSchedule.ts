@@ -159,9 +159,14 @@ export function useHaltHassSchedule() {
     return Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
-  function eventFromOrderSchedule(order: HaltHassOrder): ScheduledEvent | null {
-    const start = parseBackendDateTime(order.scheduledStartAt)
-    const end = parseBackendDateTime(order.scheduledEndAt)
+  function eventFromScheduleRange(
+    order: HaltHassOrder,
+    startValue?: string | null,
+    endValue?: string | null,
+    suffix = ''
+  ): ScheduledEvent | null {
+    const start = parseBackendDateTime(startValue)
+    const end = parseBackendDateTime(endValue)
     if (!start || !end || end <= start) return null
 
     const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
@@ -173,7 +178,7 @@ export function useHaltHassSchedule() {
     const dateStr = fmtDate(start)
     const orderId = getOrderKey(order)
     return {
-      eventId: `${orderId}-${dateStr}-${startTimeKey}-${end.getTime()}`,
+      eventId: `${orderId}-${dateStr}-${startTimeKey}-${end.getTime()}${suffix}`,
       orderId,
       dateStr,
       startTimeKey,
@@ -181,11 +186,31 @@ export function useHaltHassSchedule() {
     }
   }
 
+  function eventsFromOrderSchedule(order: HaltHassOrder): ScheduledEvent[] {
+    const segmentEvents = (order.scheduleSegments || [])
+      .map((segment, index) => eventFromScheduleRange(
+        order,
+        segment.scheduledStartAt || segment.scheduled_start_at,
+        segment.scheduledEndAt || segment.scheduled_end_at,
+        `-${index}`,
+      ))
+      .filter((event): event is ScheduledEvent => Boolean(event))
+
+    if (segmentEvents.length) return segmentEvents
+    const event = eventFromOrderSchedule(order)
+    return event ? [event] : []
+  }
+
+  function eventFromOrderSchedule(order: HaltHassOrder): ScheduledEvent | null {
+    return eventFromScheduleRange(order, order.scheduledStartAt, order.scheduledEndAt)
+  }
+
   function restoreScheduledEvents(orders: HaltHassOrder[]) {
     const next: Record<string, ScheduledEvent> = {}
     orders.forEach((order) => {
-      const event = eventFromOrderSchedule(order)
-      if (event) next[event.eventId] = event
+      eventsFromOrderSchedule(order).forEach((event) => {
+        next[event.eventId] = event
+      })
     })
     scheduledEvents.value = next
   }
@@ -193,17 +218,9 @@ export function useHaltHassSchedule() {
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     try {
-      if (import.meta.env.DEV) {
-        workOrders.value = [MOCK_HALT_HASS_ORDER]
-        restoreScheduledEvents(workOrders.value)
-        selectedScheduledOrder.value = selectedScheduledOrder.value && scheduledEvents.value[selectedScheduledOrder.value]
-          ? selectedScheduledOrder.value
-          : null
-        return
-      }
-
       const byId = new Map<number, HaltHassOrder>()
       const pageSize = 100
+      let requestFailed = false
 
       for (const status of visibleOrderStatuses) {
         let page = 1
@@ -212,7 +229,10 @@ export function useHaltHassSchedule() {
 
         while (loaded < total) {
           const resp = await listHaltHassOrders({ page, pageSize, status })
-          if (!resp.success || !resp.data || resp.data.code !== 0) break
+          if (!resp.success || !resp.data || resp.data.code !== 0) {
+            requestFailed = true
+            break
+          }
 
           const list = resp.data.data.list
           list.map(mapHaltHassOrder).forEach((order) => byId.set(order.id, order))
@@ -223,10 +243,13 @@ export function useHaltHassSchedule() {
           page += 1
           if (page > 50) break
         }
+
+        if (requestFailed) break
       }
 
       const nextOrders = Array.from(byId.values())
-      if (!nextOrders.length && !byId.has(MOCK_HALT_HASS_ORDER.id)) {
+      const shouldUseFallbackMock = requestFailed && !nextOrders.length && !byId.has(MOCK_HALT_HASS_ORDER.id)
+      if (shouldUseFallbackMock) {
         nextOrders.push(MOCK_HALT_HASS_ORDER)
       }
       workOrders.value = nextOrders
@@ -234,6 +257,11 @@ export function useHaltHassSchedule() {
       selectedScheduledOrder.value = selectedScheduledOrder.value && scheduledEvents.value[selectedScheduledOrder.value]
         ? selectedScheduledOrder.value
         : null
+      if (shouldUseFallbackMock) {
+        ElMessage.warning('未获取到真实 HALT-HASS 工单，已载入演示工单用于流程测试')
+      } else if (requestFailed) {
+        ElMessage.warning('部分 HALT-HASS 工单加载失败，请稍后重新读取本周排程')
+      }
     } catch (error) {
       console.error('[halt-hass schedule] refresh failed:', error)
       workOrders.value = [MOCK_HALT_HASS_ORDER]
@@ -414,11 +442,18 @@ export function useHaltHassSchedule() {
       }
 
       if (resp.data.data) {
-        const updated = mapHaltHassOrder(resp.data.data)
-        workOrders.value = workOrders.value.map((item) => item.id === updated.id ? updated : item)
-        const restored = eventFromOrderSchedule(updated)
-        setOrderEvents(getOrderKey(updated), restored ? [restored] : [])
-        selectedScheduledOrder.value = restored?.eventId || null
+        const scheduleData = resp.data.data as Record<string, unknown>
+        const scheduleSegments = scheduleData.scheduleSegments ?? scheduleData.schedule_segments
+        const updated: HaltHassOrder = {
+          ...order,
+          scheduledStartAt: (scheduleData.scheduledStartAt ?? scheduleData.scheduled_start_at ?? null) as string | null,
+          scheduledEndAt: (scheduleData.scheduledEndAt ?? scheduleData.scheduled_end_at ?? null) as string | null,
+          scheduleSegments: Array.isArray(scheduleSegments) ? scheduleSegments : [],
+        }
+        const restored = eventsFromOrderSchedule(updated)
+        workOrders.value = workOrders.value.map((item) => getOrderKey(item) === orderId ? updated : item)
+        setOrderEvents(orderId, restored)
+        selectedScheduledOrder.value = restored[0]?.eventId || null
       }
       return true
     } finally {

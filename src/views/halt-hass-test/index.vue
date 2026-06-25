@@ -66,6 +66,8 @@ const {
   onFlowchartComplete,
   stopFlowchart,
   saveTemp,
+  restoreTemp,
+  loadFeedback,
   reset: resetTest,
 } = useHaltHassTest()
 
@@ -222,7 +224,7 @@ async function onScanData(data: string) {
   }
 }
 
-function handleStartScheduledTest(order: HaltHassOrder) {
+async function handleStartScheduledTest(order: HaltHassOrder) {
   stopScanning()
   resetTest()
   resetScan()
@@ -235,6 +237,30 @@ function handleStartScheduledTest(order: HaltHassOrder) {
     setScanOrder(hydratedOrder, boards)
     setPhase('scan')
     ElMessage.success('已载入演示工单 HH-DEMO-001，可直接测试全流程')
+    return
+  }
+
+  if (order.status === 7) {
+    setScanOrder(order, order.scannedBoards || [])
+    const restored = await restoreTemp(order)
+    if (restored) {
+      ElMessage.success('已恢复 HALT-HASS 暂存测试')
+    } else {
+      ElMessage.error(errorMessage.value || '恢复暂存测试失败')
+      setPhase('schedule')
+    }
+    return
+  }
+
+  if (order.status === 4) {
+    setScanOrder(order, order.scannedBoards || [])
+    const loaded = await loadFeedback(order)
+    if (loaded) {
+      ElMessage.success('已加载 HALT-HASS 打回反馈')
+    } else {
+      ElMessage.error(errorMessage.value || '加载打回反馈失败')
+      setPhase('schedule')
+    }
     return
   }
 

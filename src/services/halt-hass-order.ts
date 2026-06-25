@@ -8,6 +8,8 @@ import type {
   HaltHassReport,
   HaltHassReportJson,
   HaltHassTempData,
+  OrderBoardSerial,
+  OrderScheduleSegment,
   ScannedBoard,
 } from '@/views/halt-hass-test/types'
 import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
@@ -38,26 +40,104 @@ export type HaltHassOrderWriteResponse = {
   data?: HaltHassOrderDTO
 }
 
+type BackendEnvelope<T> = {
+  code: number
+  msg?: string
+  data?: T
+}
+
 export type HaltHassOrderScheduleBody = {
   scheduled_start_at: string
   scheduled_end_at: string
 }
 
+function unwrapBackendEnvelope<T>(
+  response: ApiResponse<BackendEnvelope<T>>,
+  fallbackError: string
+): ApiResponse<T> {
+  if (!response.success || !response.data) {
+    return {
+      success: false,
+      error: response.error || fallbackError,
+      status: response.status,
+    }
+  }
+
+  if (response.data.code !== 0) {
+    return {
+      success: false,
+      error: response.data.msg || fallbackError,
+      status: response.status,
+    }
+  }
+
+  return {
+    success: true,
+    data: response.data.data as T,
+    status: response.status,
+  }
+}
+
+function apiFailure<T>(response: ApiResponse<unknown>, fallbackError: string): ApiResponse<T> {
+  return {
+    success: false,
+    error: response.error || fallbackError,
+    status: response.status,
+  }
+}
+
+function normalizeProcessJson(value: unknown): HaltHassProcessJson | null {
+  if (!value) return null
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as HaltHassProcessJson
+    } catch {
+      return null
+    }
+  }
+  return value as HaltHassProcessJson
+}
+
+function getSerialText(value: OrderBoardSerial | undefined): string {
+  if (!value) return ''
+  if (typeof value === 'string') return value.trim()
+  return String(value.serial || value.sn || value.serialNumber || value.serial_num || '').trim()
+}
+
+function normalizeScheduleSegments(value: unknown): OrderScheduleSegment[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item) => ({
+      scheduledStartAt: (item.scheduledStartAt ?? item.scheduled_start_at ?? null) as string | null,
+      scheduledEndAt: (item.scheduledEndAt ?? item.scheduled_end_at ?? null) as string | null,
+    }))
+    .filter((item) => Boolean(item.scheduledStartAt && item.scheduledEndAt))
+}
+
 function normalizeScannedBoards(value: unknown): ScannedBoard[] {
   if (!Array.isArray(value)) return []
-  return value.map((item) => ({
-    serial: String(item?.serial || item?.sn || ''),
-    boardModelId: item?.board_model_id ?? item?.boardModelId,
-    boardModelName: item?.board_model_name || item?.boardModelName,
-    scannedAt: item?.scanned_at || item?.scannedAt ? new Date(item.scanned_at || item.scannedAt) : new Date(),
-  }))
+  return value.map((item) => {
+    const boardModel = item?.board_model || item?.boardModel || {}
+    return {
+      serial: String(item?.serial || item?.sn || ''),
+      boardModelId: item?.board_model_id ?? item?.boardModelId ?? boardModel?.id,
+      boardModelName: item?.board_model_name || item?.boardModelName || boardModel?.name,
+      scannedAt: item?.scanned_at || item?.scannedAt ? new Date(item.scanned_at || item.scannedAt) : new Date(),
+    }
+  })
 }
 
 export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
   const boardGroup = dto.board_group || dto.boardGroup || {}
+  const boardsInGroup = dto.boards_in_group || dto.boardsInGroup
   const process = dto.process || dto.process_info || dto.processInfo || {}
   const scannedBoards = normalizeScannedBoards(dto.scanned_boards || dto.scannedBoards)
   const orderNo = String(dto.order_no || dto.orderNo || dto.task_number || dto.taskNumber || dto.id || '')
+  const boardSerials = Array.isArray(dto.board_serials || dto.boardSerials)
+    ? (dto.board_serials || dto.boardSerials) as OrderBoardSerial[]
+    : []
+  const scheduleSegments = normalizeScheduleSegments(dto.schedule_segments || dto.scheduleSegments)
 
   return {
     id: Number(dto.id),
@@ -67,13 +147,18 @@ export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
     boardGroup: {
       id: Number(boardGroup.id ?? dto.board_group_id ?? dto.boardGroupId ?? 0),
       name: String(boardGroup.name || dto.board_group_name || dto.boardGroupName || '-'),
-      boards: Array.isArray(boardGroup.boards) ? boardGroup.boards : [],
+      boards: Array.isArray(boardGroup.boards)
+        ? boardGroup.boards
+        : Array.isArray(boardsInGroup)
+          ? boardsInGroup
+          : [],
     },
     process: {
       id: Number(process.id ?? dto.process_id ?? dto.processId ?? 0),
       name: String(process.name || dto.process_name || dto.processName || '-'),
       version: String(process.version || dto.process_version || dto.processVersion || ''),
     },
+    boardSerials,
     scannedBoards,
     feedbackReason: String(dto.feedback_reason || dto.feedbackReason || ''),
     remark: String(dto.remark || ''),
@@ -82,6 +167,7 @@ export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
     completedAt: dto.completed_at || dto.completedAt,
     scheduledStartAt: dto.scheduled_start_at || dto.scheduledStartAt || null,
     scheduledEndAt: dto.scheduled_end_at || dto.scheduledEndAt || null,
+    scheduleSegments,
   }
 }
 
@@ -94,7 +180,19 @@ export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
 export async function getOrderBySerial(
   serial: string
 ): Promise<ApiResponse<HaltHassOrder[]>> {
-  return http.get<HaltHassOrder[]>('/test/halt-hass/order/by-serial/', {}, { serial })
+  const response = await http.get<BackendEnvelope<HaltHassOrderDTO[]>>(
+    '/test/halt-hass/order/by-serial/',
+    {},
+    { serial }
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '查询工单失败')
+  if (!unwrapped.success) return apiFailure<HaltHassOrder[]>(unwrapped, '查询工单失败')
+
+  return {
+    success: true,
+    data: (unwrapped.data || []).map(mapHaltHassOrder),
+    status: response.status,
+  }
 }
 
 /**
@@ -117,7 +215,17 @@ export async function listHaltHassOrders(
 export async function getOrderDetail(
   orderId: number
 ): Promise<ApiResponse<HaltHassOrder>> {
-  return http.get<HaltHassOrder>(`/test/halt-hass/order/detail/${orderId}/`)
+  const response = await http.get<BackendEnvelope<HaltHassOrderDTO>>(
+    `/test/halt-hass/order/detail/${orderId}/`
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '获取工单详情失败')
+  if (!unwrapped.success) return apiFailure<HaltHassOrder>(unwrapped, '获取工单详情失败')
+
+  return {
+    success: true,
+    data: mapHaltHassOrder(unwrapped.data || {}),
+    status: response.status,
+  }
 }
 
 /**
@@ -131,13 +239,16 @@ export async function startOrder(
     boardSerials: string[]
   }
 ): Promise<ApiResponse<{ success: boolean }>> {
-  return http.post<{ success: boolean }>(
+  const response = await http.post<BackendEnvelope<unknown>>(
     `/test/halt-hass/order/start/${orderId}/`,
     {
-      operator_id: data.operatorId,
-      board_serials: data.boardSerials,
+      operatorId: data.operatorId,
+      boardSerials: data.boardSerials,
     }
   )
+  const unwrapped = unwrapBackendEnvelope(response, '开始测试失败')
+  if (!unwrapped.success) return apiFailure<{ success: boolean }>(unwrapped, '开始测试失败')
+  return { success: true, data: { success: true }, status: response.status }
 }
 
 /**
@@ -175,10 +286,14 @@ export async function uploadTempData(
   orderId: number,
   data: HaltHassTempData
 ): Promise<ApiResponse<{ success: boolean }>> {
-  return http.post<{ success: boolean }>(
+  const tempData = data
+  const response = await http.post<BackendEnvelope<unknown>>(
     `/test/halt-hass/order/temp/upload/${orderId}/`,
-    { data_json: data }
+    { data: tempData }
   )
+  const unwrapped = unwrapBackendEnvelope(response, '暂存数据上传失败')
+  if (!unwrapped.success) return apiFailure<{ success: boolean }>(unwrapped, '暂存数据上传失败')
+  return { success: true, data: { success: true }, status: response.status }
 }
 
 /**
@@ -187,7 +302,10 @@ export async function uploadTempData(
 export async function downloadTempData(
   orderId: number
 ): Promise<ApiResponse<HaltHassTempData>> {
-  return http.get<HaltHassTempData>(`/test/halt-hass/order/temp/download/${orderId}/`)
+  const response = await http.get<BackendEnvelope<HaltHassTempData>>(
+    `/test/halt-hass/order/temp/download/${orderId}/`
+  )
+  return unwrapBackendEnvelope(response, '下载暂存数据失败')
 }
 
 /**
@@ -196,13 +314,14 @@ export async function downloadTempData(
 export async function downloadFeedbackData(
   orderId: number
 ): Promise<ApiResponse<{
-  report: HaltHassReport
+  report: HaltHassReport | null
   comment: string
 }>> {
-  return http.get<{
-    report: HaltHassReport
+  const response = await http.get<BackendEnvelope<{
+    report: HaltHassReport | null
     comment: string
-  }>(`/test/halt-hass/order/feedback/download/${orderId}/`)
+  }>>(`/test/halt-hass/order/feedback/download/${orderId}/`)
+  return unwrapBackendEnvelope(response, '下载反馈数据失败')
 }
 
 /**
@@ -212,7 +331,31 @@ export async function downloadFeedbackData(
 export async function downloadProcessData(
   processId: number
 ): Promise<ApiResponse<HaltHassProcessJson>> {
-  return http.get<HaltHassProcessJson>(`/test/halt-hass/process/${processId}/`)
+  const response = await http.get<BackendEnvelope<Record<string, unknown>>>(
+    `/test/halt-hass/detail/${processId}/`
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '下载工艺数据失败')
+  if (!unwrapped.success) return apiFailure<HaltHassProcessJson>(unwrapped, '下载工艺数据失败')
+
+  const detail = unwrapped.data || {}
+  const processInfo = detail.process as Record<string, unknown> | undefined
+  const processJson = normalizeProcessJson(
+    detail.processJson ?? processInfo?.content ?? detail.content
+  )
+
+  if (!processJson) {
+    return {
+      success: false,
+      error: '工艺数据为空',
+      status: response.status,
+    }
+  }
+
+  return {
+    success: true,
+    data: processJson,
+    status: response.status,
+  }
 }
 
 // ==================== 报告 API ====================
@@ -227,13 +370,14 @@ export async function uploadReport(data: {
   operatorId: number
   remark?: string
 }): Promise<ApiResponse<{ id: number }>> {
-  return http.post<{ id: number }>('/test/halt-hass/report/upload/', {
-    order_id: data.orderId,
-    report_json: data.reportJson,
+  const response = await http.post<BackendEnvelope<{ id: number }>>('/test/halt-hass/report/upload/', {
+    orderId: data.orderId,
+    reportJson: data.reportJson,
     result: data.result,
-    operator_id: data.operatorId,
+    operatorId: data.operatorId,
     remark: data.remark || '',
   })
+  return unwrapBackendEnvelope(response, '报告上传失败')
 }
 
 /**
@@ -257,11 +401,26 @@ export function validateSerialBelongsToGroup(
 ): { valid: boolean; boardModel?: { id: number; name: string } } {
   // 简单验证：检查序列号前缀是否匹配电路板组中的任一型号
   // 实际逻辑可能需要根据具体业务规则调整
+  const serialUpper = serial.trim().toUpperCase()
+  const preset = order.boardSerials || []
+  if (preset.length) {
+    const matched = preset.find((item) => getSerialText(item).toUpperCase() === serialUpper)
+    if (!matched) return { valid: false }
+
+    if (typeof matched === 'object') {
+      const boardModelId = matched.boardModelId ?? matched.board_model_id
+      const board = order.boardGroup.boards.find((item) => item.id === boardModelId)
+      if (board) return { valid: true, boardModel: { id: board.id, name: board.name } }
+    }
+
+    return { valid: true }
+  }
+
   const boards = order.boardGroup.boards
 
   for (const board of boards) {
     // 假设序列号格式为：型号代码-序号，如 "BM001-00123"
-    if (board.code && serial.toUpperCase().startsWith(board.code.toUpperCase())) {
+    if (board.code && serialUpper.startsWith(board.code.toUpperCase())) {
       return { valid: true, boardModel: { id: board.id, name: board.name } }
     }
   }
