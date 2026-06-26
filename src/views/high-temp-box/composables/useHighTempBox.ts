@@ -1,12 +1,20 @@
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import * as echarts from 'echarts'
+import { ElMessage } from 'element-plus'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
 import { useAuth } from '@/composables/useAuth'
 import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestTypeId } from '@/services'
 import type { OcrRegion } from '@/types/ocr'
-import { changeHighTempBoxOrderStatus, listHighTempBoxOrders, mapHighTempBoxOrder, type HighTempBoxOrder } from '@/services/high-temp-box-order-api'
+import {
+  changeHighTempBoxOrderStatus,
+  clearHighTempBoxOrderSchedule,
+  listHighTempBoxOrders,
+  mapHighTempBoxOrder,
+  saveHighTempBoxOrderSchedule,
+  type HighTempBoxOrder,
+} from '@/services/high-temp-box-order-api'
 
 export interface WorkOrder {
   id: string
@@ -483,9 +491,20 @@ export function useHighTempBox() {
     return timeSlots.value[endIdx]?.key || ''
   }
 
-  const getScheduleChangePayload = (eventId: string) => {
-    const ev = scheduledEvents.value[eventId]
-    if (!ev) return null
+  type ScheduleChangePayload = {
+    orderId: string
+    eventId: string
+    dateStr: string
+    startTimeKey: string
+    endTimeKey: string
+    span: number
+    startAtHour: string
+    endAtHour: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+  }
+
+  const getEventSchedulePayload = (ev: ScheduledEvent): ScheduleChangePayload | null => {
     const endTimeKey = getEndTimeKey(ev.startTimeKey, ev.span)
     if (!endTimeKey) return null
     const startHh = timeKeyToHour(ev.startTimeKey)
@@ -500,7 +519,93 @@ export function useHighTempBox() {
       span: ev.span,
       startAtHour: `${ev.dateStr} ${startHh}`,
       endAtHour: `${ev.dateStr} ${endHh}`,
+      scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
+      scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
     }
+  }
+
+  const getScheduleChangePayload = (eventId: string) => {
+    const ev = scheduledEvents.value[eventId]
+    return ev ? getEventSchedulePayload(ev) : null
+  }
+
+  const cloneScheduledEventMap = () => ({ ...scheduledEvents.value })
+
+  const getOrderEvents = (orderId: string) => Object.values(scheduledEvents.value)
+    .filter((event) => event.orderId === orderId)
+    .sort((a, b) => {
+      const startA = `${a.dateStr} ${a.startTimeKey}`
+      const startB = `${b.dateStr} ${b.startTimeKey}`
+      if (startA !== startB) return startA.localeCompare(startB)
+      return a.eventId.localeCompare(b.eventId)
+    })
+
+  const getOrderSchedulePayload = (orderId: string) => {
+    const event = getOrderEvents(orderId)[0]
+    return event ? getEventSchedulePayload(event) : null
+  }
+
+  const rollbackScheduledEvents = (fallback?: Record<string, ScheduledEvent>) => {
+    if (fallback !== undefined) scheduledEvents.value = { ...fallback }
+  }
+
+  const showSchedulePersistError = (resp?: { status?: number; data?: { msg?: string }; error?: string }) => {
+    if (resp?.status === 401) {
+      ElMessage.error('登录状态失效，请重新登录后再保存排期')
+      return
+    }
+    if (resp?.status === 403) {
+      ElMessage.error('当前账号没有高温箱排程权限，请联系管理员开通权限')
+      return
+    }
+    ElMessage.error(resp?.data?.msg || resp?.error || '排期保存失败')
+  }
+
+  async function persistOrderSchedule(orderId: string, fallback?: Record<string, ScheduledEvent>) {
+    const order = getOrderById(orderId)
+    if (!order || order.dbId <= 0) return true
+
+    const schedule = getOrderSchedulePayload(orderId)
+
+    const authOk = await initAuth()
+    if (!authOk) {
+      rollbackScheduledEvents(fallback)
+      ElMessage.error('登录状态失效，请重新登录后再保存排期')
+      return false
+    }
+
+    const resp = schedule
+      ? await saveHighTempBoxOrderSchedule(
+          order.dbId,
+          {
+            scheduled_start_at: schedule.scheduledStartAt,
+            scheduled_end_at: schedule.scheduledEndAt,
+          },
+          getAuthHeaders()
+        )
+      : await clearHighTempBoxOrderSchedule(order.dbId, getAuthHeaders())
+
+    if (!resp.success || !resp.data || resp.data.code !== 0) {
+      rollbackScheduledEvents(fallback)
+      showSchedulePersistError(resp)
+      return false
+    }
+
+    if (schedule) {
+      order.scheduledStartAt = resp.data.data?.scheduled_start_at || schedule.scheduledStartAt
+      order.scheduledEndAt = resp.data.data?.scheduled_end_at || schedule.scheduledEndAt
+    } else {
+      order.scheduledStartAt = null
+      order.scheduledEndAt = null
+    }
+
+    return true
+  }
+
+  async function persistScheduledEvent(eventId: string, fallback?: Record<string, ScheduledEvent>) {
+    const event = scheduledEvents.value[eventId] || fallback?.[eventId]
+    if (!event) return true
+    return persistOrderSchedule(event.orderId, fallback)
   }
 
   const scheduledOrders = computed<Record<string, string[]>>(() => {
@@ -612,12 +717,26 @@ export function useHighTempBox() {
     await refreshWorkOrders()
   }
 
-  function handleUnschedule(cellKey: string, orderId: string, eventId = orderId) {
+  async function handleUnschedule(cellKey: string, orderId: string, eventId = orderId) {
     void cellKey
+    void orderId
+    const removed = scheduledEvents.value[eventId]
+    if (!removed) return
+    const previousEvents = cloneScheduledEventMap()
+    const previousSelected = selectedScheduledOrder.value
     if (selectedScheduledOrder.value === eventId) selectedScheduledOrder.value = null
     const next = { ...scheduledEvents.value }
     delete next[eventId]
     scheduledEvents.value = next
+
+    try {
+      const saved = await persistOrderSchedule(removed.orderId, previousEvents)
+      if (!saved) selectedScheduledOrder.value = previousSelected
+    } catch (error) {
+      rollbackScheduledEvents(previousEvents)
+      selectedScheduledOrder.value = previousSelected
+      ElMessage.error(error instanceof Error ? error.message : '取消排期失败')
+    }
   }
 
   function removeSchedule(cellKey: string) {
@@ -661,7 +780,7 @@ export function useHighTempBox() {
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
   }
 
-  function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean) {
+  async function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     if (!orderId) return
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
@@ -672,24 +791,39 @@ export function useHighTempBox() {
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, (timeSlots.value.length - 1) - startIdx)
     const eventId = `${orderId}-${dateStr}-${timeKey}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    const previousEvents = cloneScheduledEventMap()
+    const previousSelected = selectedScheduledOrder.value
+    const next = { ...scheduledEvents.value }
+    Object.entries(next).forEach(([key, event]) => {
+      if (event.orderId === orderId) delete next[key]
+    })
+    next[eventId] = { eventId, orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) }
     scheduledEvents.value = {
-      ...scheduledEvents.value,
-      [eventId]: { eventId, orderId, dateStr, startTimeKey: timeKey, span: Math.min(span, maxSpan) },
+      ...next,
     }
     selectedScheduledOrder.value = eventId
     if (isDragging.value) {
       isDragging.value = false
       draggedOrderId.value = null
     }
+
+    try {
+      const saved = await persistScheduledEvent(eventId, previousEvents)
+      if (!saved) selectedScheduledOrder.value = previousSelected
+    } catch (error) {
+      rollbackScheduledEvents(previousEvents)
+      selectedScheduledOrder.value = previousSelected
+      ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+    }
   }
 
-  function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
+  async function handleDrop(e: DragEvent, dateStr: string, timeKey: string, isPast: boolean) {
     if (isPast) return
     e.preventDefault()
     ;(e.currentTarget as HTMLElement | null)?.classList.remove('drag-over')
     const orderId = e.dataTransfer?.getData('text/plain')
     if (!orderId) return
-    scheduleOrder(orderId, dateStr, timeKey, isPast)
+    await scheduleOrder(orderId, dateStr, timeKey, isPast)
   }
 
   const getEvent = (eventId: string) => scheduledEvents.value[eventId]
@@ -712,6 +846,7 @@ export function useHighTempBox() {
   const startResize = (eventId: string, e: MouseEvent) => {
     const ev = scheduledEvents.value[eventId]
     if (!ev) return
+    const previousEvents = cloneScheduledEventMap()
     resizing.value = { eventId, startY: e.clientY, originSpan: ev.span, isTop: false }
 
     const onMove = (me: MouseEvent) => {
@@ -726,6 +861,12 @@ export function useHighTempBox() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
+      void persistScheduledEvent(eventId, previousEvents).then((saved) => {
+        if (!saved) rollbackScheduledEvents(previousEvents)
+      }).catch((error) => {
+        rollbackScheduledEvents(previousEvents)
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)
@@ -736,8 +877,9 @@ export function useHighTempBox() {
     const ev = scheduledEvents.value[eventId]
     if (!ev) return
 
-    const safeStartIdx = Math.max(0, Math.min(newStartIdx, timeSlots.value.length - 1))
-    const maxSpan = timeSlots.value.length - safeStartIdx
+    const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
+    const safeStartIdx = Math.max(0, Math.min(newStartIdx, maxStartIdx))
+    const maxSpan = Math.max(1, (timeSlots.value.length - 1) - safeStartIdx)
     const safeSpan = Math.max(1, Math.min(newSpan, maxSpan))
 
     const newTimeKey = timeSlots.value[safeStartIdx]?.key
@@ -756,6 +898,7 @@ export function useHighTempBox() {
     if (!ev) return
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
+    const previousEvents = cloneScheduledEventMap()
 
     resizing.value = { eventId, startY: e.clientY, originSpan: ev.span, isTop: true, originStartIdx: startIdx }
 
@@ -778,6 +921,12 @@ export function useHighTempBox() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
+      void persistScheduledEvent(eventId, previousEvents).then((saved) => {
+        if (!saved) rollbackScheduledEvents(previousEvents)
+      }).catch((error) => {
+        rollbackScheduledEvents(previousEvents)
+        ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
+      })
     }
 
     window.addEventListener('mousemove', onMove)

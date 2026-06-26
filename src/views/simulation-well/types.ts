@@ -9,6 +9,10 @@ export interface DeviceItem {
   code?: string
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
+  scheduleSegments?: Array<{
+    scheduledStartAt: string
+    scheduledEndAt: string
+  }>
 }
 
 export interface WorkOrder {
@@ -53,7 +57,8 @@ export interface DownholeDevice {
 
 export interface ScheduledItem {
   deviceId: string
-  eventId?: string
+  eventId: string
+  scheduleOwnerDeviceId: string
   orderId: string
   deviceName?: string
   deviceNumber?: string

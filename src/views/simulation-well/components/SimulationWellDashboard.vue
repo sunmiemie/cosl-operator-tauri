@@ -16,9 +16,9 @@ const props = defineProps<{
   maxLaneCount: number
   slotHeightPx: number
   isDragging: boolean
-  resizingDeviceId: string | null
+  resizingEventId: string | null
   isResizing: boolean
-  selectedScheduledDeviceIds: string[]
+  selectedScheduledEventIds: string[]
   todayScheduledOrderIds: string[]
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
@@ -37,11 +37,11 @@ const emit = defineEmits<{
   'drag-over': [event: DragEvent, isPast: boolean]
   'drag-leave': []
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
-  unschedule: [cellKey: string, deviceId: string]
-  'unschedule-tentative': [cellKey: string, deviceId: string]
-  'select-scheduled-device': [deviceId: string]
-  'start-resize': [deviceId: string, e: MouseEvent]
-  'start-resize-top': [deviceId: string, e: MouseEvent]
+  unschedule: [cellKey: string, eventId: string]
+  'unschedule-tentative': [cellKey: string, eventId: string]
+  'select-scheduled-event': [eventId: string]
+  'start-resize': [eventId: string, e: MouseEvent]
+  'start-resize-top': [eventId: string, e: MouseEvent]
   'start-scheduled-test': []
   'view-order-detail': [orderId: string]
 }>()
@@ -81,7 +81,7 @@ const layoutWithDayIndex = computed(() => {
 const selectedOrderRows = computed(() => {
   const orderIds = new Set(
     props.scheduledLayoutItems
-      .filter((item) => props.selectedScheduledDeviceIds.includes(item.deviceId))
+      .filter((item) => props.selectedScheduledEventIds.includes(item.eventId))
       .map((item) => item.orderId)
   )
   return Array.from(orderIds)
@@ -116,7 +116,7 @@ const getScheduledStyle = (item: any) => {
     left: `${left}px`,
     width: `${Math.max(20, width)}px`,
     height: `${Math.max(props.slotHeightPx - cellPadding * 2, height)}px`,
-    zIndex: props.selectedScheduledDeviceIds.includes(item.deviceId) ? 12 : 10,
+    zIndex: props.selectedScheduledEventIds.includes(item.eventId) ? 12 : 10,
   }
 }
 
@@ -289,16 +289,16 @@ const handleGridDrop = (e: DragEvent) => {
               <div class="events-overlay">
                 <div
                   v-for="it in layoutWithDayIndex"
-                  :key="it.deviceId"
+                  :key="it.eventId"
                   class="scheduled-item"
                   :class="{
-                    'is-selected': selectedScheduledDeviceIds.includes(it.deviceId),
+                    'is-selected': selectedScheduledEventIds.includes(it.eventId),
                     'is-dragging': isDragging,
-                    'is-resizing': isResizing && resizingDeviceId === it.deviceId,
+                    'is-resizing': isResizing && resizingEventId === it.eventId,
                     'is-tentative': it.isTentative
                   }"
                   :style="getScheduledStyle(it)"
-                  @click="emit('select-scheduled-device', it.deviceId)"
+                  @click="emit('select-scheduled-event', it.eventId)"
                   :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getWorkOrderById(it.orderId)?.planTime || ''} · ${getWorkOrderById(it.orderId)?.taskDesc || ''}`"
                 >
                   <div class="scheduled-content">
@@ -307,7 +307,7 @@ const handleGridDrop = (e: DragEvent) => {
                       v-if="!it.isTentative"
                       class="remove-btn"
                       title="删除排程"
-                      @click.stop="emit('unschedule', it.cellKey, it.deviceId)"
+                      @click.stop="emit('unschedule', it.cellKey, it.eventId)"
                     >
                       <Icon icon="mdi:close" />
                     </button>
@@ -315,7 +315,7 @@ const handleGridDrop = (e: DragEvent) => {
                       v-else
                       class="remove-btn"
                       title="删除待排程"
-                      @click.stop="emit('unschedule-tentative', it.cellKey, it.deviceId)"
+                      @click.stop="emit('unschedule-tentative', it.cellKey, it.eventId)"
                     >
                       <Icon icon="mdi:close" />
                     </button>
@@ -324,8 +324,8 @@ const handleGridDrop = (e: DragEvent) => {
                     <template v-if="it.isTentative">待排程 · </template>{{ getWorkOrderById(it.orderId)?.customer || '-' }} ·
                     {{ getWorkOrderById(it.orderId)?.planTime || '-' }}
                   </div>
-                  <div class="resize-handle-top" @mousedown.stop.prevent="emit('start-resize-top', it.deviceId, $event)"></div>
-                  <div class="resize-handle" @mousedown.stop.prevent="emit('start-resize', it.deviceId, $event)"></div>
+                  <div class="resize-handle-top" @mousedown.stop.prevent="emit('start-resize-top', it.eventId, $event)"></div>
+                  <div class="resize-handle" @mousedown.stop.prevent="emit('start-resize', it.eventId, $event)"></div>
                 </div>
               </div>
 

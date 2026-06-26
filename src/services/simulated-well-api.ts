@@ -6,6 +6,10 @@ export interface SimulatedWellOrderDeviceDTO {
   device_number: string
   scheduled_start_at?: string | null
   scheduled_end_at?: string | null
+  schedule_segments?: Array<{
+    scheduled_start_at?: string | null
+    scheduled_end_at?: string | null
+  }>
 }
 
 export interface SimulatedWellOrderDTO {
@@ -97,6 +101,10 @@ export async function getSimulatedWellOrderDetail(
 export type SimulatedWellDeviceScheduleBody = {
   scheduled_start_at: string
   scheduled_end_at: string
+  schedule_segments?: Array<{
+    scheduled_start_at: string
+    scheduled_end_at: string
+  }>
 }
 
 export type SimulatedWellDeviceScheduleResponse = {

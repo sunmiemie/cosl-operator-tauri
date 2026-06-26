@@ -188,7 +188,7 @@ watch(
 )
 
 watch(
-  () => schedule.selectedStartDeviceIds.value.length,
+  () => schedule.selectedStartEventIds.value.length,
   () => syncViewFromRoute()
 )
 
@@ -543,9 +543,9 @@ async function handleSaveDownhole(payload: any) {
       :max-lane-count="schedule.maxLaneCount.value"
       :slot-height-px="schedule.slotHeightPx"
       :is-dragging="schedule.isDragging.value"
-      :resizing-device-id="schedule.resizingDeviceId.value"
+      :resizing-event-id="schedule.resizingEventId.value"
       :is-resizing="schedule.isResizing.value"
-      :selected-scheduled-device-ids="schedule.selectedScheduledDeviceIds.value"
+      :selected-scheduled-event-ids="schedule.selectedScheduledEventIds.value"
       :today-scheduled-order-ids="schedule.todayScheduledOrderIds.value"
       :fmt-date="schedule.fmtDate"
       :get-cell-key="schedule.getCellKey"
@@ -563,7 +563,7 @@ async function handleSaveDownhole(payload: any) {
       @drop="schedule.handleDrop"
       @unschedule="schedule.handleUnschedule"
       @unschedule-tentative="schedule.handleUnscheduleTentative"
-      @select-scheduled-device="schedule.handleSelectScheduledDevice"
+      @select-scheduled-event="schedule.handleSelectScheduledEvent"
       @start-resize="schedule.startResize"
       @start-resize-top="schedule.startResizeTop"
       @start-scheduled-test="handleStartScheduledTest"

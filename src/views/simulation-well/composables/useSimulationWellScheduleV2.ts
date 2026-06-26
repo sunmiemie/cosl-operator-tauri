@@ -5,6 +5,8 @@ import {
   clearSimulatedWellDeviceSchedule,
   getSimulatedWellOrderDetail,
   listSimulatedWellOrders,
+  saveSimulatedWellDeviceSchedule,
+  type SimulatedWellOrderDeviceDTO,
   type SimulatedWellOrderDTO,
 } from '@/services/simulated-well-api'
 import { listSimulatedWellDownholeWorks } from '@/services/simulated-well-downhole-api'
@@ -40,6 +42,21 @@ function toYmd(val?: string | null) {
 
 function normalizeText(val?: string | null) {
   return (val || '').trim()
+}
+
+function normalizeScheduleSegments(
+  segments?: Array<{ scheduled_start_at?: string | null; scheduled_end_at?: string | null }> | null
+) {
+  return Array.isArray(segments)
+    ? segments
+        .map((segment) => {
+          const scheduledStartAt = normalizeText(segment?.scheduled_start_at)
+          const scheduledEndAt = normalizeText(segment?.scheduled_end_at)
+          if (!scheduledStartAt || !scheduledEndAt) return null
+          return { scheduledStartAt, scheduledEndAt }
+        })
+        .filter(Boolean) as Array<{ scheduledStartAt: string; scheduledEndAt: string }>
+    : []
 }
 
 export function useSimulationWellSchedule() {
@@ -92,6 +109,11 @@ export function useSimulationWellSchedule() {
     return set
   }
 
+  const hasDeviceSchedule = (device: SimulatedWellOrderDeviceDTO) => {
+    if (normalizeScheduleSegments(device.schedule_segments).length > 0) return true
+    return !!(normalizeText(device.scheduled_start_at) && normalizeText(device.scheduled_end_at))
+  }
+
   const refreshWorkOrders = async () => {
     await initAuth()
     const headers = getAuthHeaders()
@@ -126,7 +148,7 @@ export function useSimulationWellSchedule() {
         const orderId = dto.task_number
         const devices = dto.devices || []
         const remainingDevices = devices.filter(
-          (d) => !savedDownholeDeviceIds.has(`${orderId}::${normalizeText(d.device_number)}`)
+          (d) => hasDeviceSchedule(d) || !savedDownholeDeviceIds.has(`${orderId}::${normalizeText(d.device_number)}`)
         )
         return {
           id: orderId,
@@ -148,7 +170,8 @@ export function useSimulationWellSchedule() {
             code: normalizeText(d.device_number) || '',
             template: normalizeText(d.device_number) || '',
             scheduledStartAt: d.scheduled_start_at || null,
-            scheduledEndAt: d.scheduled_end_at || null
+            scheduledEndAt: d.scheduled_end_at || null,
+            scheduleSegments: normalizeScheduleSegments(d.schedule_segments)
           })),
           supportingTools: []
         }
@@ -168,6 +191,7 @@ export function useSimulationWellSchedule() {
   type ScheduledEvent = {
     eventId: string
     orderId: string
+    scheduleOwnerDeviceId: string
     deviceName: string
     deviceNumber: string
     dateStr: string
@@ -177,23 +201,23 @@ export function useSimulationWellSchedule() {
 
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
   const scheduledEventsTentative = ref<Record<string, ScheduledEvent>>({})
-  const pendingScheduleEvents = ref<Record<string, ScheduledEvent | null>>({})
-  const selectedScheduledDeviceIds = ref<string[]>([])
+  const pendingScheduleEvents = ref<Record<string, ScheduledEvent[] | null>>({})
+  const selectedScheduledEventIds = ref<string[]>([])
 
-  function makeScheduleEventId(orderId: string) {
-    return `${orderId}::evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  function makeScheduleEventId(orderId: string, scheduleOwnerDeviceId: string) {
+    return `${orderId}::${scheduleOwnerDeviceId}::evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   }
 
-  function markPendingSchedule(deviceId: string, event: ScheduledEvent | null) {
+  function markPendingSchedule(scheduleOwnerDeviceId: string, events: ScheduledEvent[] | null) {
     pendingScheduleEvents.value = {
       ...pendingScheduleEvents.value,
-      [deviceId]: event ? { ...event } : null,
+      [scheduleOwnerDeviceId]: events ? events.map((event) => ({ ...event })) : null,
     }
   }
 
-  function clearPendingSchedule(deviceId: string) {
+  function clearPendingSchedule(scheduleOwnerDeviceId: string) {
     const next = { ...pendingScheduleEvents.value }
-    delete next[deviceId]
+    delete next[scheduleOwnerDeviceId]
     pendingScheduleEvents.value = next
   }
 
@@ -204,37 +228,59 @@ export function useSimulationWellSchedule() {
     return Number.isNaN(parsed.getTime()) ? null : parsed
   }
 
-  function eventFromDevice(order: WorkOrder, device: WorkOrder['deviceList'][number]): ScheduledEvent | null {
-    const start = parseBackendDateTime(device.scheduledStartAt)
-    const end = parseBackendDateTime(device.scheduledEndAt)
-    if (!start || !end || end <= start) return null
-    const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
-    if (timeKeyToIndex.value[startTimeKey] === undefined) return null
-    const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+  function createSavedScheduleEventId(orderId: string, scheduleOwnerDeviceId: string, dateStr: string, startTimeKey: string, span: number, index: number) {
+    return `${orderId}::saved-${scheduleOwnerDeviceId}-${dateStr}-${startTimeKey}-${span}-${index}`
+  }
+
+  function eventsFromDevice(order: WorkOrder, device: WorkOrder['deviceList'][number]): ScheduledEvent[] {
     const deviceNumber = normalizeText(device.code || device.sn)
-    const eventId = `${order.id}::saved-${device.id}`
-    return {
-      eventId,
-      orderId: order.id,
-      deviceName: device.name,
-      deviceNumber,
-      dateStr: fmtDate(start),
-      startTimeKey,
-      span,
-    }
+    const segments = device.scheduleSegments?.length
+      ? device.scheduleSegments
+      : device.scheduledStartAt && device.scheduledEndAt
+        ? [{ scheduledStartAt: device.scheduledStartAt, scheduledEndAt: device.scheduledEndAt }]
+        : []
+
+    return segments
+      .map((segment, index) => {
+        const start = parseBackendDateTime(segment.scheduledStartAt)
+        const end = parseBackendDateTime(segment.scheduledEndAt)
+        if (!start || !end || end <= start) return null
+        const startTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+        if (timeKeyToIndex.value[startTimeKey] === undefined) return null
+        const span = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (60 * 60 * 1000)))
+        const dateStr = fmtDate(start)
+        return {
+          eventId: createSavedScheduleEventId(order.id, device.id, dateStr, startTimeKey, span, index),
+          orderId: order.id,
+          scheduleOwnerDeviceId: device.id,
+          deviceName: device.name,
+          deviceNumber,
+          dateStr,
+          startTimeKey,
+          span,
+        }
+      })
+      .filter(Boolean) as ScheduledEvent[]
   }
 
   function restoreScheduledEvents(orders: WorkOrder[]) {
     const next: Record<string, ScheduledEvent> = {}
     orders.forEach((order) => {
       order.deviceList.forEach((device) => {
-        const ev = eventFromDevice(order, device)
-        if (ev) next[ev.eventId] = ev
+        eventsFromDevice(order, device).forEach((event) => {
+          next[event.eventId] = event
+        })
       })
     })
-    Object.entries(pendingScheduleEvents.value).forEach(([eventId, event]) => {
-      if (event) next[eventId] = event
-      else delete next[eventId]
+    Object.entries(pendingScheduleEvents.value).forEach(([scheduleOwnerDeviceId, events]) => {
+      Object.keys(next).forEach((eventId) => {
+        if (next[eventId]?.scheduleOwnerDeviceId === scheduleOwnerDeviceId) delete next[eventId]
+      })
+      if (events?.length) {
+        events.forEach((event) => {
+          next[event.eventId] = { ...event }
+        })
+      }
     })
     scheduledEvents.value = next
   }
@@ -312,6 +358,7 @@ export function useSimulationWellSchedule() {
   type ScheduledLayoutItem = {
     deviceId: string
     eventId: string
+    scheduleOwnerDeviceId: string
     orderId: string
     deviceName: string
     deviceNumber: string
@@ -375,8 +422,9 @@ export function useSimulationWellSchedule() {
           laneCount = Math.max(laneCount, counts[i] || 0)
         }
         out.push({
-          deviceId: x.ev.eventId,
+          deviceId: x.ev.scheduleOwnerDeviceId,
           eventId: x.ev.eventId,
+          scheduleOwnerDeviceId: x.ev.scheduleOwnerDeviceId,
           orderId: x.ev.orderId,
           deviceName: x.ev.deviceName,
           deviceNumber: x.ev.deviceNumber,
@@ -404,7 +452,7 @@ export function useSimulationWellSchedule() {
   const todayScheduledDeviceIds = computed(() => {
     const ids = new Set<string>()
     Object.values(scheduledEvents.value).forEach((ev) => {
-      if (ev.dateStr === todayDateStr.value) ids.add(ev.eventId)
+      if (ev.dateStr === todayDateStr.value) ids.add(ev.scheduleOwnerDeviceId)
     })
     return Array.from(ids)
   })
@@ -437,14 +485,16 @@ export function useSimulationWellSchedule() {
     return Array.from(list.values())
   })
 
-  const selectedStartDeviceIds = computed(() => {
-    return selectedScheduledDeviceIds.value.filter((id) => !!scheduledEvents.value[id] || !!scheduledEventsTentative.value[id])
+  const getScheduledEvent = (eventId: string) => scheduledEvents.value[eventId] || scheduledEventsTentative.value[eventId] || null
+
+  const selectedStartEventIds = computed(() => {
+    return selectedScheduledEventIds.value.filter((eventId) => !!getScheduledEvent(eventId))
   })
 
   const selectedStartDevices = computed<DownholeDevice[]>(() => {
     const list = new Map<string, DownholeDevice>()
-    selectedStartDeviceIds.value.forEach((eventId) => {
-      const ev = scheduledEvents.value[eventId] || scheduledEventsTentative.value[eventId]
+    selectedStartEventIds.value.forEach((eventId) => {
+      const ev = getScheduledEvent(eventId)
       const order = ev ? getWorkOrderById(ev.orderId) : null
       if (!order) return
       ;(order.deviceList || []).forEach((device) => {
@@ -470,19 +520,18 @@ export function useSimulationWellSchedule() {
 
   const selectedStartOrders = computed<WorkOrder[]>(() => {
     const selectedOrderIds = new Set(
-      selectedStartDeviceIds.value
-        .map((eventId) => scheduledEvents.value[eventId] || scheduledEventsTentative.value[eventId])
+      selectedStartEventIds.value
+        .map((eventId) => getScheduledEvent(eventId))
         .filter(Boolean)
         .map((event) => event!.orderId)
     )
     return workOrders.value
       .map((order) => {
         if (!selectedOrderIds.has(order.id)) return null
-        const deviceList = order.deviceList
         return {
           ...order,
-          devices: deviceList.length,
-          deviceList,
+          devices: order.deviceList.length,
+          deviceList: order.deviceList,
         }
       })
       .filter((order): order is WorkOrder => !!order && order.deviceList.length > 0)
@@ -503,54 +552,190 @@ export function useSimulationWellSchedule() {
 
   const getDeviceRow = (deviceId: string) => deviceIndex.value.get(deviceId) || null
 
-  async function persistScheduledEvent(deviceId: string, fallback?: ScheduledEvent) {
-    // 模拟井现在允许同一工单存在多个排程块，旧的单设备排程接口无法表达多块排程。
-    void deviceId
-    void fallback
-    return true
+  const timeKeyToHour = (timeKey: string) => {
+    const hh = timeKey.slice(0, 2)
+    if (!/^\d{2}$/.test(hh)) return ''
+    return hh
   }
-  /*
-    const row = getDeviceRow(deviceId)
-    const schedule = getScheduleChangePayload(deviceId)
-    if (!row?.device?.dbId || !schedule) return true
 
-    markPendingSchedule(deviceId, scheduledEvents.value[deviceId] || null)
-    try {
-      const authOk = await initAuth()
-      if (!authOk) {
-        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: fallback }
-        ElMessage.error('登录状态失效，请重新登录后再保存排期')
-        return false
-      }
-      const resp = await saveSimulatedWellDeviceSchedule(
-        row.device.dbId,
-        {
-          scheduled_start_at: schedule.scheduledStartAt,
-          scheduled_end_at: schedule.scheduledEndAt,
-        },
-        getAuthHeaders()
-      )
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
-        if (fallback) scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: fallback }
-        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
-        return false
-      }
-      row.device.scheduledStartAt = resp.data.data?.scheduled_start_at || schedule.scheduledStartAt
-      row.device.scheduledEndAt = resp.data.data?.scheduled_end_at || schedule.scheduledEndAt
-      const savedEvent = eventFromDevice(row.order, row.device)
-      if (savedEvent) scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: savedEvent }
-      return true
-    } finally {
-      clearPendingSchedule(deviceId)
+  const getEndTimeKey = (startTimeKey: string, span: number) => {
+    const startIdx = timeKeyToIndex.value[startTimeKey]
+    if (startIdx === undefined) return ''
+    const endIdx = startIdx + Math.max(1, span)
+    const endSlot = timeSlots.value[endIdx]
+    if (endSlot) return endSlot.key
+    const startHour = Number(startTimeKey.slice(0, 2))
+    if (!Number.isFinite(startHour)) return ''
+    return `${String(startHour + Math.max(1, span)).padStart(2, '0')}00`
+  }
+
+  function getOwnerEvents(scheduleOwnerDeviceId: string) {
+    return Object.values(scheduledEvents.value)
+      .filter((event) => event.scheduleOwnerDeviceId === scheduleOwnerDeviceId)
+      .sort((a, b) => {
+        if (a.dateStr !== b.dateStr) return a.dateStr.localeCompare(b.dateStr)
+        if (a.startTimeKey !== b.startTimeKey) return a.startTimeKey.localeCompare(b.startTimeKey)
+        return a.eventId.localeCompare(b.eventId)
+      })
+      .map((event) => ({ ...event }))
+  }
+
+  function setOwnerEvents(scheduleOwnerDeviceId: string, events: ScheduledEvent[]) {
+    const next = { ...scheduledEvents.value }
+    Object.keys(next).forEach((eventId) => {
+      if (next[eventId]?.scheduleOwnerDeviceId === scheduleOwnerDeviceId) delete next[eventId]
+    })
+    events.forEach((event) => {
+      next[event.eventId] = { ...event, scheduleOwnerDeviceId }
+    })
+    scheduledEvents.value = next
+  }
+
+  type ScheduleChangeSegment = ScheduledEvent & {
+    endTimeKey: string
+    scheduledStartAt: string
+    scheduledEndAt: string
+  }
+
+  function getScheduleChangePayload(scheduleOwnerDeviceId: string) {
+    const segments = getOwnerEvents(scheduleOwnerDeviceId)
+      .map((event) => {
+        const endTimeKey = getEndTimeKey(event.startTimeKey, event.span)
+        const startHh = timeKeyToHour(event.startTimeKey)
+        const endHh = timeKeyToHour(endTimeKey)
+        if (!endTimeKey || !startHh || !endHh) return null
+        return {
+          ...event,
+          endTimeKey,
+          scheduledStartAt: `${event.dateStr} ${startHh}:00:00`,
+          scheduledEndAt: `${event.dateStr} ${endHh}:00:00`,
+        }
+      })
+      .filter((segment): segment is ScheduleChangeSegment => !!segment)
+      .sort((a, b) => {
+        if (a.scheduledStartAt !== b.scheduledStartAt) return a.scheduledStartAt.localeCompare(b.scheduledStartAt)
+        return a.scheduledEndAt.localeCompare(b.scheduledEndAt)
+      })
+
+    if (!segments.length) return null
+    const first = segments[0]
+    const last = segments.reduce((latest, segment) =>
+      segment.scheduledEndAt > latest.scheduledEndAt ? segment : latest
+    , segments[0])
+
+    return {
+      scheduleOwnerDeviceId,
+      orderId: first.orderId,
+      scheduledStartAt: first.scheduledStartAt,
+      scheduledEndAt: last.scheduledEndAt,
+      scheduleSegments: segments.map((segment) => ({
+        scheduled_start_at: segment.scheduledStartAt,
+        scheduled_end_at: segment.scheduledEndAt,
+      })),
+      segments,
     }
   }
 
-  */
+  function applySavedDeviceSchedule(
+    scheduleOwnerDeviceId: string,
+    schedule: ReturnType<typeof getScheduleChangePayload> | null,
+    data?: {
+      scheduled_start_at?: string | null
+      scheduled_end_at?: string | null
+      schedule_segments?: Array<{ scheduled_start_at?: string | null; scheduled_end_at?: string | null }>
+    }
+  ) {
+    const row = getDeviceRow(scheduleOwnerDeviceId)
+    if (!row) return
+    row.device.scheduledStartAt = data?.scheduled_start_at || schedule?.scheduledStartAt || null
+    row.device.scheduledEndAt = data?.scheduled_end_at || schedule?.scheduledEndAt || null
+    const responseSegments = normalizeScheduleSegments(data?.schedule_segments)
+    const payloadSegments = schedule?.scheduleSegments.map((segment) => ({
+      scheduledStartAt: segment.scheduled_start_at,
+      scheduledEndAt: segment.scheduled_end_at,
+    })) || []
+    row.device.scheduleSegments = responseSegments.length ? responseSegments : payloadSegments
+    const selectedThisOwner = selectedScheduledEventIds.value.some(
+      (eventId) => scheduledEvents.value[eventId]?.scheduleOwnerDeviceId === scheduleOwnerDeviceId
+    )
+    const savedEvents = eventsFromDevice(row.order, row.device)
+    setOwnerEvents(scheduleOwnerDeviceId, savedEvents)
+    if (selectedThisOwner) {
+      const savedIds = new Set(savedEvents.map((event) => event.eventId))
+      selectedScheduledEventIds.value = [
+        ...selectedScheduledEventIds.value.filter((eventId) => {
+          const event = scheduledEvents.value[eventId]
+          return event && event.scheduleOwnerDeviceId !== scheduleOwnerDeviceId
+        }),
+        ...savedEvents.filter((event) => savedIds.has(event.eventId)).map((event) => event.eventId),
+      ]
+    }
+  }
+
+  async function persistOwnerSchedule(scheduleOwnerDeviceId: string, fallback?: ScheduledEvent[]) {
+    const row = getDeviceRow(scheduleOwnerDeviceId)
+    const schedule = getScheduleChangePayload(scheduleOwnerDeviceId)
+    if (!row?.device?.dbId) return true
+
+    markPendingSchedule(scheduleOwnerDeviceId, getOwnerEvents(scheduleOwnerDeviceId))
+    try {
+      const authOk = await initAuth()
+      if (!authOk) {
+        if (fallback !== undefined) setOwnerEvents(scheduleOwnerDeviceId, fallback)
+        ElMessage.error('登录状态失效，请重新登录后再保存排期')
+        return false
+      }
+
+      const resp = schedule
+        ? await saveSimulatedWellDeviceSchedule(
+            row.device.dbId,
+            {
+              scheduled_start_at: schedule.scheduledStartAt,
+              scheduled_end_at: schedule.scheduledEndAt,
+              schedule_segments: schedule.scheduleSegments,
+            },
+            getAuthHeaders()
+          )
+        : await clearSimulatedWellDeviceSchedule(row.device.dbId, getAuthHeaders())
+
+      if (!resp.success || !resp.data || resp.data.code !== 0) {
+        if (fallback !== undefined) setOwnerEvents(scheduleOwnerDeviceId, fallback)
+        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        return false
+      }
+
+      if (schedule) {
+        applySavedDeviceSchedule(scheduleOwnerDeviceId, schedule, resp.data.data)
+      } else {
+        row.device.scheduledStartAt = null
+        row.device.scheduledEndAt = null
+        row.device.scheduleSegments = []
+        setOwnerEvents(scheduleOwnerDeviceId, [])
+      }
+      return true
+    } finally {
+      clearPendingSchedule(scheduleOwnerDeviceId)
+    }
+  }
+
+  async function persistScheduledEvent(eventId: string, fallback?: ScheduledEvent[]) {
+    const event = getScheduledEvent(eventId) || fallback?.[0]
+    if (!event) return true
+    return persistOwnerSchedule(event.scheduleOwnerDeviceId, fallback)
+  }
+
+  const scheduledOrderIds = computed(() => {
+    const ids = new Set<string>()
+    Object.values(scheduledEvents.value).forEach((event) => ids.add(event.orderId))
+    Object.values(scheduledEventsTentative.value).forEach((event) => ids.add(event.orderId))
+    return ids
+  })
 
   const unscheduledOrders = computed(() => {
     const kw = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) => {
+      if (scheduledOrderIds.value.has(order.id)) return false
       if (!kw) return true
       const deviceHay = order.deviceList.map((d) => `${d.name} ${d.code || ''} ${d.sn || ''}`).join(' ')
       const hay = `${order.id} ${order.customer} ${order.planTime} ${order.taskDesc} ${deviceHay}`.toLowerCase()
@@ -560,8 +745,8 @@ export function useSimulationWellSchedule() {
 
   const unscheduledDevices = computed<UnscheduledDeviceRow[]>(() => {
     const scheduledDeviceIds = new Set<string>([
-      ...Object.keys(scheduledEvents.value),
-      ...Object.keys(scheduledEventsTentative.value)
+      ...Object.values(scheduledEvents.value).map((event) => event.scheduleOwnerDeviceId),
+      ...Object.values(scheduledEventsTentative.value).map((event) => event.scheduleOwnerDeviceId)
     ])
     const kw = searchKeyword.value.trim().toLowerCase()
     const out: UnscheduledDeviceRow[] = []
@@ -629,6 +814,10 @@ export function useSimulationWellSchedule() {
 
   function handleDragLeave() {}
 
+  function getScheduleOwnerDevice(order: WorkOrder) {
+    return order.deviceList.find((device) => typeof device.dbId === 'number') || order.deviceList[0] || null
+  }
+
   async function scheduleDevice(
     orderId: string,
     dateStr: string,
@@ -643,17 +832,20 @@ export function useSimulationWellSchedule() {
 
     const order = getWorkOrderById(orderId)
     if (!order || !order.deviceList.length) return
+    const ownerDevice = getScheduleOwnerDevice(order)
+    if (!ownerDevice) return
 
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, timeSlots.value.length - 1 - startIdx)
-    const previousEvents = { ...scheduledEvents.value }
-    const previousSelected = [...selectedScheduledDeviceIds.value]
-    const eventId = makeScheduleEventId(order.id)
+    const previousOwnerEvents = getOwnerEvents(ownerDevice.id)
+    const previousSelected = [...selectedScheduledEventIds.value]
+    const eventId = makeScheduleEventId(order.id, ownerDevice.id)
     const nextEvent: ScheduledEvent = {
       eventId,
       orderId: order.id,
-      deviceName: normalizeText(meta?.label) || order.deviceList[0]?.name || order.id,
-      deviceNumber: order.deviceList[0]?.code || order.deviceList[0]?.sn || '',
+      scheduleOwnerDeviceId: ownerDevice.id,
+      deviceName: normalizeText(meta?.label) || ownerDevice.name || order.id,
+      deviceNumber: ownerDevice.code || ownerDevice.sn || '',
       dateStr,
       startTimeKey: timeKey,
       span: Math.min(1, maxSpan)
@@ -663,7 +855,7 @@ export function useSimulationWellSchedule() {
       scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [eventId]: nextEvent }
     } else {
       scheduledEvents.value = { ...scheduledEvents.value, [eventId]: nextEvent }
-      selectedScheduledDeviceIds.value = [eventId]
+      selectedScheduledEventIds.value = [eventId]
     }
 
     if (isDragging.value) {
@@ -672,14 +864,14 @@ export function useSimulationWellSchedule() {
     }
     if (!isTentative) {
       try {
-        const saved = await persistScheduledEvent(eventId)
+        const saved = await persistScheduledEvent(eventId, previousOwnerEvents)
         if (!saved) {
-          scheduledEvents.value = previousEvents
-          selectedScheduledDeviceIds.value = previousSelected
+          setOwnerEvents(ownerDevice.id, previousOwnerEvents)
+          selectedScheduledEventIds.value = previousSelected
         }
       } catch (error) {
-        scheduledEvents.value = previousEvents
-        selectedScheduledDeviceIds.value = previousSelected
+        setOwnerEvents(ownerDevice.id, previousOwnerEvents)
+        selectedScheduledEventIds.value = previousSelected
         ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
       }
     }
@@ -705,58 +897,45 @@ export function useSimulationWellSchedule() {
     await scheduleDevice(orderId, dateStr, timeKey, isPast, isTentative, meta)
   }
 
-  async function handleUnschedule(cellKey: string, deviceId: string) {
+  async function handleUnschedule(cellKey: string, eventId: string) {
     void cellKey
-    const removed = scheduledEvents.value[deviceId]
-    const previousSelected = [...selectedScheduledDeviceIds.value]
+    const removed = scheduledEvents.value[eventId]
+    if (!removed) return
+    const previousOwnerEvents = getOwnerEvents(removed.scheduleOwnerDeviceId)
+    const previousSelected = [...selectedScheduledEventIds.value]
     const next = { ...scheduledEvents.value }
-    delete next[deviceId]
+    delete next[eventId]
     scheduledEvents.value = next
-    selectedScheduledDeviceIds.value = selectedScheduledDeviceIds.value.filter((x) => x !== deviceId)
-    const row = getDeviceRow(deviceId)
-    if (!row?.device?.dbId) return
-    markPendingSchedule(deviceId, null)
+    selectedScheduledEventIds.value = selectedScheduledEventIds.value.filter((x) => x !== eventId)
 
     const rollback = () => {
-      if (removed) scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: removed }
-      selectedScheduledDeviceIds.value = previousSelected
+      setOwnerEvents(removed.scheduleOwnerDeviceId, previousOwnerEvents)
+      selectedScheduledEventIds.value = previousSelected
     }
 
     try {
-      const authOk = await initAuth()
-      if (!authOk) {
+      const saved = await persistOwnerSchedule(removed.scheduleOwnerDeviceId, previousOwnerEvents)
+      if (!saved) {
         rollback()
-        ElMessage.error('登录状态失效，请重新登录后再取消排期')
-        return
       }
-      const resp = await clearSimulatedWellDeviceSchedule(row.device.dbId, getAuthHeaders())
-      if (!resp.success || !resp.data || resp.data.code !== 0) {
-        rollback()
-        ElMessage.error(resp.data?.msg || resp.error || '取消排期失败')
-        return
-      }
-      row.device.scheduledStartAt = null
-      row.device.scheduledEndAt = null
     } catch (error) {
       rollback()
       ElMessage.error(error instanceof Error ? error.message : '取消排期失败')
-    } finally {
-      clearPendingSchedule(deviceId)
     }
   }
 
-  function handleUnscheduleTentative(cellKey: string, deviceId: string) {
+  function handleUnscheduleTentative(cellKey: string, eventId: string) {
     void cellKey
     const next = { ...scheduledEventsTentative.value }
-    delete next[deviceId]
+    delete next[eventId]
     scheduledEventsTentative.value = next
   }
 
-  function handleSelectScheduledDevice(deviceId: string) {
-    const set = new Set(selectedScheduledDeviceIds.value)
-    if (set.has(deviceId)) set.delete(deviceId)
-    else set.add(deviceId)
-    selectedScheduledDeviceIds.value = Array.from(set)
+  function handleSelectScheduledEvent(eventId: string) {
+    const set = new Set(selectedScheduledEventIds.value)
+    if (set.has(eventId)) set.delete(eventId)
+    else set.add(eventId)
+    selectedScheduledEventIds.value = Array.from(set)
   }
 
   function consumeDevices(deviceIds: string[]) {
@@ -789,22 +968,22 @@ export function useSimulationWellSchedule() {
     })
     scheduledEvents.value = nextScheduled
     scheduledEventsTentative.value = nextTentative
-    selectedScheduledDeviceIds.value = selectedScheduledDeviceIds.value.filter((eventId) => {
+    selectedScheduledEventIds.value = selectedScheduledEventIds.value.filter((eventId) => {
       const event = nextScheduled[eventId] || nextTentative[eventId]
       return event && !affectedOrderIds.has(event.orderId)
     })
   }
 
-  const getEvent = (deviceId: string) => {
-    const normal = scheduledEvents.value[deviceId]
+  const getEvent = (eventId: string) => {
+    const normal = scheduledEvents.value[eventId]
     if (normal) return { ...normal, isTentative: false }
-    const tentative = scheduledEventsTentative.value[deviceId]
+    const tentative = scheduledEventsTentative.value[eventId]
     if (tentative) return { ...tentative, isTentative: true }
     return null
   }
 
-  const setEventSpan = (deviceId: string, span: number) => {
-    const ev = getEvent(deviceId)
+  const setEventSpan = (eventId: string, span: number) => {
+    const ev = getEvent(eventId)
     if (!ev) return
     const startIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (startIdx === undefined) return
@@ -812,30 +991,31 @@ export function useSimulationWellSchedule() {
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     if (nextSpan === ev.span) return
     const next: ScheduledEvent = {
-      eventId: deviceId,
+      eventId,
       orderId: ev.orderId,
+      scheduleOwnerDeviceId: ev.scheduleOwnerDeviceId,
       deviceName: ev.deviceName,
       deviceNumber: ev.deviceNumber,
       dateStr: ev.dateStr,
       startTimeKey: ev.startTimeKey,
       span: nextSpan
     }
-    if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [deviceId]: next }
-    else scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: next }
+    if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [eventId]: next }
+    else scheduledEvents.value = { ...scheduledEvents.value, [eventId]: next }
   }
 
   const resizing = ref<{
-    deviceId: string
+    eventId: string
     startY: number
     originSpan: number
     originStartIdx: number
     mode: 'bottom' | 'top'
   } | null>(null)
-  const resizingDeviceId = computed(() => resizing.value?.deviceId || null)
+  const resizingEventId = computed(() => resizing.value?.eventId || null)
   const isResizing = computed(() => !!resizing.value)
 
-  const setEventStartAndSpan = (deviceId: string, startIdx: number, span: number) => {
-    const ev = getEvent(deviceId)
+  const setEventStartAndSpan = (eventId: string, startIdx: number, span: number) => {
+    const ev = getEvent(eventId)
     if (!ev) return
     const maxStartIdx = Math.max(0, timeSlots.value.length - 2)
     const nextStartIdx = Math.max(0, Math.min(maxStartIdx, startIdx))
@@ -844,33 +1024,26 @@ export function useSimulationWellSchedule() {
     const maxSpan = Math.max(1, timeSlots.value.length - 1 - nextStartIdx)
     const nextSpan = Math.min(maxSpan, Math.max(1, span))
     const next = {
-      eventId: deviceId,
+      eventId,
       orderId: ev.orderId,
+      scheduleOwnerDeviceId: ev.scheduleOwnerDeviceId,
       deviceName: ev.deviceName,
       deviceNumber: ev.deviceNumber,
       dateStr: ev.dateStr,
       startTimeKey: nextStartKey,
       span: nextSpan
     }
-    if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [deviceId]: next }
-    else scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: next }
+    if (ev.isTentative) scheduledEventsTentative.value = { ...scheduledEventsTentative.value, [eventId]: next }
+    else scheduledEvents.value = { ...scheduledEvents.value, [eventId]: next }
   }
 
-  const startResize = (deviceId: string, e: MouseEvent) => {
-    const ev = getEvent(deviceId)
+  const startResize = (eventId: string, e: MouseEvent) => {
+    const ev = getEvent(eventId)
     if (!ev) return
-    const previous: ScheduledEvent = {
-      eventId: deviceId,
-      orderId: ev.orderId,
-      deviceName: ev.deviceName,
-      deviceNumber: ev.deviceNumber,
-      dateStr: ev.dateStr,
-      startTimeKey: ev.startTimeKey,
-      span: ev.span
-    }
+    const previousOwnerEvents = getOwnerEvents(ev.scheduleOwnerDeviceId)
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
-    resizing.value = { deviceId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
+    resizing.value = { eventId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'bottom' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -878,12 +1051,12 @@ export function useSimulationWellSchedule() {
       const delta = me.clientY - ctx.startY
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       if (ctx.mode === 'bottom') {
-        setEventSpan(ctx.deviceId, ctx.originSpan + deltaSlots)
+        setEventSpan(ctx.eventId, ctx.originSpan + deltaSlots)
         return
       }
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.deviceId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
@@ -891,8 +1064,8 @@ export function useSimulationWellSchedule() {
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
       if (!ev.isTentative) {
-        void persistScheduledEvent(deviceId, previous).catch((error) => {
-          scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: previous }
+        void persistScheduledEvent(eventId, previousOwnerEvents).catch((error) => {
+          setOwnerEvents(ev.scheduleOwnerDeviceId, previousOwnerEvents)
           ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
         })
       }
@@ -902,21 +1075,13 @@ export function useSimulationWellSchedule() {
     window.addEventListener('mouseup', onUp)
   }
 
-  const startResizeTop = (deviceId: string, e: MouseEvent) => {
-    const ev = getEvent(deviceId)
+  const startResizeTop = (eventId: string, e: MouseEvent) => {
+    const ev = getEvent(eventId)
     if (!ev) return
-    const previous: ScheduledEvent = {
-      eventId: deviceId,
-      orderId: ev.orderId,
-      deviceName: ev.deviceName,
-      deviceNumber: ev.deviceNumber,
-      dateStr: ev.dateStr,
-      startTimeKey: ev.startTimeKey,
-      span: ev.span
-    }
+    const previousOwnerEvents = getOwnerEvents(ev.scheduleOwnerDeviceId)
     const originStartIdx = timeKeyToIndex.value[ev.startTimeKey]
     if (originStartIdx === undefined) return
-    resizing.value = { deviceId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
+    resizing.value = { eventId, startY: e.clientY, originSpan: ev.span, originStartIdx, mode: 'top' }
 
     const onMove = (me: MouseEvent) => {
       const ctx = resizing.value
@@ -925,7 +1090,7 @@ export function useSimulationWellSchedule() {
       const deltaSlots = delta >= 0 ? Math.floor(delta / slotHeightPx) : Math.ceil(delta / slotHeightPx)
       const endIdx = ctx.originStartIdx + Math.max(1, ctx.originSpan)
       const nextStartIdx = Math.max(0, Math.min(endIdx - 1, ctx.originStartIdx + deltaSlots))
-      setEventStartAndSpan(ctx.deviceId, nextStartIdx, endIdx - nextStartIdx)
+      setEventStartAndSpan(ctx.eventId, nextStartIdx, endIdx - nextStartIdx)
     }
 
     const onUp = () => {
@@ -933,8 +1098,8 @@ export function useSimulationWellSchedule() {
       window.removeEventListener('mouseup', onUp)
       resizing.value = null
       if (!ev.isTentative) {
-        void persistScheduledEvent(deviceId, previous).catch((error) => {
-          scheduledEvents.value = { ...scheduledEvents.value, [deviceId]: previous }
+        void persistScheduledEvent(eventId, previousOwnerEvents).catch((error) => {
+          setOwnerEvents(ev.scheduleOwnerDeviceId, previousOwnerEvents)
           ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
         })
       }
@@ -960,12 +1125,12 @@ export function useSimulationWellSchedule() {
     maxLaneCount,
     slotHeightPx,
     isDragging,
-    selectedScheduledDeviceIds,
+    selectedScheduledEventIds,
     todayScheduledOrderIds,
     todayScheduledOrders,
     todayScheduledDeviceIds,
     todayScheduledDevices,
-    selectedStartDeviceIds,
+    selectedStartEventIds,
     selectedStartOrders,
     selectedStartDevices,
     fmtDate,
@@ -984,13 +1149,13 @@ export function useSimulationWellSchedule() {
     handleDrop,
     handleUnschedule,
     handleUnscheduleTentative,
-    handleSelectScheduledDevice,
+    handleSelectScheduledEvent,
     consumeDevices,
     getWorkOrderById,
     getDeviceRow,
     startResize,
     startResizeTop,
-    resizingDeviceId,
+    resizingEventId,
     isResizing
   }
 }
