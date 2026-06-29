@@ -204,6 +204,7 @@ export function useVibrationSchedule() {
       const nextOrders = Array.from(byId.values())
       workOrders.value = nextOrders
       restoreScheduledEvents(nextOrders)
+      reconcileRuntimeInstrumentCaches(nextOrders)
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => byId.has(id))
     } catch (e) {
       console.error('refreshWorkOrders error:', e)
@@ -654,6 +655,46 @@ export function useVibrationSchedule() {
   const selectedScheduledOrders = computed(() => {
     return selectedScheduledOrderIds.value.map(id => getOrderById(id)).filter(Boolean) as WorkOrder[]
   })
+
+  function reconcileRuntimeInstrumentCaches(orders: WorkOrder[]) {
+    const nextRunning = { ...runningInstrumentIds.value }
+    const nextCompleted = { ...completedInstrumentIds.value }
+    let runningChanged = false
+    let completedChanged = false
+
+    orders.forEach((order) => {
+      order.instruments.forEach((instrument) => {
+        const keys = getInstrumentRuntimeKeys(order.id, instrument)
+        const isBackendRunning = instrument.status === 1
+        const isBackendCompleted = isInstrumentCompleted(order, instrument)
+
+        if (!isBackendRunning) {
+          keys.forEach((key) => {
+            if (!nextRunning[key]) return
+            delete nextRunning[key]
+            runningChanged = true
+          })
+        }
+
+        if (!isBackendCompleted) {
+          keys.forEach((key) => {
+            if (!nextCompleted[key]) return
+            delete nextCompleted[key]
+            completedChanged = true
+          })
+        }
+      })
+    })
+
+    if (runningChanged) {
+      runningInstrumentIds.value = nextRunning
+      persistRunningInstrumentIds()
+    }
+    if (completedChanged) {
+      completedInstrumentIds.value = nextCompleted
+      persistCompletedInstrumentIds()
+    }
+  }
 
   function persistRunningInstrumentIds() {
     try {
