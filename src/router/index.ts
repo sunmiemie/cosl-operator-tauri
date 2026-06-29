@@ -94,6 +94,29 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/process-halt-hass/index.vue'),
         meta: { title: 'HALT HASS工艺', requiresAuth: true }
       },
+      // 刻度井群
+      {
+        path: 'scale-well-cluster',
+        redirect: '/scale-well-cluster/data-board'
+      },
+      {
+        path: 'scale-well-cluster/data-board',
+        name: 'ScaleWellDataBoard',
+        component: () => import('@/views/scale-well-cluster/data-board/index.vue'),
+        meta: { title: '数据看板', requiresAuth: true }
+      },
+      {
+        path: 'scale-well-cluster/calibration',
+        name: 'ScaleWellCalibration',
+        component: () => import('@/views/scale-well-cluster/calibration/index.vue'),
+        meta: { title: '伽马刻度流程', requiresAuth: true }
+      },
+      {
+        path: 'scale-well-cluster/report',
+        name: 'ScaleWellReport',
+        component: () => import('@/views/scale-well-cluster/report/index.vue'),
+        meta: { title: '刻度报告', requiresAuth: true }
+      },
     ]
   },
   // 模态窗口路由 - 设置

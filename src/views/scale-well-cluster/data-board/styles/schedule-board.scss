@@ -1,0 +1,221 @@
+.sched-board {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(340px, 1.2fr);
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sched-wo-panel,
+.sched-cal-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.sched-wo-panel {
+  border-right: 1px solid var(--color-border);
+}
+
+.sched-wo-hd {
+  padding: 14px 18px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  color: var(--color-text-primary);
+}
+
+.sched-wo-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.sched-wo-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.sched-hint {
+  margin: 0 0 10px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sched-cal-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.sc-range {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sched-cal-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px 16px;
+}
+
+.sched-cal-head,
+.sched-cal-row {
+  display: grid;
+  grid-template-columns: 56px repeat(7, 1fr);
+  gap: 4px;
+}
+
+.sched-cal-head {
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.sched-cal-time-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-family: ui-monospace, monospace;
+}
+
+.sched-cal-cell {
+  min-height: 36px;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  background: var(--color-bg-primary);
+
+  &:hover {
+    border-color: var(--color-accent-blue);
+    background: rgba(59, 130, 246, 0.1);
+  }
+
+  &.is-selected {
+    border-color: var(--color-accent-blue);
+    border-style: solid;
+    background: rgba(59, 130, 246, 0.18);
+  }
+}
+
+// 测试员可领取工单
+.tech-wo-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 18px;
+}
+
+.tech-wo-panel__head {
+  margin-bottom: 14px;
+  flex-shrink: 0;
+
+  h3 {
+    margin: 0 0 4px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  p {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+  }
+}
+
+.tech-wo-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+.tech-wo-card {
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  transition: border-color 0.2s ease;
+
+  &:hover {
+    border-color: rgba(59, 130, 246, 0.4);
+  }
+}
+
+.tech-wo-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.tech-wo-card__id {
+  font-weight: 700;
+  color: var(--color-accent-blue);
+  font-size: 13px;
+}
+
+.tech-wo-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+
+  span {
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+  }
+
+  b {
+    text-align: right;
+    color: var(--color-text-primary);
+    font-weight: 500;
+  }
+}
+
+.tech-wo-card__btn {
+  width: 100%;
+  margin-top: 12px;
+}
+
+@media (max-width: 1100px) {
+  .sched-board {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .sched-wo-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .sched-wo-scroll {
+    max-height: 280px;
+  }
+}

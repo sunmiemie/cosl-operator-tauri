@@ -11,6 +11,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
     "@iconify/json": "^2.2.429",
     "@iconify/vue": "^4.3.0",
     "@tauri-apps/api": "^2",
@@ -60,6 +61,7 @@
     "@vitejs/plugin-vue-jsx": "^4.1.1",
     "autoprefixer": "^10.4.23",
     "postcss": "^8.5.6",
+    "sass-embedded": "^1.100.0",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18",
     "tailwindcss-animate": "^1.0.7",

@@ -8,6 +8,7 @@ import { http } from './services/http'
 // 导入 Element Plus 及其样式
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+import './styles/element-theme-bridge.css'
 
 // 导入 Tailwind CSS
 import './styles/tailwind.css'

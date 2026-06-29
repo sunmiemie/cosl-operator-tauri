@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon } from '@iconify/vue'
 
@@ -9,19 +8,7 @@ defineProps<{
   icon?: string
 }>()
 
-// 获取当前窗口
 const appWindow = getCurrentWindow()
-const isMaximized = ref(false)
-
-// 初始化最大化状态
-appWindow.isMaximized().then((maximized) => {
-  isMaximized.value = maximized
-})
-
-// 监听窗口大小变化
-appWindow.onResized(async () => {
-  isMaximized.value = await appWindow.isMaximized()
-})
 
 async function closeWindow() {
   await appWindow.close()

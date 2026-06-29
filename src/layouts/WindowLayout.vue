@@ -4,9 +4,9 @@
  * 适用于报告预览等独立弹出窗口
  * 提供完整的窗口控制：最小化、最大化、关闭、置顶
  */
-import { ref, onMounted, onUnmounted } from 'vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ref, onMounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import { useWindowMaximizeState } from '@/composables/useWindowMaximizeState'
 
 // Props
 defineProps<{
@@ -14,36 +14,17 @@ defineProps<{
   icon?: string
 }>()
 
-// 获取当前窗口
-const appWindow = getCurrentWindow()
-const isMaximized = ref(false)
+const { appWindow, isMaximized, showMaximizeButton, toggleMaximize } = useWindowMaximizeState()
 const isPinned = ref(false)
 
 // 初始化窗口状态
 onMounted(async () => {
-  isMaximized.value = await appWindow.isMaximized()
   isPinned.value = await appWindow.isAlwaysOnTop()
-})
-
-// 监听窗口大小变化
-let unlistenResize: (() => void) | null = null
-onMounted(async () => {
-  unlistenResize = await appWindow.onResized(async () => {
-    isMaximized.value = await appWindow.isMaximized()
-  })
-})
-
-onUnmounted(() => {
-  unlistenResize?.()
 })
 
 // 窗口控制方法
 async function minimizeWindow() {
   await appWindow.minimize()
-}
-
-async function toggleMaximize() {
-  await appWindow.toggleMaximize()
 }
 
 async function closeWindow() {
@@ -84,7 +65,7 @@ async function togglePin() {
         </button>
         
         <!-- 最大化/还原按钮 -->
-        <button class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
+        <button v-if="showMaximizeButton" class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
           <Icon :icon="isMaximized ? 'mdi:window-restore' : 'mdi:window-maximize'" />
         </button>
         

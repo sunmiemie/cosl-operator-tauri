@@ -1,0 +1,191 @@
+// 刻度井群数据看板 — 与桌面端全局主题 (--color-*) 对齐
+
+.board-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  flex-shrink: 0;
+
+  h1 {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: 22px;
+    font-weight: 700;
+  }
+}
+
+.board-header__eyebrow {
+  margin-bottom: 4px;
+  color: var(--color-accent-blue);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.board-header__desc {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.summary-card {
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+
+  :deep(.el-card__body) {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 18px;
+    background: transparent;
+  }
+}
+
+.summary-card__icon {
+  display: grid;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.12);
+  place-items: center;
+
+  img {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+.summary-card__content {
+  min-width: 0;
+  flex: 1;
+}
+
+.summary-card__label {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.summary-card__value {
+  margin-top: 6px;
+  color: var(--color-text-primary);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.summary-card__unit {
+  margin-left: 4px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.summary-card__trend {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+
+  &.is-up {
+    color: var(--color-success);
+  }
+
+  &.is-down {
+    color: var(--color-danger);
+  }
+
+  &.is-neutral {
+    color: var(--color-text-secondary);
+  }
+}
+
+.chart-grid,
+.bottom-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.kc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.dashboard-panel {
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+
+  :deep(.el-card__header) {
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  :deep(.el-card__body) {
+    padding: 12px 18px 18px;
+  }
+}
+
+.dashboard-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+
+  .el-icon {
+    color: var(--color-accent-blue);
+    font-size: 16px;
+  }
+}
+
+.dashboard-panel__subtitle {
+  margin-top: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.section-heading {
+  margin: 4px 0 14px;
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+@media (max-width: 1200px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chart-grid,
+  .bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kc-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .board-header h1 {
+    font-size: 20px;
+  }
+}

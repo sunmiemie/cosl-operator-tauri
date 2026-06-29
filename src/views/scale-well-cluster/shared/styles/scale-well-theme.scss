@@ -1,0 +1,786 @@
+// 刻度井群 — 与桌面端测试台模块（水循环 / 振动台等）风格对齐
+
+.scale-well-page {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  background: transparent;
+}
+
+// ── 页头（对齐 water-cycle / vibration .page-header）──
+.sw-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.sw-page-header__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sw-page-header__icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.625rem;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+
+  &.is-blue {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(6, 182, 212, 0.14));
+    color: var(--color-accent-blue);
+  }
+
+  &.is-purple {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(147, 51, 234, 0.14));
+    color: #a855f7;
+  }
+
+  &.is-amber {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(234, 88, 12, 0.14));
+    color: #f59e0b;
+  }
+
+  &.is-cyan {
+    background: linear-gradient(135deg, rgba(34, 211, 238, 0.2), rgba(59, 130, 246, 0.14));
+    color: #22d3ee;
+  }
+}
+
+.sw-page-header__title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.sw-page-header__subtitle {
+  margin: 2px 0 0;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+.sw-page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+// ── 可滚动主体 / 内容面板 ──
+.sw-page-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sw-content-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+
+.sw-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.sw-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px;
+}
+
+// ── 统计卡（对齐系统 dashboard 指标卡）──
+.sw-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.sw-stat-card {
+  padding: 16px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  transition: border-color 0.2s ease;
+
+  &:hover {
+    border-color: rgba(59, 130, 246, 0.35);
+  }
+
+  &__label {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+  }
+
+  &__value {
+    margin-top: 8px;
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__unit {
+    margin-left: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+  }
+
+  &__meta {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+
+    &.is-up {
+      color: var(--color-success);
+    }
+
+    &.is-down {
+      color: var(--color-danger);
+    }
+  }
+}
+
+// ── 通用面板 ──
+.sw-panel {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.sw-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.sw-hint {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--color-border);
+}
+
+.sw-hint.is-warning {
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+  background: var(--color-warning-light);
+}
+
+.sw-hint.is-success {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+  background: var(--color-success-light);
+}
+
+// ── 步骤条 ──
+.sw-steps {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.sw-step-item {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.sw-step-circle {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  border: 2px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  transition: all 0.25s ease;
+}
+
+.sw-step-item.is-active .sw-step-circle {
+  background: var(--color-accent-blue);
+  border-color: var(--color-accent-blue);
+  color: #fff;
+}
+
+.sw-step-item.is-done .sw-step-circle {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #fff;
+}
+
+.sw-step-label {
+  margin: 0 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+}
+
+.sw-step-item.is-active .sw-step-label,
+.sw-step-item.is-done .sw-step-label {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.sw-step-line {
+  width: 24px;
+  height: 2px;
+  margin-right: 4px;
+  background: var(--color-border);
+  flex-shrink: 0;
+}
+
+.sw-step-item.is-done + .sw-step-line,
+.sw-step-line.is-done {
+  background: var(--color-success);
+}
+
+// ── 检查清单 ──
+.sw-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sw-check-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--color-bg-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    border-color: var(--color-border);
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.03));
+  }
+
+  &.is-checked {
+    background: var(--color-success-light);
+    border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+  }
+}
+
+.sw-check-box {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 2px solid var(--color-border);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: transparent;
+  flex-shrink: 0;
+}
+
+.sw-check-item.is-checked .sw-check-box {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #fff;
+}
+
+.sw-check-text {
+  flex: 1;
+  font-size: 13px;
+}
+
+// ── 按钮 ──
+.sw-btn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.sw-btn-group {
+  display: flex;
+  gap: 8px;
+}
+
+.sw-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  transition: all 0.15s ease;
+
+  &:hover:not(:disabled) {
+    border-color: var(--color-accent-blue);
+    color: var(--color-accent-blue);
+    background: var(--color-bg-hover, rgba(255, 255, 255, 0.03));
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  &.is-primary {
+    background: var(--color-primary, var(--color-accent-blue));
+    border-color: var(--color-primary, var(--color-accent-blue));
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.08);
+      color: #fff;
+    }
+  }
+
+  &.is-success {
+    background: var(--color-success);
+    border-color: var(--color-success);
+    color: #fff;
+  }
+}
+
+// ── 标签 ──
+.sw-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+
+  &.is-hi {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.15);
+  }
+
+  &.is-lo {
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.15);
+  }
+
+  &.is-info {
+    color: var(--color-accent-blue);
+    background: rgba(59, 130, 246, 0.12);
+  }
+
+  &.is-warn {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+  }
+}
+
+.sw-param-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  font-size: 11px;
+
+  span.label {
+    color: var(--color-text-secondary);
+  }
+
+  b {
+    color: var(--color-text-primary);
+  }
+
+  .divider {
+    color: var(--color-border);
+  }
+}
+
+.sw-sample-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.1fr;
+  gap: 10px;
+  min-height: 420px;
+}
+
+.sw-sub-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sw-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.sw-info-cell {
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+
+  .label {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    margin-bottom: 2px;
+  }
+
+  .value {
+    font-size: 13px;
+    font-weight: 600;
+    font-family: ui-monospace, monospace;
+  }
+}
+
+.sw-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+  margin: 8px 0;
+
+  .fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-accent-blue), #22d3ee);
+    transition: width 0.3s ease;
+
+    &.is-done {
+      background: var(--color-success);
+    }
+  }
+}
+
+.sw-chart-placeholder {
+  flex: 1;
+  min-height: 140px;
+  border-radius: 6px;
+  border: 1px dashed var(--color-border);
+  display: grid;
+  place-items: center;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.sw-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.sw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  label {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+  }
+
+  input,
+  select {
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-size: 13px;
+
+    &:focus {
+      outline: none;
+      border-color: var(--color-accent-blue);
+    }
+  }
+}
+
+.sw-cal-params-table {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr 1fr 1fr;
+  gap: 6px 8px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  font-size: 12px;
+
+  .head {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-secondary);
+    text-align: center;
+  }
+
+  input {
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    font-size: 12px;
+    text-align: center;
+  }
+}
+
+.sw-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.sw-kpi-card {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  text-align: center;
+
+  &.is-ok {
+    border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+  }
+
+  &.is-bad {
+    border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  }
+
+  .kn {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+  }
+
+  .kv {
+    margin: 4px 0;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .kr {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+  }
+}
+
+// ── Element Plus 深色主题覆写 ──
+.scale-well-page {
+  :deep(.el-card) {
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    color: var(--color-text-primary);
+    --el-card-bg-color: var(--color-bg-secondary);
+    --el-card-border-color: var(--color-border);
+  }
+
+  :deep(.el-table) {
+    --el-table-bg-color: var(--color-bg-primary);
+    --el-table-tr-bg-color: var(--color-bg-primary);
+    --el-table-header-bg-color: var(--color-bg-tertiary);
+    --el-table-row-hover-bg-color: var(--color-bg-hover);
+    --el-table-border-color: var(--color-border);
+    --el-table-text-color: var(--color-text-primary);
+    --el-table-header-text-color: var(--color-text-secondary);
+    --el-fill-color-lighter: var(--color-bg-tertiary);
+  }
+
+  :deep(.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell) {
+    background-color: var(--color-bg-tertiary);
+  }
+
+  :deep(.el-alert--warning.is-light) {
+    background-color: var(--color-warning-light);
+    border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+  }
+
+  :deep(.el-alert--success.is-light) {
+    background-color: var(--color-success-light);
+    border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+  }
+
+  :deep(.el-alert .el-alert__title) {
+    color: var(--color-text-primary);
+  }
+
+  :deep(.el-alert .el-alert__description) {
+    color: var(--color-text-secondary);
+  }
+
+  :deep(.el-tabs__header) {
+    margin-bottom: 12px;
+  }
+
+  :deep(.el-tabs__nav-wrap::after) {
+    background: var(--color-border);
+  }
+
+  :deep(.el-tabs__item) {
+    color: var(--color-text-secondary);
+
+    &.is-active {
+      color: var(--color-accent-blue);
+    }
+
+    &:hover {
+      color: var(--color-text-primary);
+    }
+  }
+
+  :deep(.el-tabs__active-bar) {
+    background: var(--color-accent-blue);
+  }
+
+  :deep(.el-radio-button__inner) {
+    background: var(--color-bg-primary);
+    border-color: var(--color-border);
+    color: var(--color-text-secondary);
+  }
+
+  :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--color-accent-blue);
+    color: var(--color-accent-blue);
+    box-shadow: none;
+  }
+
+  :deep(.el-empty__description) {
+    color: var(--color-text-secondary);
+  }
+
+  :deep(.el-tag) {
+    border-color: transparent;
+  }
+
+  :deep(.el-form-item__label) {
+    color: var(--color-text-secondary);
+  }
+
+  :deep(.el-input__wrapper),
+  :deep(.el-textarea__inner),
+  :deep(.el-select__wrapper) {
+    background: var(--color-bg-primary);
+    box-shadow: 0 0 0 1px var(--color-border) inset;
+  }
+
+  :deep(.el-input__inner),
+  :deep(.el-textarea__inner) {
+    color: var(--color-text-primary);
+  }
+
+  :deep(.el-steps) {
+    --el-text-color-primary: var(--color-text-primary);
+    --el-text-color-placeholder: var(--color-text-secondary);
+  }
+
+  :deep(.el-card__header) {
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    font-weight: 600;
+  }
+
+  :deep(.el-button--primary) {
+    --el-button-bg-color: var(--color-primary, var(--color-accent-blue));
+    --el-button-border-color: var(--color-primary, var(--color-accent-blue));
+  }
+
+  :deep(.el-descriptions__label) {
+    color: var(--color-text-secondary);
+  }
+
+  :deep(.el-descriptions__content) {
+    color: var(--color-text-primary);
+  }
+
+  :deep(.el-statistic__head) {
+    color: var(--color-text-secondary);
+  }
+
+  :deep(.el-statistic__number) {
+    color: var(--color-text-primary);
+  }
+}
+
+@media (max-width: 1200px) {
+  .sw-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sw-sample-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sw-form-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sw-kpi-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .sw-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sw-page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

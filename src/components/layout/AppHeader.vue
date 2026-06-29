@@ -1,49 +1,29 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '@iconify/vue'
 import { ElMessageBox } from 'element-plus'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/composables/useAuth'
 import { useAppLock } from '@/composables/useAppLock'
+import { useWindowMaximizeState } from '@/composables/useWindowMaximizeState'
 
 const router = useRouter()
 const { isDark, toggleTheme } = useTheme()
 const { userInfo, logout } = useAuth()
 const { isLocked, lockApp } = useAppLock()
-
-// 窗口最大化状态
-const isMaximized = ref(false)
+const { appWindow, isMaximized, showMaximizeButton, toggleMaximize } = useWindowMaximizeState()
 
 // 用户菜单显示状态
 const showUserMenu = ref(false)
 
-// 获取当前窗口实例
-const appWindow = getCurrentWindow()
-
 // 清理取消监听函数
 let unlistenCloseRequested: (() => void) | null = null
-
-// 初始化最大化状态
-appWindow.isMaximized().then((maximized) => {
-  isMaximized.value = maximized
-})
-
-// 监听窗口大小变化，更新最大化状态
-appWindow.onResized(async () => {
-  isMaximized.value = await appWindow.isMaximized()
-})
 
 // 窗口控制方法
 async function minimizeWindow() {
   await appWindow.minimize()
-}
-
-async function toggleMaximize() {
-  await appWindow.toggleMaximize()
-  isMaximized.value = await appWindow.isMaximized()
 }
 
 // 停止 Flojoy 后端
@@ -184,7 +164,7 @@ function closeUserMenu() {
       <button class="control-btn minimize" @click="minimizeWindow" title="最小化">
         <Icon icon="mdi:minus" />
       </button>
-      <button class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
+      <button v-if="showMaximizeButton" class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
         <Icon :icon="isMaximized ? 'mdi:window-restore' : 'mdi:window-maximize'" />
       </button>
       <button class="control-btn close" @click="closeWindow" title="关闭">

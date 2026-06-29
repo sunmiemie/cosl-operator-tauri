@@ -1,8 +1,8 @@
-import { ref, readonly } from 'vue'
-import { load, Store } from '@tauri-apps/plugin-store'
+import { ThemeMode } from '@/enums'
 import { emit, listen } from '@tauri-apps/api/event'
 import { appConfigDir } from '@tauri-apps/api/path'
-import { ThemeMode } from '@/enums'
+import { load, Store } from '@tauri-apps/plugin-store'
+import { readonly, ref } from 'vue'
 
 // 配置变更事件
 const CONFIG_CHANGE_EVENT = 'config-changed'
@@ -21,22 +21,22 @@ export interface XrayCropArea {
 export interface AppConfig {
   // 连接设置
   backendUrl: string
-  
+
   // 外观设置
   themeMode: ThemeMode
-  
+
   // 通用设置
   language: string
   autoStart: boolean
-  
+
   // 设备设置（摄像头索引）
   microDevice: number      // 显微镜摄像头索引
   planeDevice: number      // 水平仪摄像头索引
   xrayDevice: number       // X光机摄像头索引
-  
+
   // X-Ray 裁剪区域设置
   xrayCropArea: XrayCropArea
-  
+
   // 离线功能设置
   dataDir: string          // 离线数据存储目录
   downloadDir: string      // 旧版通用下载文件保存目录（兼容历史配置）
@@ -45,13 +45,13 @@ export interface AppConfig {
   vibrationSharedReportDir: string // 振动台第三方报告共享文件夹
   autoSave: boolean        // 测试过程自动保存
   autoReUpload: boolean    // 网络恢复自动回传
-  
+
   // 侧边栏菜单隐藏配置（存储被隐藏的路由路径列表）
   hiddenMenus: string[]
-  
+
   // 安全设置
   lockerPassword: string   // 锁定密码 (MD5 加密后存储)
-  
+
   // Flojoy Python 环境设置
   flojoyPythonPath: string       // Python 解释器路径
   flojoyEnvInitialized: boolean  // 环境是否已初始化（依赖已安装）
@@ -63,6 +63,7 @@ const DEFAULT_LOCKER_PASSWORD = '25d55ad283aa400af464c76d713c07ad'
 
 const defaultConfig: AppConfig = {
   backendUrl: 'http://localhost:8080',
+  // backendUrl: 'http://localhost:60034',
   themeMode: ThemeMode.DARK,
   language: 'zh-CN',
   autoStart: false,
@@ -165,7 +166,7 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('autoStart', defaultConfig.autoStart)
         needsSave = true
       }
-      
+
       // 设备配置
       if (microDevice === null || microDevice === undefined) {
         await store.set('microDevice', defaultConfig.microDevice)
@@ -183,7 +184,7 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('xrayCropArea', defaultConfig.xrayCropArea)
         needsSave = true
       }
-      
+
       // 离线功能配置
       if (dataDir === null || dataDir === undefined) {
         await store.set('dataDir', defaultConfig.dataDir)
@@ -213,19 +214,19 @@ export async function initializeConfig(): Promise<AppConfig> {
         await store.set('autoReUpload', defaultConfig.autoReUpload)
         needsSave = true
       }
-      
+
       // 菜单隐藏配置
       if (hiddenMenus === null || hiddenMenus === undefined) {
         await store.set('hiddenMenus', defaultConfig.hiddenMenus)
         needsSave = true
       }
-      
+
       // 安全配置
       if (lockerPassword === null || lockerPassword === undefined) {
         await store.set('lockerPassword', defaultConfig.lockerPassword)
         needsSave = true
       }
-      
+
       // Flojoy Python 环境配置
       if (flojoyPythonPath === null || flojoyPythonPath === undefined) {
         await store.set('flojoyPythonPath', defaultConfig.flojoyPythonPath)
@@ -332,14 +333,14 @@ export function useConfig() {
     try {
       // 更新本地状态
       config.value[key] = value
-      
+
       // 保存到store
       await store?.set(key, value)
       await store?.save()
 
       // 广播配置变更
       await emit(CONFIG_CHANGE_EVENT, { [key]: value })
-      
+
       console.log(`配置已保存: ${key} =`, value)
     } catch (error) {
       console.error('保存配置失败:', error)
@@ -358,7 +359,7 @@ export function useConfig() {
     try {
       // 更新本地状态
       config.value = { ...config.value, ...updates }
-      
+
       // 保存到store
       for (const [key, value] of Object.entries(updates)) {
         await store?.set(key, value)
@@ -367,7 +368,7 @@ export function useConfig() {
 
       // 广播配置变更
       await emit(CONFIG_CHANGE_EVENT, updates)
-      
+
       console.log('配置已批量保存:', updates)
     } catch (error) {
       console.error('批量保存配置失败:', error)

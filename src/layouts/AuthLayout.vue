@@ -1,19 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Icon } from '@iconify/vue'
 import { useTheme } from '@/composables/useTheme'
 import { useConfig } from '@/composables/useConfig'
 import { useConnection } from '@/composables/useConnection'
+import { useWindowMaximizeState } from '@/composables/useWindowMaximizeState'
 import { http } from '@/services/http'
 
 const { initTheme } = useTheme()
 const { initConfig, setConfigItem, config } = useConfig()
 const { connectionStatus: connStatus, startChecking, getStatusText, checkConnection } = useConnection()
-
-// 获取当前窗口
-const appWindow = getCurrentWindow()
-const isMaximized = ref(false)
+const { appWindow, isMaximized, showMaximizeButton, toggleMaximize } = useWindowMaximizeState()
 
 // 连接状态显示
 const statusText = computed(() => getStatusText())
@@ -45,7 +42,6 @@ const pendingAction = ref<(() => void) | null>(null)
 onMounted(async () => {
   await initTheme()
   await initConfig()
-  isMaximized.value = await appWindow.isMaximized()
   
   // 加载后端地址配置
   backendUrl.value = config.value.backendUrl || 'http://localhost:8080'
@@ -54,19 +50,9 @@ onMounted(async () => {
   startChecking()
 })
 
-// 监听窗口大小变化
-appWindow.onResized(async () => {
-  isMaximized.value = await appWindow.isMaximized()
-})
-
 // 窗口控制方法
 async function minimizeWindow() {
   await appWindow.minimize()
-}
-
-async function toggleMaximize() {
-  await appWindow.toggleMaximize()
-  isMaximized.value = await appWindow.isMaximized()
 }
 
 async function closeWindow() {
@@ -165,7 +151,7 @@ async function refreshConnection() {
         <button class="control-btn minimize" @click="minimizeWindow" title="最小化">
           <Icon icon="mdi:minus" />
         </button>
-        <button class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
+        <button v-if="showMaximizeButton" class="control-btn maximize" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
           <Icon :icon="isMaximized ? 'mdi:window-restore' : 'mdi:window-maximize'" />
         </button>
         <button class="control-btn close" @click="closeWindow" title="关闭">
