@@ -27,8 +27,8 @@ assert.match(
 
 assert.match(
   rust,
-  /write_high_temp_pressure_word_report\(&json_source,\s*&target\.join\("高温高压测试报告\.doc"\)\)\?/,
-  'high-temp-pressure export should generate the Word report next to the JSON output'
+  /write_high_temp_pressure_pdf_report\(&json_source,\s*&target\.join\("高温高压测试报告\.pdf"\)\)\?/,
+  'high-temp-pressure export should generate the PDF report next to the JSON output'
 )
 
 const copierStart = rust.indexOf('fn copy_high_temp_pressure_report_output')
@@ -81,11 +81,11 @@ assert.match(
 assert.match(
   reportPanel,
   /type\s+FileKey\s*=\s*'json'\s*\|\s*'report'/,
-  'high-temp-pressure report panel should track only JSON and Word report file generation'
+  'high-temp-pressure report panel should track only JSON and PDF report file generation'
 )
 
 assert.match(reportPanel, /video_readings_0\.5s\.json/, 'file generation UI should show the JSON readings file')
-assert.match(reportPanel, /高温高压测试报告\.doc/, 'file generation UI should show the Word report')
+assert.match(reportPanel, /高温高压测试报告\.pdf/, 'file generation UI should show the PDF report')
 
 for (const removedUiName of [
   '高温高压监控数据.csv',

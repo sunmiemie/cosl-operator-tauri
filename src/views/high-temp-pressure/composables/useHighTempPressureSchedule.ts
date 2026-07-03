@@ -169,6 +169,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     client: dto.client || '',
     plannedTime: dto.planned_time || '',
     receivingNo: items[0]?.sn || taskNumber,
+    useDevice: useDevice,
     vesselType: useDevice,
     type: useDevice,
     targetTemp: formatDisplayValue(dto.target_temp, 'C'),
@@ -199,6 +200,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
 export function useHighTempPressureSchedule() {
   const { initAuth, validateToken, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
+  const activeHostDeviceName = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
   const selectedScheduledOrderIds = ref<string[]>([])
   const isDragging = ref(false)
@@ -688,9 +690,12 @@ export function useHighTempPressureSchedule() {
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[] }>()
     Object.values(scheduledEvents.value).forEach((events) => {
       events.forEach((ev) => {
+        const order = getOrderByInstrumentId(ev.instrumentId)
+        if (activeScheduleHostName && order?.useDevice !== activeScheduleHostName) return
         const group = groupedEvents.get(ev.eventId)
         if (group) {
           group.instrumentIds.push(ev.instrumentId)
@@ -768,14 +773,24 @@ export function useHighTempPressureSchedule() {
     return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
   })
 
+  const hostDeviceTabs = computed(() => {
+    const names = Array.from(
+      new Set(workOrders.value.map((order) => order.useDevice?.trim()).filter(Boolean) as string[])
+    )
+    return names.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  })
+
   const unscheduledOrders = computed(() => {
     const keyword = searchKeyword.value.trim().toLowerCase()
+    const hostName = activeHostDeviceName.value.trim()
 
     return workOrders.value.filter((order) =>
       order.items.some((item) => !item.completed && !completedInstrumentIds.value[item.id]) &&
+      (hostName === '' || order.useDevice === hostName) &&
       (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
+        (order.useDevice || '').toLowerCase().includes(keyword) ||
         order.type.toLowerCase().includes(keyword) ||
         order.applicant.toLowerCase().includes(keyword) ||
         order.receivingNo.toLowerCase().includes(keyword) ||
@@ -1293,6 +1308,8 @@ export function useHighTempPressureSchedule() {
 
   return {
     searchKeyword,
+    activeHostDeviceName,
+    hostDeviceTabs,
     draggedOrder,
     workOrders,
     workOrdersLoading,

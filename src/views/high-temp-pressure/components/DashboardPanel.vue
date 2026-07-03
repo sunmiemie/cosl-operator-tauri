@@ -8,6 +8,8 @@ const props = defineProps<{
   unscheduledOrders: WorkOrder[]
   workOrdersLoading: boolean
   searchKeyword: string
+  hostDeviceTabs: string[]
+  activeHostDeviceName: string
   calBase: Date
   weekLabel: string
   currentWeekDays: WeekDayItem[]
@@ -45,6 +47,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:searchKeyword': [value: string]
+  'update:activeHostDeviceName': [value: string]
   'order-drag-start': [event: DragEvent, order: WorkOrder, instrumentIds: string[]]
   'drag-end': [event: DragEvent]
   'prev-week': []
@@ -243,6 +246,19 @@ const handleGridDrop = (e: DragEvent) => {
           />
           <button v-if="searchKeyword" class="clear-btn" @click="emit('update:searchKeyword', '')">
             <Icon icon="mdi:close" />
+          </button>
+        </div>
+
+        <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
+          <button
+            v-for="host in ['', ...hostDeviceTabs]"
+            :key="host || 'all'"
+            class="host-filter-tab"
+            :class="{ active: activeHostDeviceName === host }"
+            :title="host || '全部主机'"
+            @click="emit('update:activeHostDeviceName', host)"
+          >
+            {{ host || '全部' }}
           </button>
         </div>
 
@@ -489,6 +505,44 @@ const handleGridDrop = (e: DragEvent) => {
 .table-wrapper {
   padding: 0;
   overflow-x: hidden;
+}
+
+.sidebar .search-box {
+  padding-bottom: 10px;
+  border-bottom: 0;
+}
+
+.host-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 2px 18px 14px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.host-filter-tab {
+  flex: 0 0 auto;
+  max-width: 160px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-filter-tab:hover,
+.host-filter-tab.active {
+  border-color: rgba(59, 130, 246, 0.34);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--color-accent-blue);
 }
 
 .data-table {

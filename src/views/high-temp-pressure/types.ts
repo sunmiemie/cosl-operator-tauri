@@ -41,6 +41,7 @@ export interface WorkOrder {
   client?: string
   plannedTime?: string
   receivingNo: string
+  useDevice?: string
   vesselType: string
   type: string
   targetTemp: string
