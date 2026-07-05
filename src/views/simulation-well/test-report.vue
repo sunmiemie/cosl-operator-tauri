@@ -644,6 +644,8 @@ function pickOperation(work: SimulatedWellDownholeWorkItem) {
 async function pickDevice(device: ReportOperationDevice) {
   editingReport.value = null
   selectedDevice.value = device
+  // 选择工单后将工单号设置为曲线图编号前缀
+  curveChartNoPrefix.value = device.orderId + "-"
   resetReportForm()
   await loadTemplate(device)
   mode.value = 'add-report'
@@ -697,6 +699,13 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   selectedTemplate.value = null
   templateMessage.value = ''
   templateLoading.value = true
+
+  /*
+   * 编辑时由于没有工单编号，所以要在曲线图中截取曲线图前缀
+   */
+  if (report.meta.curve_chart_no.indexOf("-") > 0) {
+    curveChartNoPrefix.value = report.meta.curve_chart_no.substring(0, report.meta.curve_chart_no.indexOf("-") + 1)
+  }
   try {
     await ensureTemplateCatalog()
     selectedTemplate.value =
@@ -884,6 +893,27 @@ function batchDownload() {
   ElMessage.info('批量下载流程待接入')
 }
 
+// 曲线图编号前缀
+const curveChartNoPrefix = ref<string>('')
+/**
+ * 计算曲线图编号
+ * 现在的逻辑：使用工单号为前缀，手动输入后缀编号，自动拼接成曲线图编号存入数据库
+ */
+const curveChartNoModelValue = computed<string>({
+  get() {
+    // 如果 fullValue 以当前前缀开头，就把前缀裁掉给输入框显示
+    if (curveChartNoPrefix.value.length > 0 && curveChartNo.value.startsWith(curveChartNoPrefix.value)) {
+      return curveChartNo.value.slice(curveChartNoPrefix.value.length)
+    }
+  // 否则原样返回（比如前缀变了，旧值对不上的情况）
+  return curveChartNo.value
+  },
+  set(newValue) {
+    // 用户输入或修改时，自动拼接前缀再赋给 fullValue
+    curveChartNo.value = selectedDevice.value != null ? curveChartNoPrefix.value + newValue : newValue
+  }
+})
+
 onMounted(async () => {
   await fetchReports()
 })
@@ -923,6 +953,11 @@ watch(
     </div>
 
     <div class="downhole-content">
+      <!-- 驳回编辑时显示驳回原因 -->
+      <div class="reject-message" v-if="mode === 'add-report' && editingReport?.status === 2">
+        <Icon icon="mdi:alert-circle-outline" />
+        <span>审核驳回消息：{{editingReport.meta.rawRemark}}</span>
+      </div>
       <div v-if="mode === 'list'" class="downhole-card">
         <div class="section-header-row list-toolbar">
           <div class="search-box inline report-search">
@@ -1355,7 +1390,11 @@ watch(
           <div class="upload-grid">
             <div class="upload-box">
               <div class="upload-title">曲线图编号 Curve Chart No.</div>
-              <input v-model="curveChartNo" class="form-input" placeholder="请输入曲线图编号" />
+              <!-- 曲线图编号更改为：工单号-xx（xx是输入框手动输入的） -->
+              <div class="line-graph-code">
+                  <span v-if="curveChartNoPrefix">{{curveChartNoPrefix}}</span>
+                  <input v-model="curveChartNoModelValue" class="form-input" placeholder="请输入曲线图编号" />
+              </div>
             </div>
             <div class="upload-box">
               <div class="upload-title">上传测试曲线图</div>
@@ -1554,6 +1593,32 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.reject-message {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 5px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.reject-message svg,
+.reject-message .svg-icon {
+  flex-shrink: 0;
+  font-size: 16px;
 }
 
 .downhole-card {
@@ -2229,6 +2294,11 @@ watch(
   height: min(72vh, 680px);
   object-fit: contain;
   background: #f8fafc;
+}
+
+.line-graph-code {
+  display: flex;
+  align-items: center;
 }
 
 @media (max-width: 900px) {
