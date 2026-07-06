@@ -10,6 +10,7 @@ const props = defineProps<{
   searchKeyword: string
   hostDeviceTabs: string[]
   activeHostDeviceName: string
+  currentAssignOrderId: string
   calBase: Date
   weekLabel: string
   currentWeekDays: WeekDayItem[]
@@ -27,6 +28,7 @@ const props = defineProps<{
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
   }[]
   maxLaneCount: number
   slotHeightPx: number
@@ -47,7 +49,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:searchKeyword': [value: string]
-  'update:activeHostDeviceName': [value: string]
+  'assign-host-device': [hostName: string]
+  'select-assign-order': [orderId: string]
   'order-drag-start': [event: DragEvent, order: WorkOrder, instrumentIds: string[]]
   'drag-end': [event: DragEvent]
   'prev-week': []
@@ -256,7 +259,7 @@ const handleGridDrop = (e: DragEvent) => {
             class="host-filter-tab"
             :class="{ active: activeHostDeviceName === host }"
             :title="host || '全部主机'"
-            @click="emit('update:activeHostDeviceName', host)"
+            @click="emit('assign-host-device', host)"
           >
             {{ host || '全部' }}
           </button>
@@ -291,9 +294,10 @@ const handleGridDrop = (e: DragEvent) => {
                     :class="{
                       'is-expanded': order.expanded,
                       'is-readonly': !canDragOrder(order),
+                      'is-current-assign': currentAssignOrderId === order.id,
                     }"
                     :draggable="canDragOrder(order)"
-                    @click="order.expanded = !order.expanded"
+                    @click="emit('select-assign-order', order.id); order.expanded = !order.expanded"
                     @dragstart="canDragOrder(order) && emit('order-drag-start', $event, order, getActiveInstruments(order).map((item) => item.id))"
                     @dragend="emit('drag-end', $event)"
                   >
@@ -410,7 +414,7 @@ const handleGridDrop = (e: DragEvent) => {
                     ]"
                     :style="getScheduledStyle(it)"
                     @click.stop="emit('select-scheduled-order', it.instrumentIds)"
-                    :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${getOrderByInstrumentId(it.instrumentId)?.type || ''} · ${it.instrumentIds.length}台`"
+                    :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${it.hostDeviceName || '-'} · ${it.instrumentIds.length}台`"
                   >
                     <div class="scheduled-head">
                       <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.instrumentIds, it.eventId)">
@@ -419,6 +423,7 @@ const handleGridDrop = (e: DragEvent) => {
                     </div>
                     <div class="scheduled-content">
                       <span class="device-name">{{ getOrderByInstrumentId(it.instrumentId)?.no }}</span>
+                      <span class="host-name">{{ it.hostDeviceName || '-' }}</span>
                     </div>
                     <div class="scheduled-tag">
                       {{ getOrderByInstrumentId(it.instrumentId)?.applicant || '-' }} ·
@@ -491,8 +496,9 @@ const handleGridDrop = (e: DragEvent) => {
 .scheduled-item.is-resizing { transition: none !important; transform: none !important; }
 .scheduled-item.is-resizing:hover { transform: none !important; }
 .scheduled-head { position: static; }
-.scheduled-content { display: flex; justify-content: space-between; align-items: flex-start; }
+.scheduled-content { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
 .device-name { font-size: 11px; font-weight: 600; color: #fff; line-height: 1.2; padding-right: 20px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.host-name { flex-shrink: 0; max-width: 72px; font-size: 9px; font-weight: 700; color: rgba(255, 255, 255, 0.92); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-tag { font-size: 9px; color: rgba(255, 255, 255, 0.9); font-weight: 500; margin-top: 2px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .remove-btn { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; align-items: center; justify-content: center; background: rgba(0,0,0,.18); border: none; color: rgba(255,255,255,.9); cursor: pointer; padding: 0; border-radius: 4px; opacity: 0; pointer-events: none; transition: opacity .15s, background .15s; display: flex; }
 .scheduled-item:hover .remove-btn { opacity: 1; pointer-events: auto; }
@@ -581,6 +587,14 @@ const handleGridDrop = (e: DragEvent) => {
 .order-row.is-readonly,
 .order-row.is-readonly:active {
   cursor: default;
+}
+
+.order-row.is-current-assign td {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.order-row.is-current-assign td:first-child {
+  border-left-color: var(--color-accent-blue);
 }
 
 .order-row td {

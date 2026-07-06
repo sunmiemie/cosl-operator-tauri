@@ -14,6 +14,7 @@ export interface InstrumentItem {
   scheduledStartAt?: string | null
   scheduledEndAt?: string | null
   scheduleSegments?: InstrumentScheduleSegment[]
+  useDevice?: string
   status?: number
   completed?: boolean
 }
@@ -21,6 +22,7 @@ export interface InstrumentItem {
 export interface InstrumentScheduleSegment {
   scheduledStartAt: string
   scheduledEndAt: string
+  useDevice?: string
 }
 
 export interface WorkOrder {

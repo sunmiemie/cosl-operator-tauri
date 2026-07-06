@@ -52,6 +52,7 @@ export interface HighTempPressureOrderInstrumentDTO {
   instrument_sn: string
   test_type?: string
   quantity?: number
+  use_device?: string | null
   instrument_length?: string
   max_diameter?: number | null
   scheduled_start_at?: string | null
@@ -59,6 +60,7 @@ export interface HighTempPressureOrderInstrumentDTO {
   schedule_segments?: Array<{
     scheduled_start_at?: string | null
     scheduled_end_at?: string | null
+    use_device?: string | null
   }>
   instrument_status?: number
   is_completed?: boolean
@@ -166,9 +168,11 @@ export async function cancelHighTempPressureOrder(
 export type HighTempPressureInstrumentScheduleBody = {
   scheduled_start_at?: string
   scheduled_end_at?: string
+  use_device?: string
   schedule_segments?: Array<{
     scheduled_start_at: string
     scheduled_end_at: string
+    use_device?: string
   }>
 }
 
