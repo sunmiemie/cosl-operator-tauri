@@ -470,6 +470,9 @@ export function useHighTempBox() {
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
 
   async function refreshHostDeviceNames() {
+    const authOk = await initAuth()
+    if (!authOk) return
+
     const response = await listDeviceInstances(
       { currentPage: 1, size: 2000 },
       getAuthHeaders()
@@ -664,6 +667,15 @@ export function useHighTempBox() {
       return
     }
     ElMessage.error(resp?.data?.msg || resp?.error || '排期保存失败')
+  }
+
+  async function getRequiredAuthHeaders() {
+    const authOk = await initAuth()
+    if (!authOk) {
+      alert('登录状态失效，请重新登录后再操作')
+      return null
+    }
+    return getAuthHeaders()
   }
 
   async function persistOrderSchedule(orderId: string, fallback?: Record<string, ScheduledEvent>) {
@@ -1118,13 +1130,15 @@ export function useHighTempBox() {
     orderStatusMutating.value = true
     try {
       if (selected.dbId > 0) {
+        const headers = await getRequiredAuthHeaders()
+        if (!headers) return
         const runningInstrumentIds = selectedInstruments
           .map((instrument) => instrument.dbId)
           .filter((id): id is number | string => id !== undefined)
         const resp = await changeHighTempBoxOrderStatus(
           selected.dbId,
           2,
-          undefined,
+          headers,
           { runningInstrumentIds }
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {
@@ -1154,7 +1168,9 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
-        const resp = await changeHighTempBoxOrderStatus(orderId, 1)
+        const headers = await getRequiredAuthHeaders()
+        if (!headers) return
+        const resp = await changeHighTempBoxOrderStatus(orderId, 1, headers)
         if (!resp.success || !resp.data || resp.data.code !== 0) {
           alert(resp.data?.msg || resp.error || '工单状态更新失败')
           return
@@ -1310,10 +1326,12 @@ export function useHighTempBox() {
     if (orderId !== undefined) {
       orderStatusMutating.value = true
       try {
+        const headers = await getRequiredAuthHeaders()
+        if (!headers) return
         const resp = await changeHighTempBoxOrderStatus(
           orderId,
           willCompleteOrder ? 3 : 1,
-          undefined,
+          headers,
           { completedInstrumentIds: completedInstrumentDbIds }
         )
         if (!resp.success || !resp.data || resp.data.code !== 0) {

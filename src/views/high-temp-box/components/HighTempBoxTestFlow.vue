@@ -216,7 +216,7 @@ const reportChart = computed(() => {
       </button>
     </div>
 
-    <div class="test-content">
+    <div class="test-content" :class="{ 'is-report-content': currentStep === 'report' }">
       <div v-if="currentStep === 'pre-check'" class="modal-overlay">
         <div class="startup-check-modal">
           <h2 class="modal-title">开机检查</h2>
@@ -616,7 +616,8 @@ const reportChart = computed(() => {
 .order-tag{font-size:13px;color:var(--color-text-secondary);margin-top:4px}
 .back-btn{background:transparent;border:1px solid var(--color-border);padding:8px 16px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:4px;color:var(--color-text-secondary)}
 .back-btn.top-right{position:absolute;top:16px;right:16px}
-.test-content{flex:1;padding:24px;overflow-y:auto;display:flex;justify-content:center}
+.test-content{flex:1;min-height:0;padding:24px;overflow-y:auto;display:flex;justify-content:center}
+.test-content.is-report-content{overflow:hidden}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;backdrop-filter:blur(4px)}
 .startup-check-modal{background:var(--color-bg-secondary);color:var(--color-text-primary);border-radius:16px;padding:32px;max-width:700px;width:100%;box-shadow:0 20px 40px -12px rgba(0,0,0,0.3);border:1px solid var(--color-border);position:relative}
 .modal-title{font-size:24px;font-weight:700;text-align:center;margin-bottom:24px;color:var(--color-text-primary)}
@@ -698,7 +699,9 @@ const reportChart = computed(() => {
 .primary-btn{border:none;background:linear-gradient(135deg, var(--color-accent-blue), #2563eb);color:#fff;box-shadow:0 12px 24px rgba(59,130,246,.22)}
 .primary-btn.small{min-height:36px;padding:0 14px;font-size:13px;border-radius:10px}
 .finish-btn{min-width:136px;background:linear-gradient(135deg, #22c55e, #16a34a);box-shadow:0 12px 24px rgba(34,197,94,.2)}
-.shutdown-panel,.report-panel{width:100%;display:flex;flex-direction:column;gap:16px}
+.shutdown-panel{width:100%;display:flex;flex-direction:column;gap:16px}
+.report-panel{width:100%;height:100%;min-height:0;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+.report-panel .action-bar{flex:0 0 auto;padding-top:16px;border-top:1px solid var(--color-border);background:var(--color-bg-secondary)}
 .shutdown-alert{display:flex;flex-direction:column;gap:6px;padding:16px 18px;border-radius:12px;border:1px solid var(--color-border);background:var(--color-bg-tertiary);color:var(--color-text-secondary)}
 .shutdown-alert strong{font-size:16px;color:var(--color-text-primary)}
 .shutdown-alert.is-warning{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.08)}
@@ -724,7 +727,7 @@ const reportChart = computed(() => {
 .status-item-value.is-success{color:var(--color-success,#16a34a)}
 .status-item-value.is-running{color:var(--color-accent-blue)}
 .status-item-value.is-idle{color:var(--color-text-tertiary)}
-.report-document{background:#fff;color:#212529;border-radius:16px;overflow:hidden;box-shadow:0 12px 32px rgba(15,23,42,.12);border:1px solid rgba(148,163,184,.2)}
+.report-document{flex:1 1 auto;min-height:0;background:#fff;color:#212529;border-radius:16px;overflow-x:hidden;overflow-y:auto;scrollbar-gutter:stable;box-shadow:0 12px 32px rgba(15,23,42,.12);border:1px solid rgba(148,163,184,.2)}
 .report-hero{position:relative;padding:40px 32px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;text-align:center}
 .report-number-pill{position:absolute;top:20px;right:28px;padding:8px 16px;border-radius:999px;background:rgba(255,255,255,.18);font-size:14px}
 .report-hero-title{font-size:34px;font-weight:800;letter-spacing:2px}

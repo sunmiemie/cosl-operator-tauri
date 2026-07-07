@@ -76,6 +76,10 @@ assert.doesNotMatch(simulationSchedule, /if\s*\(scheduledOrderIds\.value\.has\(o
 
 const highTempBoxSchedule = read('src/views/high-temp-box/composables/useHighTempBox.ts')
 assert.match(highTempBoxSchedule, /listDeviceInstances/, 'high-temp-box host tabs should be backed by device instance inventory')
+assert.match(highTempBoxSchedule, /async\s+function\s+refreshHostDeviceNames\(\)\s*\{[\s\S]*const\s+authOk\s*=\s*await\s+initAuth\(\)[\s\S]*if\s*\(!authOk\)\s*return[\s\S]*listDeviceInstances/, 'high-temp-box should initialize auth before requesting device instances')
+assert.match(highTempBoxSchedule, /async\s+function\s+getRequiredAuthHeaders\(\)/, 'high-temp-box should centralize auth headers for protected mutations')
+assert.match(highTempBoxSchedule, /const\s+headers\s*=\s*await\s+getRequiredAuthHeaders\(\)[\s\S]*changeHighTempBoxOrderStatus\([\s\S]*headers/, 'high-temp-box start experiment should pass auth headers to status mutations')
+assert.doesNotMatch(highTempBoxSchedule, /changeHighTempBoxOrderStatus\([\s\S]{0,120}undefined,[\s\S]{0,120}\{(?:\s*runningInstrumentIds|\s*completedInstrumentIds)/, 'high-temp-box status mutations should not pass undefined auth headers')
 assert.match(highTempBoxSchedule, /function\s+isHighTempBoxHostName/, 'high-temp-box host tabs should filter concrete high-temp-box instance names')
 assert.match(highTempBoxSchedule, /filter\(isHighTempBoxHostName\)/, 'high-temp-box host tabs should exclude test platforms and generic device names')
 assert.doesNotMatch(highTempBoxSchedule, /hostDeviceTabs\s*=\s*computed\(\(\)\s*=>\s*\{[\s\S]*workOrders\.value\.map\(\(order\)\s*=>\s*getOrderHostDeviceName\(order\)\)/, 'high-temp-box host tabs should not be derived from work-order testPlatform/deviceName values')
