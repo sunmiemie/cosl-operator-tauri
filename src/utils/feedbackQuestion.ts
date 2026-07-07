@@ -178,11 +178,11 @@ function findReportData(
   areaPosition?: AreaPosition,
   detailId?: number
 ): { error?: { url: string[]; desc: string }; question?: { url: string[]; desc: string }; warn?: { url: string[]; desc: string } } {
-  if (!reportData?.json?.threeD) return {}
+  if (!reportData?.json) return {}
   
-  const threeD = reportData.json.threeD as Record<string, unknown>
+  const threeD = (reportData.json.threeD || {}) as Record<string, unknown>
   const eyesKey = type === 'eyes' ? 'eyes' : type === 'eyesBak' ? 'eyesBak' : 'xray'
-  const eyesData = threeD[eyesKey] as { total?: Record<string, unknown[]>; area?: Record<string, unknown>[] } | undefined
+  const eyesData = (type === 'xray' ? reportData.json.xray : threeD[eyesKey]) as { total?: Record<string, unknown[]>; area?: Record<string, unknown>[] } | undefined
   
   if (!eyesData) return {}
   
