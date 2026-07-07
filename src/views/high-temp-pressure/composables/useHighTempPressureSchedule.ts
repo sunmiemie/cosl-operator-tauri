@@ -7,10 +7,79 @@ import {
   saveHighTempPressureInstrumentSchedule,
   type HighTempPressureOrderDTO,
 } from '@/services/high-temp-pressure-api'
+import { listDeviceInstances, type DeviceInstanceDTO } from '@/services/device-instance-api'
 import { ElMessage } from 'element-plus'
 import type { InstrumentItem, InstrumentScheduleSegment, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
 const HTP_PROGRESS_STORAGE_KEY = 'high-temp-pressure-progress'
+const HIGH_TEMP_PRESSURE_MODEL_KEYWORDS = ['高温高压井', '高温高压', '高压井']
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== 'string' && typeof value !== 'number') continue
+    const text = String(value).trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function removeInstanceSuffix(value: string) {
+  return value.replace(/[-_#]\d+$/u, '').trim()
+}
+
+function hasChineseText(value: string) {
+  return /[\u3400-\u9fff]/u.test(value)
+}
+
+function isLegacyModelValue(value: string, inferredName: string) {
+  const text = value.trim()
+  if (!text || hasChineseText(text)) return false
+  if (inferredName && hasChineseText(inferredName)) return true
+  return /^\d+$/u.test(text) || /^[A-Za-z]+[-_][A-Za-z0-9]+$/u.test(text) || /^[A-Z0-9_&-]{3,}$/u.test(text)
+}
+
+function getDeviceInstanceName(row: DeviceInstanceDTO) {
+  return firstText(row.deviceName, row.device_name, row.psi_name)
+}
+
+function getHostModelDisplayName(row: DeviceInstanceDTO) {
+  const deviceName = getDeviceInstanceName(row)
+  const deviceModelName = removeInstanceSuffix(deviceName)
+  const explicitModelName = firstText(row.psimodel_name, row.host_model_name, row.hostModelName)
+
+  if (deviceModelName && explicitModelName && isLegacyModelValue(explicitModelName, deviceModelName)) {
+    return deviceModelName
+  }
+  if (explicitModelName) return removeInstanceSuffix(explicitModelName)
+
+  const model = firstText(row.model, row.model_name, row.modelName)
+  if (deviceModelName && (!model || isLegacyModelValue(model, deviceModelName))) return deviceModelName
+  return removeInstanceSuffix(model)
+}
+
+function isHighTempPressureDevice(row: DeviceInstanceDTO) {
+  const texts = [
+    getHostModelDisplayName(row),
+    firstText(row.model, row.model_name, row.modelName),
+    firstText(row.psimodel_name),
+    getDeviceInstanceName(row),
+  ].filter(Boolean)
+
+  return HIGH_TEMP_PRESSURE_MODEL_KEYWORDS.some((keyword) => texts.some((text) => text.includes(keyword)))
+}
+
+function normalizeDeviceInstanceList(response: unknown): DeviceInstanceDTO[] {
+  const payload = (response as { data?: unknown })?.data ?? response ?? {}
+  const list = Array.isArray(payload)
+    ? payload
+    : (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).list ??
+      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).records ??
+      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).results ??
+      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).items ??
+      []
+
+  return Array.isArray(list) ? list as DeviceInstanceDTO[] : []
+}
 
 function getMonday(d: Date) {
   const dt = new Date(d)
@@ -111,18 +180,20 @@ function normalizeInstrumentItems(dto: HighTempPressureOrderDTO, useDevice: stri
 function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
   const statusCode = Number(dto.status)
   const taskNumber = dto.task_number?.trim() || `HTP-${dto.id}`
-  const useDevice = dto.use_device?.trim() || dto.device_name?.trim() || dto.test_platform?.trim() || '-'
+  const useDevice = dto.use_device?.trim() || ''
+  const displayDevice = dto.device_name?.trim() || dto.test_platform?.trim() || useDevice || '-'
   const itemsDto = normalizeInstrumentItems(dto, useDevice, taskNumber)
   const items: InstrumentItem[] = itemsDto.map((it, idx) => {
     const name = (it.instrument_name || '').trim() || useDevice || '仪器'
     const sn = (it.instrument_sn || '').trim() || `${taskNumber}-${idx + 1}`
+    const instrumentUseDevice = it.use_device?.trim() || useDevice
     const scheduleSegments: InstrumentScheduleSegment[] = Array.isArray(it.schedule_segments)
       ? it.schedule_segments
           .map((segment) => {
             const scheduledStartAt = segment?.scheduled_start_at || ''
             const scheduledEndAt = segment?.scheduled_end_at || ''
             if (!scheduledStartAt || !scheduledEndAt) return null
-            return { scheduledStartAt, scheduledEndAt }
+            return { scheduledStartAt, scheduledEndAt, useDevice: segment?.use_device?.trim() || instrumentUseDevice }
           })
           .filter(Boolean) as InstrumentScheduleSegment[]
       : []
@@ -138,6 +209,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
       scheduledStartAt: it.scheduled_start_at || null,
       scheduledEndAt: it.scheduled_end_at || null,
       scheduleSegments,
+      useDevice: instrumentUseDevice,
       status: Number(it.instrument_status ?? (it.is_completed ? 2 : 0)),
       completed: it.is_completed === true || Number(it.instrument_status) === 2,
     }
@@ -169,8 +241,9 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     client: dto.client || '',
     plannedTime: dto.planned_time || '',
     receivingNo: items[0]?.sn || taskNumber,
-    vesselType: useDevice,
-    type: useDevice,
+    useDevice: useDevice,
+    vesselType: displayDevice,
+    type: displayDevice,
     targetTemp: formatDisplayValue(dto.target_temp, 'C'),
     targetPressure: formatDisplayValue(dto.target_pressure, 'MPa'),
     keepCondition: formatHoldTime(dto.hold_time),
@@ -199,6 +272,8 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
 export function useHighTempPressureSchedule() {
   const { initAuth, validateToken, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
+  const activeHostDeviceName = ref('')
+  const currentAssignOrderId = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
   const selectedScheduledOrderIds = ref<string[]>([])
   const isDragging = ref(false)
@@ -219,6 +294,7 @@ export function useHighTempPressureSchedule() {
   const scheduledEvents = ref<Record<string, ScheduledEvent[]>>({})
   const pendingScheduleEvents = ref<Record<string, ScheduledEvent[] | null>>({})
   const workOrders = ref<WorkOrder[]>([])
+  const hostDeviceNames = ref<string[]>([])
   const workOrdersLoading = ref(false)
   const workOrdersError = ref<string | null>(null)
 
@@ -359,12 +435,32 @@ export function useHighTempPressureSchedule() {
 
   hydrateProgressState()
 
+  async function refreshHostDeviceNames() {
+    const response = await listDeviceInstances(
+      { currentPage: 1, size: 2000 },
+      getAuthHeaders()
+    )
+    if (!response.success || !response.data || response.data.code !== 0) {
+      console.warn('加载高温高压井主机列表失败', response.error || response.data?.msg || response.data?.message)
+      return
+    }
+
+    const names = normalizeDeviceInstanceList(response.data.data)
+      .filter(isHighTempPressureDevice)
+      .map(getDeviceInstanceName)
+      .filter(isHighTempPressureHostName)
+
+    hostDeviceNames.value = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    syncActiveHostDeviceName()
+  }
+
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     workOrdersError.value = null
 
     try {
       await initAuth()
+      await refreshHostDeviceNames()
 
       const byId = new Map<string, WorkOrder>()
       const pageSize = 100
@@ -440,6 +536,7 @@ export function useHighTempPressureSchedule() {
       runningInstrumentIds.value = nextRunningInstrumentIds
 
       workOrders.value = all
+      syncActiveHostDeviceName()
       restoreScheduledEvents(all)
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => (scheduledEvents.value[id] || []).length)
       persistProgressState()
@@ -608,7 +705,14 @@ export function useHighTempPressureSchedule() {
   async function persistScheduledEvent(instrumentId: string, fallback?: ScheduledEvent[]) {
     const instrument = getInstrumentById(instrumentId)
     const schedule = getScheduleChangePayload(instrumentId)
+    const order = getOrderByInstrumentId(instrumentId)
     if (!instrument?.dbId) return true
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim() || instrument.useDevice || order?.useDevice || ''
+    if (schedule && !scheduleHostDeviceName) {
+      if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
+      ElMessage.warning('请先选择主机后再保存排期')
+      return false
+    }
 
     markPendingSchedule(instrumentId, getInstrumentEvents(instrumentId))
     try {
@@ -625,7 +729,11 @@ export function useHighTempPressureSchedule() {
             {
               scheduled_start_at: schedule.scheduledStartAt,
               scheduled_end_at: schedule.scheduledEndAt,
-              schedule_segments: schedule.scheduleSegments,
+              use_device: scheduleHostDeviceName,
+              schedule_segments: schedule.scheduleSegments.map((segment) => ({
+                ...segment,
+                use_device: scheduleHostDeviceName,
+              })),
             },
             getAuthHeaders()
           )
@@ -643,17 +751,18 @@ export function useHighTempPressureSchedule() {
       }
       instrument.scheduledStartAt = resp.data.data?.scheduled_start_at || null
       instrument.scheduledEndAt = resp.data.data?.scheduled_end_at || null
+      instrument.useDevice = resp.data.data?.use_device?.trim() || instrument.useDevice || order?.useDevice || ''
+      if (order && instrument.useDevice && !order.useDevice) order.useDevice = instrument.useDevice
       instrument.scheduleSegments = Array.isArray(resp.data.data?.schedule_segments)
         ? resp.data.data!.schedule_segments!
             .map((segment) => {
               const scheduledStartAt = segment?.scheduled_start_at || ''
               const scheduledEndAt = segment?.scheduled_end_at || ''
               if (!scheduledStartAt || !scheduledEndAt) return null
-              return { scheduledStartAt, scheduledEndAt }
+              return { scheduledStartAt, scheduledEndAt, useDevice: segment?.use_device?.trim() || instrument.useDevice }
             })
             .filter(Boolean) as InstrumentScheduleSegment[]
         : []
-      const order = getOrderByInstrumentId(instrumentId)
       setInstrumentEvents(instrumentId, order ? eventsFromInstrument(instrument, order.id) : [])
       return true
     } finally {
@@ -673,6 +782,40 @@ export function useHighTempPressureSchedule() {
     return map
   })
 
+  function getScheduledEventSegmentUseDevice(ev: ScheduledEvent) {
+    const instrument = getInstrumentById(ev.instrumentId)
+    const matchedSegment = instrument?.scheduleSegments?.find((segment) => {
+      const start = parseBackendDateTime(segment.scheduledStartAt)
+      if (!start) return false
+      const segmentDateStr = fmtDate(start)
+      const segmentStartTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
+      return segmentDateStr === ev.dateStr && segmentStartTimeKey === ev.startTimeKey
+    })
+    return matchedSegment?.useDevice?.trim() || ''
+  }
+
+  function getScheduledEventHostDeviceName(ev: ScheduledEvent) {
+    const order = getOrderByInstrumentId(ev.instrumentId)
+    const instrument = getInstrumentById(ev.instrumentId)
+    const segmentUseDevice = getScheduledEventSegmentUseDevice(ev)
+    return segmentUseDevice || instrument?.useDevice || order?.useDevice || '-'
+  }
+
+  function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getScheduledEventHostDeviceName(ev) === activeScheduleHostName
+  }
+
+  function isScheduledInstrumentVisibleInActiveHost(instrumentId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    return getInstrumentEvents(instrumentId).some((ev) => doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName))
+  }
+
+  function pruneSelectedScheduledOrderIdsForActiveHost() {
+    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => isScheduledInstrumentVisibleInActiveHost(id))
+  }
+
   type ScheduledLayoutItem = {
     eventId: string
     instrumentId: string
@@ -685,22 +828,25 @@ export function useHighTempPressureSchedule() {
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
-    const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[] }>()
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[]; hostDeviceName: string }>()
     Object.values(scheduledEvents.value).forEach((events) => {
       events.forEach((ev) => {
+        if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
         const group = groupedEvents.get(ev.eventId)
         if (group) {
           group.instrumentIds.push(ev.instrumentId)
           return
         }
-        groupedEvents.set(ev.eventId, { ...ev, instrumentIds: [ev.instrumentId] })
+        groupedEvents.set(ev.eventId, { ...ev, instrumentIds: [ev.instrumentId], hostDeviceName: getScheduledEventHostDeviceName(ev) })
       })
     })
 
-    const dayMap: Record<string, (ScheduledEvent & { instrumentIds: string[] })[]> = {}
+    const dayMap: Record<string, (ScheduledEvent & { instrumentIds: string[]; hostDeviceName: string })[]> = {}
     Array.from(groupedEvents.values()).forEach((ev) => {
       if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
       dayMap[ev.dateStr].push(ev)
@@ -756,6 +902,7 @@ export function useHighTempPressureSchedule() {
           lane: laneById[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
+          hostDeviceName: x.ev.hostDeviceName,
         })
       })
     })
@@ -768,6 +915,41 @@ export function useHighTempPressureSchedule() {
     return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
   })
 
+  function isHighTempPressureHostName(name?: string | null) {
+    const text = name?.trim()
+    if (!text || text === '-') return false
+    if (!text.includes('高温高压井')) return false
+    return !['测试台', '测试使用设备', '测试设备'].some((keyword) => text.includes(keyword))
+  }
+
+  function collectHostDeviceNames(order: WorkOrder) {
+    const names = [
+      order.useDevice?.trim(),
+      ...order.items.flatMap((instrument) => [
+        instrument.useDevice?.trim(),
+        ...(instrument.scheduleSegments || []).map((segment) => segment.useDevice?.trim()),
+      ]),
+    ]
+    return names.filter((name): name is string => isHighTempPressureHostName(name))
+  }
+
+  const hostDeviceTabs = computed(() => {
+    const names = Array.from(
+      new Set([
+        ...hostDeviceNames.value,
+        ...workOrders.value.flatMap((order) => collectHostDeviceNames(order)),
+      ])
+    )
+    return names.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  })
+
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledOrderIdsForActiveHost()
+    }
+  }
+
   const unscheduledOrders = computed(() => {
     const keyword = searchKeyword.value.trim().toLowerCase()
 
@@ -776,6 +958,7 @@ export function useHighTempPressureSchedule() {
       (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
+        (order.useDevice || '').toLowerCase().includes(keyword) ||
         order.type.toLowerCase().includes(keyword) ||
         order.applicant.toLowerCase().includes(keyword) ||
         order.receivingNo.toLowerCase().includes(keyword) ||
@@ -798,8 +981,57 @@ export function useHighTempPressureSchedule() {
 
   const getOrderByInstrumentId = (id: string) => workOrders.value.find((o) => o.items.some((item) => item.id === id))
 
+  function assignHostDeviceToOrder(order: WorkOrder, hostName: string, instrumentIds?: string[]) {
+    const targetInstrumentIds = instrumentIds ? new Set(instrumentIds) : null
+    order.useDevice = hostName
+    order.items.forEach((instrument) => {
+      if (targetInstrumentIds && !targetInstrumentIds.has(instrument.id)) return
+      if (!isInstrumentPending(instrument.id)) return
+      instrument.useDevice = hostName
+    })
+  }
+
+  function restoreHostDeviceToOrder(
+    order: WorkOrder,
+    orderUseDevice: string | undefined,
+    instrumentUseDevices: Map<string, string | undefined>
+  ) {
+    order.useDevice = orderUseDevice
+    order.items.forEach((instrument) => {
+      instrument.useDevice = instrumentUseDevices.get(instrument.id)
+    })
+  }
+
+  function selectAssignOrder(orderId: string) {
+    currentAssignOrderId.value = currentAssignOrderId.value === orderId ? '' : orderId
+  }
+
+  function assignHostDeviceToCurrentOrder(hostName: string) {
+    const nextHostName = hostName.trim()
+    if (!nextHostName) {
+      ElMessage.warning('全部不能作为主机分配，请选择具体主机')
+      return
+    }
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledOrderIdsForActiveHost()
+    if (!currentAssignOrderId.value) {
+      return
+    }
+
+    const order = getOrderById(currentAssignOrderId.value)
+    if (!order) {
+      currentAssignOrderId.value = ''
+      ElMessage.warning('当前待分配工单不存在，请重新选择')
+      return
+    }
+
+    assignHostDeviceToOrder(order, nextHostName)
+    ElMessage.success(`已分配主机：${nextHostName}`)
+  }
+
   const selectedScheduledOrders = computed<ScheduledSelection[]>(() => {
     return selectedScheduledOrderIds.value
+      .filter((id) => isScheduledInstrumentVisibleInActiveHost(id))
       .map((id) => ({ instrument: getInstrumentById(id), order: getOrderByInstrumentId(id) }))
       .filter((obj) => obj.instrument && obj.order && isInstrumentPending(obj.instrument.id))
       .map((obj) => ({ instrument: obj.instrument as InstrumentItem, order: obj.order as WorkOrder }))
@@ -811,7 +1043,9 @@ export function useHighTempPressureSchedule() {
 
     const order = getOrderByInstrumentId(id)
     const instrument = getInstrumentById(id)
-    return order && instrument && isInstrumentPending(instrument.id) ? { order, instrument } : null
+    return order && instrument && isInstrumentPending(instrument.id) && isScheduledInstrumentVisibleInActiveHost(instrument.id)
+      ? { order, instrument }
+      : null
   })
 
   function prevWeek() {
@@ -899,6 +1133,22 @@ export function useHighTempPressureSchedule() {
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
     const order = getOrderByInstrumentId(instrumentId)
+    if (!order) {
+      ElMessage.warning('未找到工单，无法保存排期')
+      return
+    }
+    const previousOrderUseDevice = order.useDevice
+    const previousInstrumentUseDevices = new Map(order.items.map((instrument) => [instrument.id, instrument.useDevice] as const))
+    const instrument = getInstrumentById(instrumentId)
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim() || instrument?.useDevice || order.useDevice || ''
+    let assignedHostForSchedule = false
+    if (!scheduleHostDeviceName) {
+      ElMessage.warning('请先选择主机后再排程')
+      return
+    }
+    assignHostDeviceToOrder(order, scheduleHostDeviceName, [instrumentId])
+    assignedHostForSchedule = true
+    if (instrument) instrument.useDevice = scheduleHostDeviceName
     const currentEvents = getInstrumentEvents(instrumentId)
     if (currentEvents.some((event) => event.dateStr === dateStr && event.startTimeKey === timeKey)) return
 
@@ -912,7 +1162,7 @@ export function useHighTempPressureSchedule() {
       ...currentEvents,
       {
         eventId: createScheduleEventId(order?.id || instrumentId, dateStr, timeKey, span),
-        orderId: order?.id || instrumentId,
+        orderId: order.id,
         instrumentId,
         dateStr,
         startTimeKey: timeKey,
@@ -930,10 +1180,16 @@ export function useHighTempPressureSchedule() {
       if (!saved) {
         scheduledEvents.value = previousEvents
         selectedScheduledOrderIds.value = previousSelected
+        if (assignedHostForSchedule) {
+          restoreHostDeviceToOrder(order, previousOrderUseDevice, previousInstrumentUseDevices)
+        }
       }
     } catch (error) {
       scheduledEvents.value = previousEvents
       selectedScheduledOrderIds.value = previousSelected
+      if (assignedHostForSchedule) {
+        restoreHostDeviceToOrder(order, previousOrderUseDevice, previousInstrumentUseDevices)
+      }
       ElMessage.error(error instanceof Error ? error.message : '排期保存失败')
     }
   }
@@ -1293,6 +1549,9 @@ export function useHighTempPressureSchedule() {
 
   return {
     searchKeyword,
+    activeHostDeviceName,
+    currentAssignOrderId,
+    hostDeviceTabs,
     draggedOrder,
     workOrders,
     workOrdersLoading,
@@ -1327,6 +1586,8 @@ export function useHighTempPressureSchedule() {
     handleDragLeave,
     handleDrop,
     scheduleInstrument,
+    selectAssignOrder,
+    assignHostDeviceToCurrentOrder,
     handleSelectScheduledOrder,
     handleUnschedule,
     clearSelectedSchedule,

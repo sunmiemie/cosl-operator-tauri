@@ -74,7 +74,7 @@ const allFilesDone = computed(() => Object.values(fileStatuses.value).every((sta
 const savePath = computed(() => props.exportedCaptureDir || '未获取到保存目录，请先完成视频识别结果保存')
 const savedFiles = [
   { icon: '🗂', name: 'video_readings_0.5s.json' },
-  { icon: '📄', name: '高温高压测试报告.doc' },
+  { icon: '📄', name: '高温高压测试报告.pdf' },
 ]
 const shutdownItems = [
   '确定配电柜总电源开关关闭',
@@ -355,7 +355,7 @@ const finishShutdown = () => {
           </div>
           <div class="file-gen-item">
             <div class="file-gen-icon doc">📄</div>
-            <div class="file-gen-info"><div class="file-gen-name">高温高压测试报告.doc</div><div class="file-gen-desc">正式测试报告文档</div></div>
+            <div class="file-gen-info"><div class="file-gen-name">高温高压测试报告.pdf</div><div class="file-gen-desc">正式测试报告 PDF</div></div>
             <div class="file-gen-status" :class="fileStatuses.report">{{ statusText(fileStatuses.report) }}</div>
           </div>
         </div>

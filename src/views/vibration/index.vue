@@ -31,6 +31,8 @@ const {
   refreshWorkOrders,
   selectedScheduledOrderIds,
   selectedScheduledOrders,
+  activeHostDeviceName,
+  hostDeviceTabs,
   calBase,
   currentWeekDays,
   weekLabel,
@@ -64,6 +66,7 @@ const {
   getVisibleOrderInstruments,
   getInstrumentStatusText,
   selectScheduledOrder,
+  assignHostDeviceToCurrentScope,
   getScheduleChangePayload,
 } = useVibrationSchedule()
 
@@ -506,6 +509,8 @@ function toggleShutdownCheck(id: number) {
         :is-resizing="isResizing"
         :selected-scheduled-order-ids="selectedScheduledOrderIds"
         :selected-scheduled-orders="selectedScheduledOrders"
+        :host-device-tabs="hostDeviceTabs"
+        :active-host-device-name="activeHostDeviceName"
         :fmt-date="fmtDate"
         :get-cell-key="getCellKey"
         :get-order-by-id="getOrderById"
@@ -526,6 +531,7 @@ function toggleShutdownCheck(id: number) {
         @drag-over="handleDragOver"
         @drop="handleDrop"
         @select-scheduled-order="selectScheduledOrder"
+        @assign-host-device="assignHostDeviceToCurrentScope"
         @unschedule="handleUnschedule"
         @start-experiment="startExperiment"
       />

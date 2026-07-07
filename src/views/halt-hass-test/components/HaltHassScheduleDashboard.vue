@@ -16,7 +16,10 @@ const {
   refreshWorkOrders,
   calBase,
   selectedScheduledOrder,
+  activeHostDeviceName,
+  hostDeviceTabs,
   selectedScheduledOrderInfo,
+  assignHostDeviceToCurrentScope,
   filteredOrders,
   currentWeekDays,
   weekLabel,
@@ -204,6 +207,19 @@ function startSelectedOrder() {
         <input v-model="searchKeyword" type="text" placeholder="搜索工单号/工艺/电路板组" />
         <button v-if="searchKeyword" class="clear-btn" @click="searchKeyword = ''">
           <Icon icon="mdi:close" />
+        </button>
+      </div>
+
+      <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
+        <button
+          v-for="host in hostDeviceTabs"
+          :key="host"
+          class="host-filter-tab"
+          :class="{ active: activeHostDeviceName === host }"
+          :title="host"
+          @click="assignHostDeviceToCurrentScope(host)"
+        >
+          {{ host }}
         </button>
       </div>
 
@@ -520,6 +536,9 @@ function startSelectedOrder() {
 .remove-btn { width:18px; height:18px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; border:none; border-radius:4px; background:transparent; color:var(--color-text-tertiary); cursor:pointer; opacity:.6; transition:all .2s; }
 .scheduled-item:hover .remove-btn { opacity:1; pointer-events:auto; }
 .remove-btn:hover { color:#fff; background:rgba(255,255,255,.2); }
+.host-filter-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 10px 10px; border-bottom:1px solid var(--color-border); }
+.host-filter-tab { height:30px; max-width:136px; padding:0 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); font-size:12px; font-weight:700; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.host-filter-tab.active { border-color:var(--color-accent-blue); background:rgba(59,130,246,.12); color:var(--color-accent-blue); }
 .resize-handle,.resize-handle-top { position:absolute; left:0; right:0; height:10px; cursor:ns-resize; z-index:2; }
 .resize-handle { bottom:0; background:linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.18)); }
 .resize-handle-top { top:0; background:linear-gradient(0deg, rgba(255,255,255,0), rgba(255,255,255,.18)); }

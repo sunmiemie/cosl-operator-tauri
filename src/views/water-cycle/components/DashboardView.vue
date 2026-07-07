@@ -17,11 +17,11 @@ const { initAuth, getAuthHeaders } = useAuth()
 
 // 引入抽象出的排程逻辑
 const {
-  searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, currentWeekDays, weekLabel, timeSlots, calBase,
+  searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, activeHostDeviceName, hostDeviceTabs, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, getCellKey, getMonday,
   handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
   workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload,
-  getActiveInstruments, isInstrumentRunning, markInstrumentsRunning
+  getActiveInstruments, isInstrumentRunning, markInstrumentsRunning, assignHostDeviceToCurrentScope
 } = useSchedule()
 
 const timeColWidth = 60
@@ -321,6 +321,19 @@ async function onStartupComplete() {
         <button v-if="searchKeyword" class="clear-btn" @click="searchKeyword = ''"><Icon icon="mdi:close" /></button>
       </div>
       
+      <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
+        <button
+          v-for="host in hostDeviceTabs"
+          :key="host"
+          class="host-filter-tab"
+          :class="{ active: activeHostDeviceName === host }"
+          :title="host"
+          @click="assignHostDeviceToCurrentScope(host)"
+        >
+          {{ host }}
+        </button>
+      </div>
+
       <div class="table-content">
         <div v-if="unscheduledOrders.length === 0" class="empty-state"><p>无待排程工单</p></div>
         <div v-else class="table-wrapper">
@@ -810,6 +823,10 @@ async function onStartupComplete() {
 .step-item { display:grid; grid-template-columns:28px minmax(0,1fr); align-items:start; gap:10px; padding:12px; border-radius:12px; background:var(--color-bg-secondary); }
 .step-item span { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:999px; color:#fff; background:var(--color-primary); font-weight:800; }
 .step-item p { margin:4px 0 0; color:var(--color-text-primary); line-height:1.55; }
+
+.host-filter-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 10px 10px; border-bottom:1px solid var(--color-border); }
+.host-filter-tab { height:30px; max-width:136px; padding:0 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); font-size:12px; font-weight:700; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.host-filter-tab.active { border-color:var(--color-accent-blue); background:rgba(59,130,246,.12); color:var(--color-accent-blue); }
 
 @media (max-width: 1180px) {
   .layout-container { gap:12px; }

@@ -5,6 +5,13 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ab_glyph::FontArc;
+use image::codecs::jpeg::JpegEncoder;
+use image::{Rgb, RgbImage};
+use imageproc::drawing::{
+    draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut, draw_text_mut, text_size,
+};
+use imageproc::rect::Rect;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -66,11 +73,13 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
     if let Ok(current_dir) = std::env::current_dir() {
         let candidates = [
             current_dir.join(".venv-video").join("bin").join("python"),
+            current_dir.join(".venv-video").join("Scripts").join("python.exe"),
             current_dir
                 .join("..")
                 .join(".venv-video")
                 .join("bin")
                 .join("python"),
+            current_dir.join("..").join(".venv-video").join("Scripts").join("python.exe"),
             current_dir.join(".venv").join("Scripts").join("python.exe"),
             current_dir
                 .join("..")
@@ -100,7 +109,7 @@ fn ensure_video_dependencies(python_program: &str) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| format!("??????????: {}", e))?;
+        .map_err(|e| format!("检查高温高压井视频识别依赖失败: {}", e))?;
 
     if import_check.status.success() {
         return Ok(());
@@ -110,12 +119,12 @@ fn ensure_video_dependencies(python_program: &str) -> Result<(), String> {
         .trim()
         .to_string();
     Err(format!(
-        "?????????????? av?opencv-python-headless?numpy?Python: {}{}",
+        "当前 Python 缺少高温高压井视频识别依赖，请使用项目内 .venv-video 环境，或执行 python -m pip install av opencv-python-headless numpy。Python: {}{}",
         python_program,
         if detail.is_empty() {
             String::new()
         } else {
-            format!("???: {}", detail)
+            format!("；详情: {}", detail)
         }
     ))
 }
@@ -254,15 +263,365 @@ fn read_progress_file(output_dir: &Path) -> Result<serde_json::Value, String> {
     Ok(progress)
 }
 
-fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+const REPORT_PAGE_WIDTH: u32 = 1240;
+const REPORT_PAGE_HEIGHT: u32 = 1754;
+const REPORT_MARGIN: i32 = 82;
+
+fn load_report_font() -> Result<FontArc, String> {
+    let candidates = if cfg!(target_os = "windows") {
+        vec![
+            PathBuf::from(r"C:\Windows\Fonts\simhei.ttf"),
+            PathBuf::from(r"C:\Windows\Fonts\NotoSansSC-VF.ttf"),
+            PathBuf::from(r"C:\Windows\Fonts\Deng.ttf"),
+            PathBuf::from(r"C:\Windows\Fonts\msyh.ttc"),
+        ]
+    } else {
+        vec![
+            PathBuf::from("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+            PathBuf::from("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+            PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ]
+    };
+
+    for path in candidates {
+        if !path.exists() {
+            continue;
+        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        if let Ok(font) = FontArc::try_from_vec(bytes) {
+            return Ok(font);
+        }
+    }
+
+    Err("生成 PDF 失败: 未找到可用中文字体，请确认系统已安装 SimHei、Noto Sans SC 或 Microsoft YaHei 字体".to_string())
 }
 
-fn write_high_temp_pressure_word_report(
+fn text_value(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) if !text.trim().is_empty() => text.to_string(),
+        Some(serde_json::Value::Number(number)) => number.to_string(),
+        Some(serde_json::Value::Bool(value)) => {
+            if *value {
+                "是".to_string()
+            } else {
+                "否".to_string()
+            }
+        }
+        _ => "-".to_string(),
+    }
+}
+
+fn wrap_report_text(font: &FontArc, text: &str, font_size: f32, max_width: u32) -> Vec<String> {
+    let normalized = if text.trim().is_empty() { "-" } else { text };
+    let mut lines = Vec::new();
+    for raw_line in normalized.lines() {
+        let mut current = String::new();
+        for ch in raw_line.chars() {
+            let next = format!("{}{}", current, ch);
+            let (width, _) = text_size(font_size, font, &next);
+            if width > max_width && !current.is_empty() {
+                lines.push(current);
+                current = ch.to_string();
+            } else {
+                current = next;
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    if lines.is_empty() {
+        lines.push("-".to_string());
+    }
+    lines
+}
+
+fn draw_report_text(
+    image: &mut RgbImage,
+    font: &FontArc,
+    text: &str,
+    x: i32,
+    y: i32,
+    size: f32,
+    color: Rgb<u8>,
+) {
+    draw_text_mut(image, color, x, y, size, font, text);
+}
+
+fn draw_centered_report_text(
+    image: &mut RgbImage,
+    font: &FontArc,
+    text: &str,
+    y: i32,
+    size: f32,
+    color: Rgb<u8>,
+) {
+    let (width, _) = text_size(size, font, text);
+    let x = ((REPORT_PAGE_WIDTH as i32 - width as i32) / 2).max(0);
+    draw_report_text(image, font, text, x, y, size, color);
+}
+
+fn draw_section_title(image: &mut RgbImage, font: &FontArc, title: &str, y: &mut i32) {
+    let blue = Rgb([37, 99, 235]);
+    draw_filled_rect_mut(
+        image,
+        Rect::at(REPORT_MARGIN, *y + 8).of_size(8, 24),
+        blue,
+    );
+    draw_report_text(
+        image,
+        font,
+        title,
+        REPORT_MARGIN + 18,
+        *y,
+        27.0,
+        Rgb([17, 24, 39]),
+    );
+    *y += 48;
+}
+
+fn draw_key_value_table(
+    image: &mut RgbImage,
+    font: &FontArc,
+    rows: &[(String, String)],
+    y: &mut i32,
+) {
+    let x = REPORT_MARGIN;
+    let width = REPORT_PAGE_WIDTH as i32 - REPORT_MARGIN * 2;
+    let label_width = 230;
+    let border = Rgb([148, 163, 184]);
+    let label_bg = Rgb([239, 246, 255]);
+    let text_color = Rgb([31, 41, 55]);
+    let muted = Rgb([71, 85, 105]);
+
+    for (label, value) in rows {
+        let wrapped = wrap_report_text(font, value, 22.0, (width - label_width - 34) as u32);
+        let row_height = (wrapped.len() as i32 * 30 + 22).max(58);
+        draw_filled_rect_mut(
+            image,
+            Rect::at(x, *y).of_size(label_width as u32, row_height as u32),
+            label_bg,
+        );
+        draw_hollow_rect_mut(
+            image,
+            Rect::at(x, *y).of_size(width as u32, row_height as u32),
+            border,
+        );
+        draw_line_segment_mut(
+            image,
+            ((x + label_width) as f32, *y as f32),
+            ((x + label_width) as f32, (*y + row_height) as f32),
+            border,
+        );
+        draw_report_text(image, font, label, x + 18, *y + 15, 22.0, muted);
+        for (index, line) in wrapped.iter().enumerate() {
+            draw_report_text(
+                image,
+                font,
+                line,
+                x + label_width + 18,
+                *y + 14 + index as i32 * 30,
+                22.0,
+                text_color,
+            );
+        }
+        *y += row_height;
+    }
+    *y += 30;
+}
+
+fn draw_data_table(
+    image: &mut RgbImage,
+    font: &FontArc,
+    headers: &[&str],
+    rows: &[Vec<String>],
+    column_widths: &[i32],
+    y: &mut i32,
+) {
+    let x = REPORT_MARGIN;
+    let border = Rgb([148, 163, 184]);
+    let header_bg = Rgb([226, 232, 240]);
+    let body_bg = Rgb([255, 255, 255]);
+    let text_color = Rgb([31, 41, 55]);
+    let muted = Rgb([71, 85, 105]);
+    let table_width: i32 = column_widths.iter().sum();
+    let header_height = 54;
+
+    draw_filled_rect_mut(
+        image,
+        Rect::at(x, *y).of_size(table_width as u32, header_height as u32),
+        header_bg,
+    );
+    draw_hollow_rect_mut(
+        image,
+        Rect::at(x, *y).of_size(table_width as u32, header_height as u32),
+        border,
+    );
+    let mut current_x = x;
+    for (index, header) in headers.iter().enumerate() {
+        if index > 0 {
+            draw_line_segment_mut(
+                image,
+                (current_x as f32, *y as f32),
+                (current_x as f32, (*y + header_height) as f32),
+                border,
+            );
+        }
+        draw_report_text(image, font, header, current_x + 12, *y + 14, 21.0, muted);
+        current_x += column_widths[index];
+    }
+    *y += header_height;
+
+    if rows.is_empty() {
+        draw_hollow_rect_mut(
+            image,
+            Rect::at(x, *y).of_size(table_width as u32, 60),
+            border,
+        );
+        draw_report_text(image, font, "暂无数据", x + 18, *y + 16, 22.0, muted);
+        *y += 90;
+        return;
+    }
+
+    for row in rows {
+        let row_height = 68;
+        draw_filled_rect_mut(
+            image,
+            Rect::at(x, *y).of_size(table_width as u32, row_height as u32),
+            body_bg,
+        );
+        draw_hollow_rect_mut(
+            image,
+            Rect::at(x, *y).of_size(table_width as u32, row_height as u32),
+            border,
+        );
+        let mut current_x = x;
+        for (index, width) in column_widths.iter().enumerate() {
+            if index > 0 {
+                draw_line_segment_mut(
+                    image,
+                    (current_x as f32, *y as f32),
+                    (current_x as f32, (*y + row_height) as f32),
+                    border,
+                );
+            }
+            let value = row.get(index).map(String::as_str).unwrap_or("-");
+            let lines = wrap_report_text(font, value, 20.0, (*width - 22).max(20) as u32);
+            for (line_index, line) in lines.iter().take(2).enumerate() {
+                draw_report_text(
+                    image,
+                    font,
+                    line,
+                    current_x + 11,
+                    *y + 12 + line_index as i32 * 25,
+                    20.0,
+                    text_color,
+                );
+            }
+            current_x += *width;
+        }
+        *y += row_height;
+    }
+    *y += 30;
+}
+
+fn measurement_value(record: &serde_json::Value, preferred_id: &str, fallback_id: &str) -> String {
+    let measurements = record
+        .get("measurements")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for pattern in [preferred_id, fallback_id] {
+        if pattern.is_empty() {
+            continue;
+        }
+        if let Some(item) = measurements.iter().find(|measurement| {
+            measurement
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(|id| id.contains(pattern))
+                .unwrap_or(false)
+        }) {
+            let raw = text_value(item.get("raw"));
+            if raw != "-" {
+                return raw;
+            }
+            return text_value(item.get("value"));
+        }
+    }
+    "-".to_string()
+}
+
+fn write_image_pdf(report_path: &Path, jpeg_bytes: &[u8]) -> Result<(), String> {
+    fn push_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, id: usize, body: &[u8]) {
+        offsets[id] = pdf.len();
+        pdf.extend_from_slice(format!("{} 0 obj\n", id).as_bytes());
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+
+    let page_width = 595.28_f32;
+    let page_height = 841.89_f32;
+    let mut pdf = Vec::new();
+    let mut offsets = vec![0usize; 6];
+    pdf.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+
+    push_object(
+        &mut pdf,
+        &mut offsets,
+        1,
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+    );
+    push_object(
+        &mut pdf,
+        &mut offsets,
+        2,
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    );
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>",
+        page_width, page_height
+    );
+    push_object(&mut pdf, &mut offsets, 3, page.as_bytes());
+
+    offsets[4] = pdf.len();
+    pdf.extend_from_slice(b"4 0 obj\n");
+    pdf.extend_from_slice(
+        format!(
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+            REPORT_PAGE_WIDTH,
+            REPORT_PAGE_HEIGHT,
+            jpeg_bytes.len()
+        )
+        .as_bytes(),
+    );
+    pdf.extend_from_slice(jpeg_bytes);
+    pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+    let content = format!("q\n{:.2} 0 0 {:.2} 0 0 cm\n/Im0 Do\nQ\n", page_width, page_height);
+    let content_object = format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content);
+    push_object(&mut pdf, &mut offsets, 5, content_object.as_bytes());
+
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    for offset in offsets.iter().skip(1) {
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+            xref_offset
+        )
+        .as_bytes(),
+    );
+
+    fs::write(report_path, pdf).map_err(|e| format!("写入高温高压测试报告 PDF 失败: {}", e))
+}
+
+fn write_high_temp_pressure_pdf_report(
     readings_json_path: &Path,
     report_path: &Path,
 ) -> Result<(), String> {
@@ -276,6 +635,15 @@ fn write_high_temp_pressure_word_report(
         .cloned()
         .unwrap_or_default();
     let record_count = records.len();
+    let detected_count = records
+        .iter()
+        .filter(|record| {
+            record
+                .get("screen_detected")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        })
+        .count();
     let first_time = records
         .first()
         .and_then(|record| record.get("time_sec"))
@@ -291,39 +659,148 @@ fn write_high_temp_pressure_word_report(
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "-".to_string());
 
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>高温高压测试报告</title>
-  <style>
-    body {{ font-family: "Microsoft YaHei", Arial, sans-serif; line-height: 1.7; }}
-    h1 {{ text-align: center; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 18px; }}
-    td, th {{ border: 1px solid #666; padding: 8px 10px; }}
-    th {{ background: #f1f5f9; }}
-  </style>
-</head>
-<body>
-  <h1>高温高压测试报告</h1>
-  <table>
-    <tr><th>项目</th><th>内容</th></tr>
-    <tr><td>采样 JSON</td><td>{}</td></tr>
-    <tr><td>采样记录数</td><td>{}</td></tr>
-    <tr><td>首条时间秒</td><td>{}</td></tr>
-    <tr><td>末条时间秒</td><td>{}</td></tr>
-    <tr><td>生成时间戳</td><td>{}</td></tr>
-  </table>
-</body>
-</html>"#,
-        escape_html(&readings_json_path.to_string_lossy()),
-        record_count,
-        escape_html(&first_time),
-        escape_html(&last_time),
-        escape_html(&generated_at)
+    let font = load_report_font()?;
+    let mut page = RgbImage::from_pixel(REPORT_PAGE_WIDTH, REPORT_PAGE_HEIGHT, Rgb([255, 255, 255]));
+    let mut y = 80;
+    draw_centered_report_text(
+        &mut page,
+        &font,
+        "高温高压测试报告",
+        y,
+        42.0,
+        Rgb([15, 23, 42]),
     );
-    fs::write(report_path, html).map_err(|e| format!("写入高温高压测试报告失败: {}", e))
+    y += 58;
+    draw_centered_report_text(
+        &mut page,
+        &font,
+        "COSL 数字化实验室测试台软件",
+        y,
+        23.0,
+        Rgb([71, 85, 105]),
+    );
+    y += 72;
+    draw_line_segment_mut(
+        &mut page,
+        (REPORT_MARGIN as f32, y as f32),
+        ((REPORT_PAGE_WIDTH as i32 - REPORT_MARGIN) as f32, y as f32),
+        Rgb([203, 213, 225]),
+    );
+    y += 34;
+
+    draw_section_title(&mut page, &font, "基础信息", &mut y);
+    let file_name = readings_json_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| readings_json_path.to_string_lossy().to_string());
+    draw_key_value_table(
+        &mut page,
+        &font,
+        &[
+            ("报告类型".to_string(), "高温高压井视频识别测试报告".to_string()),
+            ("数据文件".to_string(), file_name),
+            ("原始路径".to_string(), readings_json_path.to_string_lossy().to_string()),
+            ("生成时间".to_string(), format!("{} 秒时间戳", generated_at)),
+        ],
+        &mut y,
+    );
+
+    draw_section_title(&mut page, &font, "采样摘要", &mut y);
+    draw_key_value_table(
+        &mut page,
+        &font,
+        &[
+            ("采样记录数".to_string(), format!("{} 条", record_count)),
+            ("识别成功数".to_string(), format!("{} 条", detected_count)),
+            ("首条时间".to_string(), format!("{} s", first_time)),
+            ("末条时间".to_string(), format!("{} s", last_time)),
+        ],
+        &mut y,
+    );
+
+    draw_section_title(&mut page, &font, "关键识别数据", &mut y);
+    let latest = records.last().cloned().unwrap_or_else(|| serde_json::json!({}));
+    let latest_rows = latest
+        .get("measurements")
+        .and_then(|value| value.as_array())
+        .map(|measurements| {
+            measurements
+                .iter()
+                .take(4)
+                .enumerate()
+                .map(|(index, item)| {
+                    vec![
+                        (index + 1).to_string(),
+                        text_value(item.get("part")),
+                        text_value(item.get("data")),
+                        text_value(item.get("raw")).replace('\n', " "),
+                        text_value(item.get("confidence")),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    draw_data_table(
+        &mut page,
+        &font,
+        &["序号", "部件", "数据项", "识别值", "置信度"],
+        &latest_rows,
+        &[80, 230, 350, 190, 150],
+        &mut y,
+    );
+
+    draw_section_title(&mut page, &font, "采样记录预览", &mut y);
+    let preview_rows = records
+        .iter()
+        .take(5)
+        .map(|record| {
+            vec![
+                text_value(record.get("time_sec")),
+                text_value(record.get("screen_detected")),
+                measurement_value(record, "upper_water_temp", "upper_inlet_oil_temp"),
+                measurement_value(record, "lower_water_temp", "lower_inlet_oil_temp"),
+                measurement_value(record, "vessel_250_pressure", "pressure"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    draw_data_table(
+        &mut page,
+        &font,
+        &["时间(s)", "识别", "上部水温", "下部水温", "容器压力"],
+        &preview_rows,
+        &[150, 150, 240, 240, 220],
+        &mut y,
+    );
+
+    draw_section_title(&mut page, &font, "报告确认", &mut y);
+    draw_key_value_table(
+        &mut page,
+        &font,
+        &[
+            ("总体结论".to_string(), "待人工复核".to_string()),
+            (
+                "附件说明".to_string(),
+                "完整采样明细请查看同目录 video_readings_0.5s.json".to_string(),
+            ),
+        ],
+        &mut y,
+    );
+
+    draw_report_text(
+        &mut page,
+        &font,
+        "本报告由测试端根据视频识别采样数据自动生成，样式参考管理端测试报告下载格式。",
+        REPORT_MARGIN,
+        REPORT_PAGE_HEIGHT as i32 - 72,
+        19.0,
+        Rgb([100, 116, 139]),
+    );
+
+    let mut jpeg_bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg_bytes, 92)
+        .encode_image(&page)
+        .map_err(|e| format!("生成高温高压测试报告页面失败: {}", e))?;
+    write_image_pdf(report_path, &jpeg_bytes)
 }
 
 fn copy_high_temp_pressure_report_output(source: &Path, target: &Path) -> Result<(), String> {
@@ -335,7 +812,7 @@ fn copy_high_temp_pressure_report_output(source: &Path, target: &Path) -> Result
     }
     fs::copy(&json_source, target.join("video_readings_0.5s.json"))
         .map_err(|e| format!("复制采样JSON失败: {}", e))?;
-    write_high_temp_pressure_word_report(&json_source, &target.join("高温高压测试报告.doc"))?;
+    write_high_temp_pressure_pdf_report(&json_source, &target.join("高温高压测试报告.pdf"))?;
 
     Ok(())
 }
@@ -655,4 +1132,59 @@ pub fn write_high_temp_pressure_curve_chart(
     Ok(serde_json::json!({
         "image_path": image_path.to_string_lossy(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_temp_pressure_pdf_report_is_written_as_pdf() {
+        let output_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("tmp")
+            .join("high-temp-pressure-report-test");
+        fs::create_dir_all(&output_dir).unwrap();
+        let json_path = output_dir.join("video_readings_0.5s.json");
+        let pdf_path = output_dir.join("高温高压测试报告.pdf");
+        fs::write(
+            &json_path,
+            r#"{
+  "schema_version": 2,
+  "record_count": 2,
+  "records": [
+    {
+      "time_sec": 0.0,
+      "frame_time_sec": 0.0,
+      "screen_detected": true,
+      "measurements": [
+        {"id": "vessel_250_upper_water_temp", "part": "250试验容器", "data": "上部水温", "raw": "150", "value": 150, "confidence": 0.98},
+        {"id": "vessel_250_lower_water_temp", "part": "250试验容器", "data": "下部水温", "raw": "149", "value": 149, "confidence": 0.97},
+        {"id": "vessel_250_pressure", "part": "250试验容器", "data": "容器压力", "raw": "70", "value": 70, "confidence": 0.96}
+      ]
+    },
+    {
+      "time_sec": 0.5,
+      "frame_time_sec": 0.5,
+      "screen_detected": true,
+      "measurements": [
+        {"id": "vessel_250_upper_water_temp", "part": "250试验容器", "data": "上部水温", "raw": "151", "value": 151, "confidence": 0.98},
+        {"id": "vessel_250_lower_water_temp", "part": "250试验容器", "data": "下部水温", "raw": "150", "value": 150, "confidence": 0.97},
+        {"id": "vessel_250_pressure", "part": "250试验容器", "data": "容器压力", "raw": "70", "value": 70, "confidence": 0.96}
+      ]
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        write_high_temp_pressure_pdf_report(&json_path, &pdf_path).unwrap();
+
+        let bytes = fs::read(&pdf_path).unwrap();
+        assert!(bytes.starts_with(b"%PDF-1.4"));
+        assert!(bytes
+            .windows(b"/Subtype /Image".len())
+            .any(|window| window == b"/Subtype /Image"));
+    }
 }

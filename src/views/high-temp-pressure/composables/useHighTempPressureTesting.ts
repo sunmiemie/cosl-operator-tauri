@@ -651,11 +651,10 @@ export function useHighTempPressureTesting() {
     await initConfig()
     if (!resume) resetCaptureState()
 
-    const configuredPythonPath = String(getConfigItem('flojoyPythonPath') || '').trim()
     captureStatusText.value = resume ? '正在恢复视频识别...' : '正在启动视频识别脚本...'
     try {
       const result = await invoke<any>('start_high_temp_pressure_video_stream', {
-        pythonPath: configuredPythonPath || null,
+        pythonPath: null,
         videoPath: videoPath.value,
         interval: SAMPLE_INTERVAL_SECONDS,
         outputDir: resume ? captureOutputDir.value : null,

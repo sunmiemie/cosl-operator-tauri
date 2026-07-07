@@ -178,6 +178,7 @@ export function useSimulationWellSchedule() {
       })
       .filter((order) => order.devices > 0 && order.deviceList.length > 0)
     restoreScheduledEvents(workOrders.value)
+    syncActiveHostDeviceName()
   }
 
   const fetchOrderDetail = async (dbId: number): Promise<SimulatedWellOrderDTO | null> => {
@@ -203,6 +204,7 @@ export function useSimulationWellSchedule() {
   const scheduledEventsTentative = ref<Record<string, ScheduledEvent>>({})
   const pendingScheduleEvents = ref<Record<string, ScheduledEvent[] | null>>({})
   const selectedScheduledEventIds = ref<string[]>([])
+  const activeHostDeviceName = ref('')
 
   function makeScheduleEventId(orderId: string, scheduleOwnerDeviceId: string) {
     return `${orderId}::${scheduleOwnerDeviceId}::evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -373,12 +375,15 @@ export function useSimulationWellSchedule() {
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const dayMap: Record<string, Array<ScheduledEvent & { isTentative: boolean }>> = {}
     Object.values(scheduledEvents.value).forEach((ev) => {
+      if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
       if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
       dayMap[ev.dateStr].push({ ...ev, isTentative: false })
     })
     Object.values(scheduledEventsTentative.value).forEach((ev) => {
+      if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
       if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
       dayMap[ev.dateStr].push({ ...ev, isTentative: true })
     })
@@ -488,7 +493,7 @@ export function useSimulationWellSchedule() {
   const getScheduledEvent = (eventId: string) => scheduledEvents.value[eventId] || scheduledEventsTentative.value[eventId] || null
 
   const selectedStartEventIds = computed(() => {
-    return selectedScheduledEventIds.value.filter((eventId) => !!getScheduledEvent(eventId))
+    return selectedScheduledEventIds.value.filter((eventId) => !!getScheduledEvent(eventId) && isScheduledEventVisibleInActiveHost(eventId))
   })
 
   const selectedStartDevices = computed<DownholeDevice[]>(() => {
@@ -551,6 +556,48 @@ export function useSimulationWellSchedule() {
   })
 
   const getDeviceRow = (deviceId: string) => deviceIndex.value.get(deviceId) || null
+
+  function getEventHostDeviceName(event?: ScheduledEvent | null) {
+    return event?.deviceName?.trim() || '-'
+  }
+
+  const hostDeviceTabs = computed(() => {
+    return Array.from(new Set(
+      Array.from(deviceIndex.value.values())
+        .map((row) => row.deviceName.trim())
+        .filter(Boolean)
+    )).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  })
+
+  function doesScheduledEventMatchActiveHostDevice(event: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getEventHostDeviceName(event) === activeScheduleHostName
+  }
+
+  function isScheduledEventVisibleInActiveHost(eventId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    const event = getScheduledEvent(eventId)
+    return !!event && doesScheduledEventMatchActiveHostDevice(event, activeScheduleHostName)
+  }
+
+  function pruneSelectedScheduledEventIdsForActiveHost() {
+    selectedScheduledEventIds.value = selectedScheduledEventIds.value.filter((eventId) => isScheduledEventVisibleInActiveHost(eventId))
+  }
+
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledEventIdsForActiveHost()
+    }
+  }
+
+  function assignHostDeviceToCurrentScope(hostName: string) {
+    const nextHostName = hostName.trim()
+    if (!nextHostName) return
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledEventIdsForActiveHost()
+  }
 
   const timeKeyToHour = (timeKey: string) => {
     const hh = timeKey.slice(0, 2)
@@ -724,18 +771,10 @@ export function useSimulationWellSchedule() {
     return persistOwnerSchedule(event.scheduleOwnerDeviceId, fallback)
   }
 
-  const scheduledOrderIds = computed(() => {
-    const ids = new Set<string>()
-    Object.values(scheduledEvents.value).forEach((event) => ids.add(event.orderId))
-    Object.values(scheduledEventsTentative.value).forEach((event) => ids.add(event.orderId))
-    return ids
-  })
-
   const unscheduledOrders = computed(() => {
     const kw = searchKeyword.value.trim().toLowerCase()
 
     return workOrders.value.filter((order) => {
-      if (scheduledOrderIds.value.has(order.id)) return false
       if (!kw) return true
       const deviceHay = order.deviceList.map((d) => `${d.name} ${d.code || ''} ${d.sn || ''}`).join(' ')
       const hay = `${order.id} ${order.customer} ${order.planTime} ${order.taskDesc} ${deviceHay}`.toLowerCase()
@@ -1126,6 +1165,8 @@ export function useSimulationWellSchedule() {
     slotHeightPx,
     isDragging,
     selectedScheduledEventIds,
+    activeHostDeviceName,
+    hostDeviceTabs,
     todayScheduledOrderIds,
     todayScheduledOrders,
     todayScheduledDeviceIds,
@@ -1150,6 +1191,7 @@ export function useSimulationWellSchedule() {
     handleUnschedule,
     handleUnscheduleTentative,
     handleSelectScheduledEvent,
+    assignHostDeviceToCurrentScope,
     consumeDevices,
     getWorkOrderById,
     getDeviceRow,

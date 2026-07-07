@@ -48,6 +48,7 @@ export function useVibrationSchedule() {
   const searchKeyword = ref('')
   const draggedOrder = ref<WorkOrder | null>(null)
   const selectedScheduledOrderIds = ref<string[]>([])
+  const activeHostDeviceName = ref('')
   const isDragging = ref(false)
   const slotHeightPx = 44
   const runningInstrumentIds = ref<Record<string, true>>({})
@@ -204,8 +205,11 @@ export function useVibrationSchedule() {
       const nextOrders = Array.from(byId.values())
       workOrders.value = nextOrders
       restoreScheduledEvents(nextOrders)
+      syncActiveHostDeviceName()
       reconcileRuntimeInstrumentCaches(nextOrders)
-      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter(id => byId.has(id))
+      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value
+        .filter(id => byId.has(id))
+        .filter(id => isScheduledOrderVisibleInActiveHost(id))
     } catch (e) {
       console.error('refreshWorkOrders error:', e)
     } finally {
@@ -540,12 +544,34 @@ export function useVibrationSchedule() {
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
+  }
+
+  function getOrderHostDeviceName(order?: WorkOrder) {
+    return order?.device?.trim() || '-'
+  }
+
+  function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getOrderHostDeviceName(getOrderById(ev.orderId)) === activeScheduleHostName
+  }
+
+  function isScheduledOrderVisibleInActiveHost(orderId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    return getOrderEvents(orderId).some((ev) => doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName))
+  }
+
+  function pruneSelectedScheduledOrderIdsForActiveHost() {
+    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => isScheduledOrderVisibleInActiveHost(id))
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const dayMap: Record<string, ScheduledEvent[]> = {}
     Object.values(scheduledEvents.value).forEach((events) => {
       events.forEach((ev) => {
+        if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
         if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
         dayMap[ev.dateStr].push(ev)
       })
@@ -599,6 +625,7 @@ export function useVibrationSchedule() {
           lane: laneByEventId[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
+          hostDeviceName: getOrderHostDeviceName(getOrderById(x.ev.orderId)),
         })
       })
     })
@@ -635,6 +662,25 @@ export function useVibrationSchedule() {
 
   const getOrderById = (id: string) => workOrders.value.find(w => w.id === id)
 
+  const hostDeviceTabs = computed(() => {
+    return Array.from(new Set(workOrders.value.map((order) => getOrderHostDeviceName(order)).filter((name) => name && name !== '-')))
+      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  })
+
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledOrderIdsForActiveHost()
+    }
+  }
+
+  function assignHostDeviceToCurrentScope(hostName: string) {
+    const nextHostName = hostName.trim()
+    if (!nextHostName) return
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledOrderIdsForActiveHost()
+  }
+
   const unscheduledOrders = computed(() => {
     const kw = searchKeyword.value.trim()
     return workOrders.value.filter(o => {
@@ -653,7 +699,10 @@ export function useVibrationSchedule() {
   })
 
   const selectedScheduledOrders = computed(() => {
-    return selectedScheduledOrderIds.value.map(id => getOrderById(id)).filter(Boolean) as WorkOrder[]
+    return selectedScheduledOrderIds.value
+      .filter((id) => isScheduledOrderVisibleInActiveHost(id))
+      .map(id => getOrderById(id))
+      .filter(Boolean) as WorkOrder[]
   })
 
   function reconcileRuntimeInstrumentCaches(orders: WorkOrder[]) {
@@ -1061,7 +1110,10 @@ export function useVibrationSchedule() {
     orderStatusMutating,
     refreshWorkOrders,
     selectedScheduledOrderIds,
+    activeHostDeviceName,
+    hostDeviceTabs,
     selectedScheduledOrders,
+    assignHostDeviceToCurrentScope,
     calBase,
     currentWeekDays,
     weekLabel,

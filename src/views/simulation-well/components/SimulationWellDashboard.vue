@@ -19,6 +19,8 @@ const props = defineProps<{
   resizingEventId: string | null
   isResizing: boolean
   selectedScheduledEventIds: string[]
+  hostDeviceTabs: string[]
+  activeHostDeviceName: string
   todayScheduledOrderIds: string[]
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
@@ -40,6 +42,7 @@ const emit = defineEmits<{
   unschedule: [cellKey: string, eventId: string]
   'unschedule-tentative': [cellKey: string, eventId: string]
   'select-scheduled-event': [eventId: string]
+  'assign-host-device': [hostName: string]
   'start-resize': [eventId: string, e: MouseEvent]
   'start-resize-top': [eventId: string, e: MouseEvent]
   'start-scheduled-test': []
@@ -179,6 +182,19 @@ const handleGridDrop = (e: DragEvent) => {
           <Icon icon="mdi:close" />
         </button>
       </div>
+      <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
+        <button
+          v-for="host in hostDeviceTabs"
+          :key="host"
+          class="host-filter-tab"
+          :class="{ active: activeHostDeviceName === host }"
+          :title="host"
+          @click="emit('assign-host-device', host)"
+        >
+          {{ host }}
+        </button>
+      </div>
+
       <div class="table-content">
         <div v-if="unscheduledOrders.length === 0" class="empty-state"><p>无待排程工单</p></div>
         <div v-else class="table-wrapper">
