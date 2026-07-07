@@ -15,6 +15,69 @@ import {
   saveHighTempBoxOrderSchedule,
   type HighTempBoxOrder,
 } from '@/services/high-temp-box-order-api'
+import { listDeviceInstances, type DeviceInstanceDTO } from '@/services/device-instance-api'
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== 'string' && typeof value !== 'number') continue
+    const text = String(value).trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function removeInstanceSuffix(value: string) {
+  return value.replace(/[-_#]\d+$/u, '').trim()
+}
+
+function getDeviceInstanceName(row: DeviceInstanceDTO) {
+  return firstText(row.deviceName, row.device_name, row.psi_name)
+}
+
+function getHostModelDisplayName(row: DeviceInstanceDTO) {
+  const deviceName = getDeviceInstanceName(row)
+  return removeInstanceSuffix(firstText(
+    row.psimodel_name,
+    row.host_model_name,
+    row.hostModelName,
+    row.model,
+    row.model_name,
+    row.modelName,
+    deviceName
+  ))
+}
+
+function normalizeDeviceInstanceList(response: unknown): DeviceInstanceDTO[] {
+  const payload = (response as { data?: unknown })?.data ?? response ?? {}
+  const list = Array.isArray(payload)
+    ? payload
+    : (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).list ??
+      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).records ??
+      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).results ??
+      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).items ??
+      []
+
+  return Array.isArray(list) ? list as DeviceInstanceDTO[] : []
+}
+
+function isHighTempBoxDevice(row: DeviceInstanceDTO) {
+  const texts = [
+    getHostModelDisplayName(row),
+    firstText(row.model, row.model_name, row.modelName),
+    firstText(row.psimodel_name, row.host_model_name, row.hostModelName),
+    getDeviceInstanceName(row),
+  ].filter(Boolean)
+
+  return texts.some((text) => text.includes('高温箱')) && !texts.some((text) => text.includes('高温高压'))
+}
+
+function isHighTempBoxHostName(name?: string | null) {
+  const text = name?.trim()
+  if (!text || text === '-') return false
+  if (text.includes('高温高压')) return false
+  if (['测试台', '测试使用设备', '测试设备'].some((keyword) => text.includes(keyword))) return false
+  return /高温箱\s*[-_#]?\s*\d+/u.test(text)
+}
 
 export interface WorkOrder {
   id: string
@@ -104,6 +167,8 @@ export function useHighTempBox() {
 
   const calBase = ref(getMonday(new Date()))
   const selectedScheduledOrder = ref<string | null>(null)
+  const activeHostDeviceName = ref('')
+  const hostDeviceNames = ref<string[]>([])
   const draggedOrderId = ref<string | null>(null)
   const isDragging = ref(false)
   const slotHeightPx = 44
@@ -194,6 +259,7 @@ export function useHighTempBox() {
     workOrdersError.value = null
 
     try {
+      await refreshHostDeviceNames()
       const all: WorkOrder[] = []
       const pageSize = 100
       let page = 1
@@ -226,10 +292,12 @@ export function useHighTempBox() {
       const scheduledOrders = (all.length ? [...all, ...mockOnlyNew] : mockWorkOrders).map(withInstrumentState)
       workOrders.value = scheduledOrders
       restoreScheduledEvents(scheduledOrders)
+      syncActiveHostDeviceName()
     } catch (e) {
       workOrdersError.value = e instanceof Error ? e.message : '获取高温箱工单失败'
       workOrders.value = mockWorkOrders.map(withInstrumentState)
       restoreScheduledEvents(workOrders.value)
+      syncActiveHostDeviceName()
     } finally {
       workOrdersLoading.value = false
     }
@@ -347,6 +415,7 @@ export function useHighTempBox() {
 
   const selectedScheduledOrderInfo = computed(() => {
     if (!selectedScheduledOrder.value) return null
+    if (!isScheduledEventVisibleInActiveHost(selectedScheduledOrder.value)) return null
     const ev = scheduledEvents.value[selectedScheduledOrder.value]
     return ev ? getOrderById(ev.orderId) : getOrderById(selectedScheduledOrder.value)
   })
@@ -399,6 +468,42 @@ export function useHighTempBox() {
 
   const getCellKey = (dateStr: string, timeKey: string) => `${dateStr}_${timeKey}`
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
+
+  async function refreshHostDeviceNames() {
+    const response = await listDeviceInstances(
+      { currentPage: 1, size: 2000 },
+      getAuthHeaders()
+    )
+    if (!response.success || !response.data || response.data.code !== 0) {
+      console.warn('加载高温箱主机列表失败', response.error || response.data?.msg || response.data?.message)
+      return
+    }
+
+    const names = normalizeDeviceInstanceList(response.data.data)
+      .filter(isHighTempBoxDevice)
+      .map(getDeviceInstanceName)
+      .filter(isHighTempBoxHostName)
+
+    hostDeviceNames.value = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  }
+
+  const hostDeviceTabs = computed(() => {
+    return [...hostDeviceNames.value]
+  })
+
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledOrderForActiveHost()
+    }
+  }
+
+  function assignHostDeviceToCurrentScope(hostName: string) {
+    const nextHostName = hostName.trim()
+    if (!nextHostName) return
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledOrderForActiveHost()
+  }
   const getActiveInstruments = (order: WorkOrder) => order.instruments.filter((instrument) =>
     instrument.completed !== true &&
     instrument.status !== 2 &&
@@ -636,11 +741,39 @@ export function useHighTempBox() {
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
+  }
+
+  function getOrderHostDeviceName(order?: WorkOrder | null) {
+    const explicitHost = [order?.testPlatform, order?.deviceName].find((name) => isHighTempBoxHostName(name))
+    if (explicitHost) return explicitHost.trim()
+    if (hostDeviceNames.value.length === 1) return hostDeviceNames.value[0]
+    return order?.testPlatform?.trim() || order?.deviceName?.trim() || '-'
+  }
+
+  function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getOrderHostDeviceName(getOrderById(ev.orderId)) === activeScheduleHostName
+  }
+
+  function isScheduledEventVisibleInActiveHost(eventId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    const ev = scheduledEvents.value[eventId]
+    return !!ev && doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)
+  }
+
+  function pruneSelectedScheduledOrderForActiveHost() {
+    if (selectedScheduledOrder.value && !isScheduledEventVisibleInActiveHost(selectedScheduledOrder.value)) {
+      selectedScheduledOrder.value = null
+    }
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const dayMap: Record<string, ScheduledEvent[]> = {}
     Object.values(scheduledEvents.value).forEach((ev) => {
+      if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
       if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
       dayMap[ev.dateStr].push(ev)
     })
@@ -693,6 +826,7 @@ export function useHighTempBox() {
           lane: laneByEventId[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
+          hostDeviceName: getOrderHostDeviceName(getOrderById(x.ev.orderId)),
         })
       })
     })
@@ -1619,6 +1753,8 @@ export function useHighTempBox() {
     activeFilter,
     calBase,
     selectedScheduledOrder,
+    activeHostDeviceName,
+    hostDeviceTabs,
     draggedOrderId,
     isDragging,
     slotHeightPx,
@@ -1661,6 +1797,7 @@ export function useHighTempBox() {
     weekLabel,
     timeSlots,
     selectedScheduledOrderInfo,
+    assignHostDeviceToCurrentScope,
     isPreCheckComplete,
     prevWeek,
     nextWeek,

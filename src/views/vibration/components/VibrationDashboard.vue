@@ -24,6 +24,7 @@ const props = defineProps<{
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
   }[]
   maxLaneCount: number
   slotHeightPx: number
@@ -34,6 +35,8 @@ const props = defineProps<{
   isResizing: boolean
   selectedScheduledOrderIds: string[]
   selectedScheduledOrders: WorkOrder[]
+  hostDeviceTabs: string[]
+  activeHostDeviceName: string
   fmtDate: (d: Date) => string
   getCellKey: (dateStr: string, timeKey: string) => string
   getOrderById: (id: string) => WorkOrder | undefined
@@ -57,6 +60,7 @@ const emit = defineEmits<{
   'drag-over': [event: DragEvent, isPast: boolean]
   'drop': [event: DragEvent, dateStr: string, timeKey: string, isPast: boolean]
   'select-scheduled-order': [orderId: string]
+  'assign-host-device': [hostName: string]
   'unschedule': [cellKey: string, orderId: string, eventId: string]
   'start-experiment': []
 }>()
@@ -220,6 +224,19 @@ const getScheduledStyle = (item: any) => {
         />
         <button v-if="searchKeyword" class="clear-btn" @click="emit('update:searchKeyword', '')">
           <Icon icon="mdi:close" />
+        </button>
+      </div>
+
+      <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
+        <button
+          v-for="host in hostDeviceTabs"
+          :key="host"
+          class="host-filter-tab"
+          :class="{ active: activeHostDeviceName === host }"
+          :title="host"
+          @click="emit('assign-host-device', host)"
+        >
+          {{ host }}
         </button>
       </div>
 
@@ -890,6 +907,36 @@ const getScheduledStyle = (item: any) => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.host-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.host-filter-tab {
+  height: 30px;
+  max-width: 136px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-filter-tab.active {
+  border-color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--color-accent-blue);
 }
 
 .instrument-empty {

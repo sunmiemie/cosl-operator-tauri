@@ -101,16 +101,16 @@ assert.match(
   'remainingDevices should retain devices with schedule_segments or scheduled_start/end even when downhole filtering applies'
 )
 
-assert.match(
+assert.doesNotMatch(
   schedule,
-  /const\s+scheduledOrderIds\s*=\s*computed\([\s\S]*scheduledEvents\.value[\s\S]*scheduledEventsTentative\.value[\s\S]*event\.orderId/,
-  'unscheduledOrders should derive scheduled order ids from saved and tentative scheduled events'
+  /scheduledOrderIds\.value\.has\(order\.id\)[\s\S]*return\s+false/,
+  'unscheduledOrders should keep scheduled orders visible; calendar visibility is scoped by active host tabs'
 )
 
 assert.match(
   schedule,
-  /const\s+unscheduledOrders\s*=\s*computed\([\s\S]*scheduledOrderIds\.value\.has\(order\.id\)[\s\S]*return\s+false/,
-  'unscheduledOrders should exclude order ids already present in scheduled/tentative events'
+  /const\s+activeHostDeviceName\s*=\s*ref\(''\)/,
+  'simulation well should track the active host/device scope for the calendar'
 )
 
 assert.match(

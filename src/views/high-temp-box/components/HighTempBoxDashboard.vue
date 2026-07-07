@@ -11,6 +11,8 @@ const {
   orderStatusMutating,
   calBase,
   selectedScheduledOrder,
+  activeHostDeviceName,
+  hostDeviceTabs,
   filteredOrders,
   currentWeekDays,
   weekLabel,
@@ -33,6 +35,7 @@ const {
   handleUnschedule,
   selectScheduledTask,
   selectedScheduledOrderInfo,
+  assignHostDeviceToCurrentScope,
   startExperiment,
   scheduleOrder,
   startResize,
@@ -239,6 +242,19 @@ async function confirmInstrumentSelection() {
         <input v-model="searchKeyword" type="text" placeholder="搜索工单号/申请人" />
         <button v-if="searchKeyword" class="clear-btn" @click="searchKeyword = ''">
           <Icon icon="mdi:close" />
+        </button>
+      </div>
+
+      <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
+        <button
+          v-for="host in hostDeviceTabs"
+          :key="host"
+          class="host-filter-tab"
+          :class="{ active: activeHostDeviceName === host }"
+          :title="host"
+          @click="assignHostDeviceToCurrentScope(host)"
+        >
+          {{ host }}
         </button>
       </div>
 
@@ -622,6 +638,9 @@ async function confirmInstrumentSelection() {
 .remove-btn { position:absolute; top:4px; right:4px; width:18px; height:18px; align-items:center; justify-content:center; background:rgba(0,0,0,0.18); border:none; color:rgba(255,255,255,0.9); cursor:pointer; padding:0; border-radius:4px; opacity:0; pointer-events:none; transition:opacity 0.15s, background 0.15s; display:flex; }
 .scheduled-item:hover .remove-btn { opacity:1; pointer-events:auto; }
 .remove-btn:hover { background:rgba(0,0,0,0.28); color:#fff; }
+.host-filter-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 10px 10px; border-bottom:1px solid var(--color-border); }
+.host-filter-tab { height:30px; max-width:136px; padding:0 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-primary); color:var(--color-text-secondary); font-size:12px; font-weight:700; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.host-filter-tab.active { border-color:var(--color-accent-blue); background:rgba(59,130,246,.12); color:var(--color-accent-blue); }
 .resize-handle { position:absolute; left:0; right:0; bottom:0; height:10px; cursor:ns-resize; background:linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.18)); z-index: 10; }
 .resize-handle:hover { background:linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.28)); }
 .resize-handle-top { position:absolute; left:0; right:0; top:0; height:10px; cursor:ns-resize; background:linear-gradient(0deg, rgba(255,255,255,0), rgba(255,255,255,0.18)); z-index: 10; }

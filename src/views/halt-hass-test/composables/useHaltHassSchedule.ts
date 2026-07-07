@@ -64,6 +64,7 @@ export function useHaltHassSchedule() {
   const workOrdersLoading = ref(false)
   const schedulePersisting = ref(false)
   const selectedScheduledOrder = ref<string | null>(null)
+  const activeHostDeviceName = ref('')
   const draggedOrderId = ref<string | null>(null)
   const isDragging = ref(false)
   const calBase = ref(getMonday(new Date()))
@@ -140,6 +141,7 @@ export function useHaltHassSchedule() {
 
   const selectedScheduledOrderInfo = computed(() => {
     if (!selectedScheduledOrder.value) return null
+    if (!isScheduledEventVisibleInActiveHost(selectedScheduledOrder.value)) return null
     const event = scheduledEvents.value[selectedScheduledOrder.value]
     return event ? getOrderById(event.orderId) : null
   })
@@ -150,6 +152,47 @@ export function useHaltHassSchedule() {
 
   function getOrderById(orderId: string) {
     return workOrders.value.find((order) => getOrderKey(order) === orderId)
+  }
+
+  function getOrderHostDeviceName(order?: HaltHassOrder) {
+    return order?.boardGroup?.name?.trim() || '-'
+  }
+
+  const hostDeviceTabs = computed(() => {
+    return Array.from(new Set(workOrders.value.map((order) => getOrderHostDeviceName(order)).filter((name) => name && name !== '-')))
+      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  })
+
+  function doesScheduledEventMatchActiveHostDevice(event: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getOrderHostDeviceName(getOrderById(event.orderId)) === activeScheduleHostName
+  }
+
+  function isScheduledEventVisibleInActiveHost(eventId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    const event = scheduledEvents.value[eventId]
+    return !!event && doesScheduledEventMatchActiveHostDevice(event, activeScheduleHostName)
+  }
+
+  function pruneSelectedScheduledOrderForActiveHost() {
+    if (selectedScheduledOrder.value && !isScheduledEventVisibleInActiveHost(selectedScheduledOrder.value)) {
+      selectedScheduledOrder.value = null
+    }
+  }
+
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledOrderForActiveHost()
+    }
+  }
+
+  function assignHostDeviceToCurrentScope(hostName: string) {
+    const nextHostName = hostName.trim()
+    if (!nextHostName) return
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledOrderForActiveHost()
   }
 
   function parseBackendDateTime(value?: string | null) {
@@ -254,7 +297,9 @@ export function useHaltHassSchedule() {
       }
       workOrders.value = nextOrders
       restoreScheduledEvents(nextOrders)
+      syncActiveHostDeviceName()
       selectedScheduledOrder.value = selectedScheduledOrder.value && scheduledEvents.value[selectedScheduledOrder.value]
+        && isScheduledEventVisibleInActiveHost(selectedScheduledOrder.value)
         ? selectedScheduledOrder.value
         : null
       if (shouldUseFallbackMock) {
@@ -266,6 +311,7 @@ export function useHaltHassSchedule() {
       console.error('[halt-hass schedule] refresh failed:', error)
       workOrders.value = [MOCK_HALT_HASS_ORDER]
       restoreScheduledEvents(workOrders.value)
+      syncActiveHostDeviceName()
       ElMessage.warning('未获取到真实 HALT-HASS 工单，已载入演示工单用于流程测试')
     } finally {
       workOrdersLoading.value = false
@@ -287,11 +333,14 @@ export function useHaltHassSchedule() {
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const dayMap: Record<string, ScheduledEvent[]> = {}
     Object.values(scheduledEvents.value).forEach((event) => {
+      if (!doesScheduledEventMatchActiveHostDevice(event, activeScheduleHostName)) return
       if (!dayMap[event.dateStr]) dayMap[event.dateStr] = []
       dayMap[event.dateStr].push(event)
     })
@@ -339,6 +388,7 @@ export function useHaltHassSchedule() {
           lane: laneByEventId[item.event.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey: getCellKey(dateStr, item.event.startTimeKey),
+          hostDeviceName: getOrderHostDeviceName(getOrderById(item.event.orderId)),
         })
       })
     })
@@ -632,6 +682,8 @@ export function useHaltHassSchedule() {
     workOrdersLoading,
     schedulePersisting,
     selectedScheduledOrder,
+    activeHostDeviceName,
+    hostDeviceTabs,
     selectedScheduledOrderInfo,
     filteredOrders,
     currentWeekDays,
@@ -657,6 +709,7 @@ export function useHaltHassSchedule() {
     handleDrop,
     handleUnschedule,
     selectScheduledTask,
+    assignHostDeviceToCurrentScope,
     scheduleOrder,
     startResize,
     startResizeTop,

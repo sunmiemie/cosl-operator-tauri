@@ -254,14 +254,14 @@ const handleGridDrop = (e: DragEvent) => {
 
         <div v-if="hostDeviceTabs.length" class="host-filter-tabs">
           <button
-            v-for="host in ['', ...hostDeviceTabs]"
-            :key="host || 'all'"
+            v-for="host in hostDeviceTabs"
+            :key="host"
             class="host-filter-tab"
             :class="{ active: activeHostDeviceName === host }"
-            :title="host || '全部主机'"
+            :title="host"
             @click="emit('assign-host-device', host)"
           >
-            {{ host || '全部' }}
+            {{ host }}
           </button>
         </div>
 

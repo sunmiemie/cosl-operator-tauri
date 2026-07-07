@@ -71,6 +71,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   
   // 当前在日历中被选中的工单 ID 列表
   const selectedScheduledOrderIds = ref<string[]>([])
+  const activeHostDeviceName = ref('')
   const draggedOrder = ref<any>(null) // 记录当前正在拖拽的工单对象
   const calBase = ref(new Date()) // 日历基准日期（当前周）
 
@@ -224,6 +225,10 @@ export function useSchedule(options: UseScheduleOptions = {}) {
 
       workOrders.value = all
       restoreScheduledEvents(all)
+      syncActiveHostDeviceName()
+      selectedScheduledOrderIds.value = selectedScheduledOrderIds.value
+        .filter((id) => all.some((order) => order.id === id))
+        .filter((id) => isScheduledOrderVisibleInActiveHost(id))
     } catch (e) {
       workOrdersError.value = e instanceof Error ? e.message : '获取水循环工单失败'
     } finally {
@@ -448,12 +453,34 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     lane: number
     laneCount: number
     cellKey: string
+    hostDeviceName: string
+  }
+
+  function getOrderHostDeviceName(order?: WaterCycleOrder) {
+    return order?.testPlatform?.trim() || order?.deviceName?.trim() || '-'
+  }
+
+  function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getOrderHostDeviceName(getOrderById(ev.orderId)) === activeScheduleHostName
+  }
+
+  function isScheduledOrderVisibleInActiveHost(orderId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    return getOrderEvents(orderId).some((ev) => doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName))
+  }
+
+  function pruneSelectedScheduledOrderIdsForActiveHost() {
+    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => isScheduledOrderVisibleInActiveHost(id))
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const dayMap: Record<string, ScheduledEvent[]> = {}
     Object.values(scheduledEvents.value).forEach((events) => {
       normalizeScheduledEventList(events).forEach((ev) => {
+        if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
         if (!dayMap[ev.dateStr]) dayMap[ev.dateStr] = []
         dayMap[ev.dateStr].push(ev)
       })
@@ -506,7 +533,8 @@ export function useSchedule(options: UseScheduleOptions = {}) {
           span: x.span,
           lane: laneByEventId[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
-          cellKey
+          cellKey,
+          hostDeviceName: getOrderHostDeviceName(getOrderById(x.ev.orderId))
         })
       })
     })
@@ -545,6 +573,26 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   })
   
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
+
+  const hostDeviceTabs = computed(() => {
+    return Array.from(new Set(workOrders.value.map((order) => getOrderHostDeviceName(order)).filter((name) => name && name !== '-')))
+      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  })
+
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledOrderIdsForActiveHost()
+    }
+  }
+
+  function assignHostDeviceToCurrentScope(hostName: string) {
+    const nextHostName = hostName.trim()
+    if (!nextHostName) return
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledOrderIdsForActiveHost()
+  }
+
   const getActiveInstruments = (order: WaterCycleOrder) => order.instruments.filter((item) => !item.completed)
   const isInstrumentRunning = (instrumentId: string) => {
     const instrument = workOrders.value.flatMap((order) => order.instruments).find((item) => item.id === instrumentId)
@@ -568,7 +616,10 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   }
   
   // 获取当前在日历上被选中的排程对象集合
-  const selectedScheduledOrders = computed(() => selectedScheduledOrderIds.value.map(id => getOrderById(id)).filter(Boolean) as any[])
+  const selectedScheduledOrders = computed(() => selectedScheduledOrderIds.value
+    .filter((id) => isScheduledOrderVisibleInActiveHost(id))
+    .map(id => getOrderById(id))
+    .filter(Boolean) as any[])
 
   function loadPresetSchedule() {
     const base = calBase.value
@@ -818,7 +869,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   }
 
   return {
-    searchKeyword, scheduledOrders, scheduledEvents, slotHeightPx, isDragging, selectedScheduledOrderIds, calBase, currentWeekDays, weekLabel, timeSlots,
+    searchKeyword, scheduledOrders, scheduledEvents, slotHeightPx, isDragging, selectedScheduledOrderIds, activeHostDeviceName, hostDeviceTabs, calBase, currentWeekDays, weekLabel, timeSlots,
     unscheduledOrders, getOrderById, selectedScheduledOrders,
     getMonday, addDays, fmtDate,
     workOrders,
@@ -831,6 +882,6 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     getCellKey, handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop,
     handleUnschedule, selectScheduledOrder, getEvent, startResize, startResizeTop, scheduledLayoutItems, maxLaneCount, scheduleOrder, resizingOrderId, isResizing,
     getScheduleChangePayload, getScheduleText,
-    getActiveInstruments, isInstrumentRunning, markInstrumentsRunning, clearRunningInstruments
+    getActiveInstruments, isInstrumentRunning, markInstrumentsRunning, clearRunningInstruments, assignHostDeviceToCurrentScope
   }
 }

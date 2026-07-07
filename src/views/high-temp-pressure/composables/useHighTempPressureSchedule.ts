@@ -451,6 +451,7 @@ export function useHighTempPressureSchedule() {
       .filter(isHighTempPressureHostName)
 
     hostDeviceNames.value = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    syncActiveHostDeviceName()
   }
 
   async function refreshWorkOrders() {
@@ -535,6 +536,7 @@ export function useHighTempPressureSchedule() {
       runningInstrumentIds.value = nextRunningInstrumentIds
 
       workOrders.value = all
+      syncActiveHostDeviceName()
       restoreScheduledEvents(all)
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => (scheduledEvents.value[id] || []).length)
       persistProgressState()
@@ -705,7 +707,8 @@ export function useHighTempPressureSchedule() {
     const schedule = getScheduleChangePayload(instrumentId)
     const order = getOrderByInstrumentId(instrumentId)
     if (!instrument?.dbId) return true
-    if (schedule && !(instrument.useDevice || order?.useDevice)) {
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim() || instrument.useDevice || order?.useDevice || ''
+    if (schedule && !scheduleHostDeviceName) {
       if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
       ElMessage.warning('请先选择主机后再保存排期')
       return false
@@ -726,10 +729,10 @@ export function useHighTempPressureSchedule() {
             {
               scheduled_start_at: schedule.scheduledStartAt,
               scheduled_end_at: schedule.scheduledEndAt,
-              use_device: instrument.useDevice || order?.useDevice || '',
+              use_device: scheduleHostDeviceName,
               schedule_segments: schedule.scheduleSegments.map((segment) => ({
                 ...segment,
-                use_device: instrument.useDevice || order?.useDevice || '',
+                use_device: scheduleHostDeviceName,
               })),
             },
             getAuthHeaders()
@@ -788,16 +791,29 @@ export function useHighTempPressureSchedule() {
       const segmentStartTimeKey = `${String(start.getHours()).padStart(2, '0')}00`
       return segmentDateStr === ev.dateStr && segmentStartTimeKey === ev.startTimeKey
     })
-    return matchedSegment?.useDevice?.trim() ||
-      instrument?.scheduleSegments?.find((segment) => segment.useDevice?.trim())?.useDevice?.trim() ||
-      ''
+    return matchedSegment?.useDevice?.trim() || ''
   }
 
   function getScheduledEventHostDeviceName(ev: ScheduledEvent) {
     const order = getOrderByInstrumentId(ev.instrumentId)
     const instrument = getInstrumentById(ev.instrumentId)
     const segmentUseDevice = getScheduledEventSegmentUseDevice(ev)
-    return order?.useDevice || instrument?.useDevice || segmentUseDevice || '-'
+    return segmentUseDevice || instrument?.useDevice || order?.useDevice || '-'
+  }
+
+  function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
+    if (!activeScheduleHostName) return true
+    return getScheduledEventHostDeviceName(ev) === activeScheduleHostName
+  }
+
+  function isScheduledInstrumentVisibleInActiveHost(instrumentId: string) {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
+    if (!activeScheduleHostName) return true
+    return getInstrumentEvents(instrumentId).some((ev) => doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName))
+  }
+
+  function pruneSelectedScheduledOrderIdsForActiveHost() {
+    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => isScheduledInstrumentVisibleInActiveHost(id))
   }
 
   type ScheduledLayoutItem = {
@@ -816,9 +832,11 @@ export function useHighTempPressureSchedule() {
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
+    const activeScheduleHostName = activeHostDeviceName.value.trim()
     const groupedEvents = new Map<string, ScheduledEvent & { instrumentIds: string[]; hostDeviceName: string }>()
     Object.values(scheduledEvents.value).forEach((events) => {
       events.forEach((ev) => {
+        if (!doesScheduledEventMatchActiveHostDevice(ev, activeScheduleHostName)) return
         const group = groupedEvents.get(ev.eventId)
         if (group) {
           group.instrumentIds.push(ev.instrumentId)
@@ -925,6 +943,13 @@ export function useHighTempPressureSchedule() {
     return names.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
   })
 
+  function syncActiveHostDeviceName() {
+    if (!activeHostDeviceName.value || !hostDeviceTabs.value.includes(activeHostDeviceName.value)) {
+      activeHostDeviceName.value = hostDeviceTabs.value[0] || ''
+      pruneSelectedScheduledOrderIdsForActiveHost()
+    }
+  }
+
   const unscheduledOrders = computed(() => {
     const keyword = searchKeyword.value.trim().toLowerCase()
 
@@ -982,13 +1007,14 @@ export function useHighTempPressureSchedule() {
   }
 
   function assignHostDeviceToCurrentOrder(hostName: string) {
-    if (!currentAssignOrderId.value) {
-      ElMessage.info('请先点击左侧工单，再选择主机分配')
-      return
-    }
     const nextHostName = hostName.trim()
     if (!nextHostName) {
       ElMessage.warning('全部不能作为主机分配，请选择具体主机')
+      return
+    }
+    activeHostDeviceName.value = nextHostName
+    pruneSelectedScheduledOrderIdsForActiveHost()
+    if (!currentAssignOrderId.value) {
       return
     }
 
@@ -999,13 +1025,13 @@ export function useHighTempPressureSchedule() {
       return
     }
 
-    activeHostDeviceName.value = nextHostName
     assignHostDeviceToOrder(order, nextHostName)
     ElMessage.success(`已分配主机：${nextHostName}`)
   }
 
   const selectedScheduledOrders = computed<ScheduledSelection[]>(() => {
     return selectedScheduledOrderIds.value
+      .filter((id) => isScheduledInstrumentVisibleInActiveHost(id))
       .map((id) => ({ instrument: getInstrumentById(id), order: getOrderByInstrumentId(id) }))
       .filter((obj) => obj.instrument && obj.order && isInstrumentPending(obj.instrument.id))
       .map((obj) => ({ instrument: obj.instrument as InstrumentItem, order: obj.order as WorkOrder }))
@@ -1017,7 +1043,9 @@ export function useHighTempPressureSchedule() {
 
     const order = getOrderByInstrumentId(id)
     const instrument = getInstrumentById(id)
-    return order && instrument && isInstrumentPending(instrument.id) ? { order, instrument } : null
+    return order && instrument && isInstrumentPending(instrument.id) && isScheduledInstrumentVisibleInActiveHost(instrument.id)
+      ? { order, instrument }
+      : null
   })
 
   function prevWeek() {
@@ -1111,17 +1139,16 @@ export function useHighTempPressureSchedule() {
     }
     const previousOrderUseDevice = order.useDevice
     const previousInstrumentUseDevices = new Map(order.items.map((instrument) => [instrument.id, instrument.useDevice] as const))
+    const instrument = getInstrumentById(instrumentId)
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim() || instrument?.useDevice || order.useDevice || ''
     let assignedHostForSchedule = false
-    if (!order.useDevice && !activeHostDeviceName.value.trim()) {
+    if (!scheduleHostDeviceName) {
       ElMessage.warning('请先选择主机后再排程')
       return
     }
-    if (!order.useDevice) {
-      assignHostDeviceToOrder(order, activeHostDeviceName.value.trim(), [instrumentId])
-      assignedHostForSchedule = true
-    }
-    const instrument = getInstrumentById(instrumentId)
-    if (instrument && !instrument.useDevice) instrument.useDevice = order.useDevice
+    assignHostDeviceToOrder(order, scheduleHostDeviceName, [instrumentId])
+    assignedHostForSchedule = true
+    if (instrument) instrument.useDevice = scheduleHostDeviceName
     const currentEvents = getInstrumentEvents(instrumentId)
     if (currentEvents.some((event) => event.dateStr === dateStr && event.startTimeKey === timeKey)) return
 
