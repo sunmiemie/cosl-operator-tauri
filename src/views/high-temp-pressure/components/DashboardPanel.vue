@@ -414,7 +414,7 @@ const handleGridDrop = (e: DragEvent) => {
                     ]"
                     :style="getScheduledStyle(it)"
                     @click.stop="emit('select-scheduled-order', it.instrumentIds)"
-                    :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${it.hostDeviceName || '-'} · ${it.instrumentIds.length}台`"
+                    :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${it.hostDeviceName || '-'}`"
                   >
                     <div class="scheduled-head">
                       <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.instrumentIds, it.eventId)">
@@ -424,10 +424,6 @@ const handleGridDrop = (e: DragEvent) => {
                     <div class="scheduled-content">
                       <span class="device-name">{{ getOrderByInstrumentId(it.instrumentId)?.no }}</span>
                       <span class="host-name">{{ it.hostDeviceName || '-' }}</span>
-                    </div>
-                    <div class="scheduled-tag">
-                      {{ getOrderByInstrumentId(it.instrumentId)?.applicant || '-' }} ·
-                      {{ getOrderByInstrumentId(it.instrumentId)?.applyDate || '-' }}
                     </div>
                     <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.instrumentIds, it.eventId, $event)"></div>
                     <div class="resize-handle" @mousedown.stop.prevent="startResize(it.instrumentIds, it.eventId, $event)"></div>
@@ -496,10 +492,9 @@ const handleGridDrop = (e: DragEvent) => {
 .scheduled-item.is-resizing { transition: none !important; transform: none !important; }
 .scheduled-item.is-resizing:hover { transform: none !important; }
 .scheduled-head { position: static; }
-.scheduled-content { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
-.device-name { font-size: 11px; font-weight: 600; color: #fff; line-height: 1.2; padding-right: 20px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.host-name { flex-shrink: 0; max-width: 72px; font-size: 9px; font-weight: 700; color: rgba(255, 255, 255, 0.92); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scheduled-tag { font-size: 9px; color: rgba(255, 255, 255, 0.9); font-weight: 500; margin-top: 2px; overflow: hidden; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.scheduled-content { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding-right: 18px; min-width: 0; }
+.device-name { max-width: 100%; font-size: 11px; font-weight: 700; color: #fff; line-height: 1.2; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.host-name { max-width: 100%; font-size: 9px; font-weight: 700; color: rgba(255, 255, 255, 0.92); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remove-btn { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; align-items: center; justify-content: center; background: rgba(0,0,0,.18); border: none; color: rgba(255,255,255,.9); cursor: pointer; padding: 0; border-radius: 4px; opacity: 0; pointer-events: none; transition: opacity .15s, background .15s; display: flex; }
 .scheduled-item:hover .remove-btn { opacity: 1; pointer-events: auto; }
 .remove-btn:hover { background: rgba(0,0,0,.28); color: #fff; }

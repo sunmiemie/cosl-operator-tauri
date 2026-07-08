@@ -382,6 +382,15 @@ export function useHighTempPressureSchedule() {
     return eventsFromInstrument(instrument, order.id).length > 0
   }
 
+  function hasRestorableBackendSchedule(order: WorkOrder) {
+    return order.items.some((instrument) => !instrument.completed && shouldRestoreInstrumentSchedule(order, instrument))
+  }
+
+  function shouldKeepLoadedWorkOrder(order: WorkOrder) {
+    const isVisibleStatus = order.statusCode !== undefined && VISIBLE_ORDER_STATUSES.includes(order.statusCode)
+    return isVisibleStatus || hasRestorableBackendSchedule(order)
+  }
+
   function restoreScheduledEvents(orders: WorkOrder[]) {
     const next: Record<string, ScheduledEvent[]> = {}
     orders.forEach((order) => {
@@ -464,41 +473,38 @@ export function useHighTempPressureSchedule() {
 
       const byId = new Map<string, WorkOrder>()
       const pageSize = 100
+      let page = 1
+      let loaded = 0
+      let total = Infinity
 
-      for (const status of VISIBLE_ORDER_STATUSES) {
-        let page = 1
-        let loaded = 0
-        let total = Infinity
+      while (loaded < total) {
+        const response = await listHighTempPressureOrders(
+          { page, pageSize },
+          getAuthHeaders()
+        )
 
-        while (loaded < total) {
-          const response = await listHighTempPressureOrders(
-            { page, pageSize, status },
-            getAuthHeaders()
-          )
-
-          if (!response.success || !response.data) {
-            workOrdersError.value = response.error || '加载高温高压井工单失败'
-            break
-          }
-
-          if (response.data.code !== 0) {
-            workOrdersError.value = response.data.msg || '加载高温高压井工单失败'
-            break
-          }
-
-          const list = response.data.data.list
-          list
-            .filter((item) => Number(item.status) === status)
-            .map(mapHighTempPressureOrder)
-            .forEach((order) => byId.set(order.id, order))
-
-          loaded += list.length
-          total = response.data.data.total
-
-          if (list.length === 0) break
-          page += 1
-          if (page > 50) break
+        if (!response.success || !response.data) {
+          workOrdersError.value = response.error || '加载高温高压井工单失败'
+          return
         }
+
+        if (response.data.code !== 0) {
+          workOrdersError.value = response.data.msg || '加载高温高压井工单失败'
+          return
+        }
+
+        const list = response.data.data.list
+        list
+          .map(mapHighTempPressureOrder)
+          .filter(shouldKeepLoadedWorkOrder)
+          .forEach((order) => byId.set(order.id, order))
+
+        loaded += list.length
+        total = response.data.data.total
+
+        if (list.length === 0) break
+        page += 1
+        if (page > 50) break
       }
 
       const all = Array.from(byId.values())
