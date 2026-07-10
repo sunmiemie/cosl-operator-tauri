@@ -8,6 +8,7 @@ import {
   type VibrationTableOrderDTO,
 } from '@/services/vibration-table-order-api'
 import { useAuth } from '@/composables/useAuth'
+import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 
 function getMonday(d: Date) {
   const dt = new Date(d)
@@ -49,6 +50,7 @@ export function useVibrationSchedule() {
   const draggedOrder = ref<WorkOrder | null>(null)
   const selectedScheduledOrderIds = ref<string[]>([])
   const activeHostDeviceName = ref('')
+  const hostDeviceNames = ref<string[]>([])
   const isDragging = ref(false)
   const slotHeightPx = 44
   const runningInstrumentIds = ref<Record<string, true>>({})
@@ -177,6 +179,7 @@ export function useVibrationSchedule() {
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     try {
+      await refreshHostDeviceNames()
       const pageSize = 100
       const byId = new Map<string, WorkOrder>()
       for (const status of visibleOrderStatuses) {
@@ -662,9 +665,21 @@ export function useVibrationSchedule() {
 
   const getOrderById = (id: string) => workOrders.value.find(w => w.id === id)
 
+  async function refreshHostDeviceNames() {
+    const authOk = await initAuth()
+    if (!authOk) return
+
+    const result = await fetchScheduleHostDeviceNames('vibration-table', getAuthHeaders())
+    if (!result.success) {
+      console.warn('加载振动台主机列表失败', result.error)
+      return
+    }
+
+    hostDeviceNames.value = result.names
+  }
+
   const hostDeviceTabs = computed(() => {
-    return Array.from(new Set(workOrders.value.map((order) => getOrderHostDeviceName(order)).filter((name) => name && name !== '-')))
-      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return [...hostDeviceNames.value]
   })
 
   function syncActiveHostDeviceName() {

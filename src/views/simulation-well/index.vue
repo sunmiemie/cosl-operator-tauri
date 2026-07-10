@@ -522,11 +522,6 @@ async function handleSaveDownhole(payload: any) {
           <p class="header-subtitle">模拟井测试系统</p>
         </div>
       </div>
-      <div class="header-right">
-        <button class="week-cal-nav" @click="router.replace({ path: '/simulation-well', query: { view: 'test-report' } })">
-          测试报告
-        </button>
-      </div>
     </div>
 
     <SimulationWellDashboard

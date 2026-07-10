@@ -1271,6 +1271,7 @@ watch(currentStep, (step) => {
 /* 选择页面 */
 .selection-page {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1380,20 +1381,21 @@ watch(currentStep, (step) => {
 
 /* 选择内容区域 */
 .selection-content {
-  flex: 1;
+  flex: 1 0 auto;
   min-height: 0;
 }
 
 .selection-main {
   display: flex;
   gap: 20px;
-  height: 100%;
+  min-height: 100%;
+  align-items: stretch;
 }
 
 .tree-panel-wrapper {
   width: 320px;
   flex-shrink: 0;
-  height: 100%;
+  align-self: stretch;
 }
 
 .right-panel-wrapper {
@@ -1937,6 +1939,7 @@ watch(currentStep, (step) => {
 /* 底部操作栏 */
 .bottom-bar {
   border: 1px solid var(--color-border, #e2e8f0);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;

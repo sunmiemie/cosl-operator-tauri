@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
+import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 import {
   clearWaterCycleOrderSchedule,
   listWaterCycleOrders,
@@ -72,6 +73,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   // 当前在日历中被选中的工单 ID 列表
   const selectedScheduledOrderIds = ref<string[]>([])
   const activeHostDeviceName = ref('')
+  const hostDeviceNames = ref<string[]>([])
   const draggedOrder = ref<any>(null) // 记录当前正在拖拽的工单对象
   const calBase = ref(new Date()) // 日历基准日期（当前周）
 
@@ -189,6 +191,19 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     scheduledEvents.value = next
   }
 
+  async function refreshHostDeviceNames() {
+    const authOk = await initAuth()
+    if (!authOk) return
+
+    const result = await fetchScheduleHostDeviceNames('water-cycle', getAuthHeaders())
+    if (!result.success) {
+      console.warn('加载水循环主机列表失败', result.error)
+      return
+    }
+
+    hostDeviceNames.value = result.names
+  }
+
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     workOrdersError.value = null
@@ -225,6 +240,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
 
       workOrders.value = all
       restoreScheduledEvents(all)
+      await refreshHostDeviceNames()
       syncActiveHostDeviceName()
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value
         .filter((id) => all.some((order) => order.id === id))
@@ -457,7 +473,12 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   }
 
   function getOrderHostDeviceName(order?: WaterCycleOrder) {
-    return order?.testPlatform?.trim() || order?.deviceName?.trim() || '-'
+    const explicitHost = [order?.testPlatform, order?.deviceName]
+      .map((name) => name?.trim() || '')
+      .find((name) => hostDeviceNames.value.includes(name))
+    if (explicitHost) return explicitHost.trim()
+    if (hostDeviceNames.value.length === 1) return hostDeviceNames.value[0]
+    return '-'
   }
 
   function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
@@ -575,8 +596,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
   const getOrderById = (id: string) => workOrders.value.find(o => o.id === id)
 
   const hostDeviceTabs = computed(() => {
-    return Array.from(new Set(workOrders.value.map((order) => getOrderHostDeviceName(order)).filter((name) => name && name !== '-')))
-      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return [...hostDeviceNames.value]
   })
 
   function syncActiveHostDeviceName() {

@@ -436,7 +436,17 @@ onMounted(() => {
 
         <div v-if="loading" class="empty-state"><p>加载中...</p></div>
         <div v-else class="table-wrapper">
-          <table class="data-table">
+          <table class="data-table downhole-work-table">
+            <colgroup>
+              <col class="col-work-id" />
+              <col class="col-well-name" />
+              <col class="col-environment" />
+              <col class="col-interval" />
+              <col class="col-device-count" />
+              <col class="col-status" />
+              <col class="col-report-count" />
+              <col class="col-actions" />
+            </colgroup>
             <thead>
               <tr>
                 <th>作业ID</th>
@@ -557,6 +567,44 @@ onMounted(() => {
 
 <style scoped src="./components/simulation-well.shared.css"></style>
 <style scoped>
+.downhole-view .table-wrapper {
+  overflow-x: auto;
+}
+
+.downhole-work-table {
+  min-width: 1180px;
+  table-layout: fixed;
+}
+
+.downhole-work-table .col-work-id,
+.downhole-work-table .col-well-name {
+  width: 7%;
+}
+
+.downhole-work-table .col-environment {
+  width: 17%;
+}
+
+.downhole-work-table .col-interval {
+  width: 26%;
+}
+
+.downhole-work-table .col-device-count {
+  width: 7%;
+}
+
+.downhole-work-table .col-status {
+  width: 9%;
+}
+
+.downhole-work-table .col-report-count {
+  width: 10%;
+}
+
+.downhole-work-table .col-actions {
+  width: 17%;
+}
+
 .downhole-detail {
   min-height: 220px;
 }

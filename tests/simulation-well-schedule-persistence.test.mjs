@@ -109,6 +109,30 @@ assert.doesNotMatch(
 
 assert.match(
   schedule,
+  /map\[cellKey\]\.push\(ev\.scheduleOwnerDeviceId\)/,
+  'global scheduled status should expose scheduled device ids independently of the active host tab'
+)
+
+assert.match(
+  dashboard,
+  /const\s+scheduledDeviceIdSet\s*=\s*computed[\s\S]*Object\.values\(props\.scheduledOrders\s*\|\|\s*\{\}\)/,
+  'dashboard status should use all persisted schedules instead of the active-host calendar layout'
+)
+
+assert.match(
+  dashboard,
+  /const\s+isOrderScheduled\s*=\s*\(order:\s*WorkOrder\)\s*=>\s*order\.deviceList\.some/,
+  'an order should remain scheduled when any of its devices is scheduled on any host'
+)
+
+assert.match(
+  dashboard,
+  /getDeviceStatusClass\(d\.id\)[\s\S]*getDeviceStatusText\(d\.id\)/,
+  'expanded device rows should display their own schedule status'
+)
+
+assert.match(
+  schedule,
   /const\s+activeHostDeviceName\s*=\s*ref\(''\)/,
   'simulation well should track the active host/device scope for the calendar'
 )

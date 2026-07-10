@@ -17,6 +17,18 @@ function statusBlock(content, helperName, nextHelperName, label) {
 const dashboardStatusBlock = statusBlock(dashboard, 'getOrderStatusText', 'getStatusClass', 'VibrationDashboard')
 
 assert.match(
+  dashboard,
+  /const\s+scheduledOrderIdSet\s*=\s*computed[\s\S]*Object\.values\(props\.scheduledOrders\s*\|\|\s*\{\}\)/,
+  'vibration dashboard status should use schedules from all hosts'
+)
+
+assert.doesNotMatch(
+  dashboard,
+  /new\s+Set\(props\.scheduledLayoutItems\.map\(\(item\)\s*=>\s*item\.orderId\)\)/,
+  'vibration dashboard status should not change with the active-host calendar layout'
+)
+
+assert.match(
   dashboardStatusBlock,
   /scheduledOrderIdSet\.value\.has\(order\.id\)[\s\S]*?已排程/,
   'vibration dashboard should show 已排程 after the order is dragged onto the calendar'

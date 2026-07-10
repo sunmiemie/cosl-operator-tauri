@@ -92,9 +92,18 @@ const selectedOrderRows = computed(() => {
     .filter(Boolean) as WorkOrder[]
 })
 
-const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
-const getOrderStatusText = (order: WorkOrder) => scheduledOrderIdSet.value.has(order.id) ? '已排程' : '待排程'
-const getOrderStatusClass = (order: WorkOrder) => scheduledOrderIdSet.value.has(order.id) ? 'scheduled' : 'pending'
+const scheduledDeviceIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(props.scheduledOrders || {}).forEach((deviceIds) => {
+    deviceIds.forEach((deviceId) => set.add(deviceId))
+  })
+  return set
+})
+const isOrderScheduled = (order: WorkOrder) => order.deviceList.some((device) => scheduledDeviceIdSet.value.has(device.id))
+const getOrderStatusText = (order: WorkOrder) => isOrderScheduled(order) ? '已排程' : '待排程'
+const getOrderStatusClass = (order: WorkOrder) => isOrderScheduled(order) ? 'scheduled' : 'pending'
+const getDeviceStatusText = (deviceId: string) => scheduledDeviceIdSet.value.has(deviceId) ? '已排程' : '待排程'
+const getDeviceStatusClass = (deviceId: string) => scheduledDeviceIdSet.value.has(deviceId) ? 'scheduled' : 'pending'
 
 const expandedOrderIds = ref<string[]>([])
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
@@ -198,7 +207,7 @@ const handleGridDrop = (e: DragEvent) => {
       <div class="table-content">
         <div v-if="unscheduledOrders.length === 0" class="empty-state"><p>无待排程工单</p></div>
         <div v-else class="table-wrapper">
-          <table class="data-table">
+          <table class="data-table schedule-order-table">
             <thead>
               <tr>
                 <th>工单号</th>
@@ -214,7 +223,7 @@ const handleGridDrop = (e: DragEvent) => {
               <template v-for="order in unscheduledOrders" :key="order.id">
                 <tr
                   class="order-row"
-                  :class="{ 'is-scheduled': scheduledOrderIdSet.has(order.id), 'is-expanded': isExpanded(order.id) }"
+                  :class="{ 'is-scheduled': isOrderScheduled(order), 'is-expanded': isExpanded(order.id) }"
                   draggable="true"
                   @click="toggleExpanded(order.id)"
                   @dragstart="emit('device-drag-start', $event, { id: order.id, label: order.id })"
@@ -256,7 +265,7 @@ const handleGridDrop = (e: DragEvent) => {
                         >
                           <span class="instrument-name">{{ d.name }}</span>
                           <span class="instrument-sn">{{ d.code || d.sn }}</span>
-                          <span class="status-pill" :class="getOrderStatusClass(order)">{{ getOrderStatusText(order) }}</span>
+                          <span class="status-pill" :class="getDeviceStatusClass(d.id)">{{ getDeviceStatusText(d.id) }}</span>
                         </div>
                       </div>
                     </div>

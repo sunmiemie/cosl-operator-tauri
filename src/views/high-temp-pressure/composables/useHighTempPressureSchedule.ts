@@ -7,79 +7,11 @@ import {
   saveHighTempPressureInstrumentSchedule,
   type HighTempPressureOrderDTO,
 } from '@/services/high-temp-pressure-api'
-import { listDeviceInstances, type DeviceInstanceDTO } from '@/services/device-instance-api'
+import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 import { ElMessage } from 'element-plus'
 import type { InstrumentItem, InstrumentScheduleSegment, ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '../types'
 
 const HTP_PROGRESS_STORAGE_KEY = 'high-temp-pressure-progress'
-const HIGH_TEMP_PRESSURE_MODEL_KEYWORDS = ['高温高压井', '高温高压', '高压井']
-
-function firstText(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value !== 'string' && typeof value !== 'number') continue
-    const text = String(value).trim()
-    if (text) return text
-  }
-  return ''
-}
-
-function removeInstanceSuffix(value: string) {
-  return value.replace(/[-_#]\d+$/u, '').trim()
-}
-
-function hasChineseText(value: string) {
-  return /[\u3400-\u9fff]/u.test(value)
-}
-
-function isLegacyModelValue(value: string, inferredName: string) {
-  const text = value.trim()
-  if (!text || hasChineseText(text)) return false
-  if (inferredName && hasChineseText(inferredName)) return true
-  return /^\d+$/u.test(text) || /^[A-Za-z]+[-_][A-Za-z0-9]+$/u.test(text) || /^[A-Z0-9_&-]{3,}$/u.test(text)
-}
-
-function getDeviceInstanceName(row: DeviceInstanceDTO) {
-  return firstText(row.deviceName, row.device_name, row.psi_name)
-}
-
-function getHostModelDisplayName(row: DeviceInstanceDTO) {
-  const deviceName = getDeviceInstanceName(row)
-  const deviceModelName = removeInstanceSuffix(deviceName)
-  const explicitModelName = firstText(row.psimodel_name, row.host_model_name, row.hostModelName)
-
-  if (deviceModelName && explicitModelName && isLegacyModelValue(explicitModelName, deviceModelName)) {
-    return deviceModelName
-  }
-  if (explicitModelName) return removeInstanceSuffix(explicitModelName)
-
-  const model = firstText(row.model, row.model_name, row.modelName)
-  if (deviceModelName && (!model || isLegacyModelValue(model, deviceModelName))) return deviceModelName
-  return removeInstanceSuffix(model)
-}
-
-function isHighTempPressureDevice(row: DeviceInstanceDTO) {
-  const texts = [
-    getHostModelDisplayName(row),
-    firstText(row.model, row.model_name, row.modelName),
-    firstText(row.psimodel_name),
-    getDeviceInstanceName(row),
-  ].filter(Boolean)
-
-  return HIGH_TEMP_PRESSURE_MODEL_KEYWORDS.some((keyword) => texts.some((text) => text.includes(keyword)))
-}
-
-function normalizeDeviceInstanceList(response: unknown): DeviceInstanceDTO[] {
-  const payload = (response as { data?: unknown })?.data ?? response ?? {}
-  const list = Array.isArray(payload)
-    ? payload
-    : (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).list ??
-      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).records ??
-      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).results ??
-      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).items ??
-      []
-
-  return Array.isArray(list) ? list as DeviceInstanceDTO[] : []
-}
 
 function getMonday(d: Date) {
   const dt = new Date(d)
@@ -445,21 +377,13 @@ export function useHighTempPressureSchedule() {
   hydrateProgressState()
 
   async function refreshHostDeviceNames() {
-    const response = await listDeviceInstances(
-      { currentPage: 1, size: 2000 },
-      getAuthHeaders()
-    )
-    if (!response.success || !response.data || response.data.code !== 0) {
-      console.warn('加载高温高压井主机列表失败', response.error || response.data?.msg || response.data?.message)
+    const result = await fetchScheduleHostDeviceNames('high-temp-pressure', getAuthHeaders())
+    if (!result.success) {
+      console.warn('加载高温高压井主机列表失败', result.error)
       return
     }
 
-    const names = normalizeDeviceInstanceList(response.data.data)
-      .filter(isHighTempPressureDevice)
-      .map(getDeviceInstanceName)
-      .filter(isHighTempPressureHostName)
-
-    hostDeviceNames.value = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    hostDeviceNames.value = result.names
     syncActiveHostDeviceName()
   }
 
@@ -921,32 +845,8 @@ export function useHighTempPressureSchedule() {
     return Math.max(1, ...scheduledLayoutItems.value.map((x) => x.laneCount || 1))
   })
 
-  function isHighTempPressureHostName(name?: string | null) {
-    const text = name?.trim()
-    if (!text || text === '-') return false
-    if (!text.includes('高温高压井')) return false
-    return !['测试台', '测试使用设备', '测试设备'].some((keyword) => text.includes(keyword))
-  }
-
-  function collectHostDeviceNames(order: WorkOrder) {
-    const names = [
-      order.useDevice?.trim(),
-      ...order.items.flatMap((instrument) => [
-        instrument.useDevice?.trim(),
-        ...(instrument.scheduleSegments || []).map((segment) => segment.useDevice?.trim()),
-      ]),
-    ]
-    return names.filter((name): name is string => isHighTempPressureHostName(name))
-  }
-
   const hostDeviceTabs = computed(() => {
-    const names = Array.from(
-      new Set([
-        ...hostDeviceNames.value,
-        ...workOrders.value.flatMap((order) => collectHostDeviceNames(order)),
-      ])
-    )
-    return names.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return [...hostDeviceNames.value]
   })
 
   function syncActiveHostDeviceName() {

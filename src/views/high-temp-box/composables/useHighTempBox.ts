@@ -15,69 +15,7 @@ import {
   saveHighTempBoxOrderSchedule,
   type HighTempBoxOrder,
 } from '@/services/high-temp-box-order-api'
-import { listDeviceInstances, type DeviceInstanceDTO } from '@/services/device-instance-api'
-
-function firstText(...values: unknown[]) {
-  for (const value of values) {
-    if (typeof value !== 'string' && typeof value !== 'number') continue
-    const text = String(value).trim()
-    if (text) return text
-  }
-  return ''
-}
-
-function removeInstanceSuffix(value: string) {
-  return value.replace(/[-_#]\d+$/u, '').trim()
-}
-
-function getDeviceInstanceName(row: DeviceInstanceDTO) {
-  return firstText(row.deviceName, row.device_name, row.psi_name)
-}
-
-function getHostModelDisplayName(row: DeviceInstanceDTO) {
-  const deviceName = getDeviceInstanceName(row)
-  return removeInstanceSuffix(firstText(
-    row.psimodel_name,
-    row.host_model_name,
-    row.hostModelName,
-    row.model,
-    row.model_name,
-    row.modelName,
-    deviceName
-  ))
-}
-
-function normalizeDeviceInstanceList(response: unknown): DeviceInstanceDTO[] {
-  const payload = (response as { data?: unknown })?.data ?? response ?? {}
-  const list = Array.isArray(payload)
-    ? payload
-    : (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).list ??
-      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).records ??
-      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).results ??
-      (payload as { list?: unknown; records?: unknown; results?: unknown; items?: unknown }).items ??
-      []
-
-  return Array.isArray(list) ? list as DeviceInstanceDTO[] : []
-}
-
-function isHighTempBoxDevice(row: DeviceInstanceDTO) {
-  const texts = [
-    getHostModelDisplayName(row),
-    firstText(row.model, row.model_name, row.modelName),
-    firstText(row.psimodel_name, row.host_model_name, row.hostModelName),
-    getDeviceInstanceName(row),
-  ].filter(Boolean)
-
-  return texts.some((text) => text.includes('高温箱')) && !texts.some((text) => text.includes('高温高压'))
-}
-
-function isHighTempBoxHostName(name?: string | null) {
-  const text = name?.trim()
-  if (!text || text === '-') return false
-  if (text.includes('高温高压')) return false
-  if (['测试台', '测试使用设备', '测试设备'].some((keyword) => text.includes(keyword))) return false
-  return /高温箱\s*[-_#]?\s*\d+/u.test(text)
-}
+import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 
 export interface WorkOrder {
   id: string
@@ -473,21 +411,13 @@ export function useHighTempBox() {
     const authOk = await initAuth()
     if (!authOk) return
 
-    const response = await listDeviceInstances(
-      { currentPage: 1, size: 2000 },
-      getAuthHeaders()
-    )
-    if (!response.success || !response.data || response.data.code !== 0) {
-      console.warn('加载高温箱主机列表失败', response.error || response.data?.msg || response.data?.message)
+    const result = await fetchScheduleHostDeviceNames('high-temp-box', getAuthHeaders())
+    if (!result.success) {
+      console.warn('加载高温箱主机列表失败', result.error)
       return
     }
 
-    const names = normalizeDeviceInstanceList(response.data.data)
-      .filter(isHighTempBoxDevice)
-      .map(getDeviceInstanceName)
-      .filter(isHighTempBoxHostName)
-
-    hostDeviceNames.value = Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    hostDeviceNames.value = result.names
   }
 
   const hostDeviceTabs = computed(() => {
@@ -730,7 +660,7 @@ export function useHighTempBox() {
     Object.values(scheduledEvents.value).forEach((ev) => {
       const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
       if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.eventId)
+      map[cellKey].push(ev.orderId)
     })
     return map
   })
@@ -757,8 +687,10 @@ export function useHighTempBox() {
   }
 
   function getOrderHostDeviceName(order?: WorkOrder | null) {
-    const explicitHost = [order?.testPlatform, order?.deviceName].find((name) => isHighTempBoxHostName(name))
-    if (explicitHost) return explicitHost.trim()
+    const explicitHost = [order?.testPlatform, order?.deviceName]
+      .map((name) => name?.trim() || '')
+      .find((name) => hostDeviceNames.value.includes(name))
+    if (explicitHost) return explicitHost
     if (hostDeviceNames.value.length === 1) return hostDeviceNames.value[0]
     return order?.testPlatform?.trim() || order?.deviceName?.trim() || '-'
   }

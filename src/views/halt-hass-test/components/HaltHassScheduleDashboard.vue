@@ -25,6 +25,7 @@ const {
   weekLabel,
   timeSlots,
   slotHeightPx,
+  scheduledOrders,
   scheduledLayoutItems,
   isDragging,
   fmtDate,
@@ -60,7 +61,13 @@ const gridContentWidth = computed(() => gridViewportWidth.value)
 
 const selectedInfo = computed(() => selectedScheduledOrderInfo.value)
 const canStartExperiment = computed(() => !!selectedInfo.value && !schedulePersisting.value)
-const scheduledOrderIdSet = computed(() => new Set(scheduledLayoutItems.value.map((item) => item.orderId)))
+const scheduledOrderIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(scheduledOrders.value || {}).forEach((orderIds) => {
+    orderIds.forEach((orderId) => set.add(orderId))
+  })
+  return set
+})
 
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
 

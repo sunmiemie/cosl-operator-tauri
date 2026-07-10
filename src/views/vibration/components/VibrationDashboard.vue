@@ -94,7 +94,13 @@ const gridInnerWidth = computed(() => {
   return timeColWidth + base * widthFactor.value
 })
 
-const scheduledOrderIdSet = computed(() => new Set(props.scheduledLayoutItems.map((item) => item.orderId)))
+const scheduledOrderIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(props.scheduledOrders || {}).forEach((orderIds) => {
+    orderIds.forEach((orderId) => set.add(orderId))
+  })
+  return set
+})
 const expandedOrderIds = ref<string[]>([])
 const detailVisible = ref(false)
 const detailOrder = ref<WorkOrder | null>(null)

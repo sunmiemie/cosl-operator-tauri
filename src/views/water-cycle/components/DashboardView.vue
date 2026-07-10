@@ -17,7 +17,7 @@ const { initAuth, getAuthHeaders } = useAuth()
 
 // 引入抽象出的排程逻辑
 const {
-  searchKeyword, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, activeHostDeviceName, hostDeviceTabs, currentWeekDays, weekLabel, timeSlots, calBase,
+  searchKeyword, scheduledOrders, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, activeHostDeviceName, hostDeviceTabs, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, getCellKey, getMonday,
   handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
   workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload,
@@ -52,7 +52,13 @@ const gridInnerWidth = computed(() => {
   return timeColWidth + base * widthFactor.value
 })
 
-const scheduledOrderIdSet = computed(() => new Set(scheduledLayoutItems.value.map((item) => item.orderId)))
+const scheduledOrderIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(scheduledOrders.value || {}).forEach((orderIds) => {
+    orderIds.forEach((orderId) => set.add(orderId))
+  })
+  return set
+})
 
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
 

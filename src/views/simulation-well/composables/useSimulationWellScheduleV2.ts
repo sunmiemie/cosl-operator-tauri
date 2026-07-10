@@ -11,6 +11,7 @@ import {
 } from '@/services/simulated-well-api'
 import { listSimulatedWellDownholeWorks } from '@/services/simulated-well-downhole-api'
 import { listSimulatedWellReports } from '@/services/simulated-well-report-api'
+import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 import type { CalendarDay, DownholeDevice, TimeSlot, UnscheduledDeviceRow, WorkOrder } from '../types'
 
 function getMonday(d: Date) {
@@ -68,6 +69,7 @@ export function useSimulationWellSchedule() {
   const draggedOrderMeta = ref<{ id: string; label: string } | null>(null)
 
   const workOrders = ref<WorkOrder[]>([])
+  const hostDeviceNames = ref<string[]>([])
 
   const safeParseJson = (value: unknown) => {
     if (!value || typeof value !== 'string') return {}
@@ -117,6 +119,7 @@ export function useSimulationWellSchedule() {
   const refreshWorkOrders = async () => {
     await initAuth()
     const headers = getAuthHeaders()
+    await refreshHostDeviceNames(headers)
     const [orderRes1, orderRes2, downholeRes, reportRes] = await Promise.all([
       listSimulatedWellOrders(
         { page: 1, pageSize: 2000, status: 1, includeDevices: true },
@@ -342,7 +345,7 @@ export function useSimulationWellSchedule() {
     Object.values(scheduledEvents.value).forEach((ev) => {
       const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
       if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.eventId)
+      map[cellKey].push(ev.scheduleOwnerDeviceId)
     })
     return map
   })
@@ -352,7 +355,7 @@ export function useSimulationWellSchedule() {
     Object.values(scheduledEventsTentative.value).forEach((ev) => {
       const cellKey = getCellKey(ev.dateStr, ev.startTimeKey)
       if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(ev.eventId)
+      map[cellKey].push(ev.scheduleOwnerDeviceId)
     })
     return map
   })
@@ -544,6 +547,16 @@ export function useSimulationWellSchedule() {
 
   const getWorkOrderById = (id: string) => workOrders.value.find((o) => o.id === id)
 
+  async function refreshHostDeviceNames(headers = getAuthHeaders()) {
+    const result = await fetchScheduleHostDeviceNames('simulated-well', headers)
+    if (!result.success) {
+      console.warn('加载模拟井主机列表失败', result.error)
+      return
+    }
+
+    hostDeviceNames.value = result.names
+  }
+
   const deviceIndex = computed(() => {
     const map = new Map<string, { order: WorkOrder; device: WorkOrder['deviceList'][number]; deviceName: string; deviceNumber: string }>()
     workOrders.value.forEach((o) => {
@@ -562,11 +575,7 @@ export function useSimulationWellSchedule() {
   }
 
   const hostDeviceTabs = computed(() => {
-    return Array.from(new Set(
-      Array.from(deviceIndex.value.values())
-        .map((row) => row.deviceName.trim())
-        .filter(Boolean)
-    )).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return [...hostDeviceNames.value]
   })
 
   function doesScheduledEventMatchActiveHostDevice(event: ScheduledEvent, activeScheduleHostName: string) {

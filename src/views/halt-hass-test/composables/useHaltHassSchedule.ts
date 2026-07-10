@@ -7,6 +7,7 @@ import {
   mapHaltHassOrder,
   saveHaltHassOrderSchedule,
 } from '@/services/halt-hass-order'
+import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 import type { HaltHassOrder } from '../types'
 import { isMockHaltHassOrder, MOCK_HALT_HASS_ORDER } from '../mock-halt-hass-fixture'
 
@@ -65,6 +66,7 @@ export function useHaltHassSchedule() {
   const schedulePersisting = ref(false)
   const selectedScheduledOrder = ref<string | null>(null)
   const activeHostDeviceName = ref('')
+  const hostDeviceNames = ref<string[]>([])
   const draggedOrderId = ref<string | null>(null)
   const isDragging = ref(false)
   const calBase = ref(getMonday(new Date()))
@@ -159,8 +161,7 @@ export function useHaltHassSchedule() {
   }
 
   const hostDeviceTabs = computed(() => {
-    return Array.from(new Set(workOrders.value.map((order) => getOrderHostDeviceName(order)).filter((name) => name && name !== '-')))
-      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return [...hostDeviceNames.value]
   })
 
   function doesScheduledEventMatchActiveHostDevice(event: ScheduledEvent, activeScheduleHostName: string) {
@@ -261,6 +262,7 @@ export function useHaltHassSchedule() {
   async function refreshWorkOrders() {
     workOrdersLoading.value = true
     try {
+      await refreshHostDeviceNames()
       const byId = new Map<number, HaltHassOrder>()
       const pageSize = 100
       let requestFailed = false
@@ -318,12 +320,25 @@ export function useHaltHassSchedule() {
     }
   }
 
+  async function refreshHostDeviceNames() {
+    const authOk = await initAuth()
+    if (!authOk) return
+
+    const result = await fetchScheduleHostDeviceNames('halt-hass', getAuthHeaders())
+    if (!result.success) {
+      console.warn('加载 HALT-HASS 主机列表失败', result.error)
+      return
+    }
+
+    hostDeviceNames.value = result.names
+  }
+
   const scheduledOrders = computed<Record<string, string[]>>(() => {
     const map: Record<string, string[]> = {}
     Object.values(scheduledEvents.value).forEach((event) => {
       const cellKey = getCellKey(event.dateStr, event.startTimeKey)
       if (!map[cellKey]) map[cellKey] = []
-      map[cellKey].push(event.eventId)
+      map[cellKey].push(event.orderId)
     })
     return map
   })

@@ -18,6 +18,7 @@ const {
   weekLabel,
   timeSlots,
   slotHeightPx,
+  scheduledOrders,
   scheduledLayoutItems,
   isDragging,
   fmtDate,
@@ -62,7 +63,13 @@ let ro: ResizeObserver | null = null
 const gridInnerWidth = computed(() => {
   return Math.max(0, gridViewportWidth.value)
 })
-const scheduledOrderIdSet = computed(() => new Set(scheduledLayoutItems.value.map((item) => item.orderId)))
+const scheduledOrderIdSet = computed(() => {
+  const set = new Set<string>()
+  Object.values(scheduledOrders.value || {}).forEach((orderIds) => {
+    orderIds.forEach((orderId) => set.add(orderId))
+  })
+  return set
+})
 const pickerRows = computed(() => selectedInfo.value ? getActiveInstruments(selectedInfo.value) : [])
 
 const isExpanded = (orderId: string) => expandedOrderIds.value.includes(orderId)
