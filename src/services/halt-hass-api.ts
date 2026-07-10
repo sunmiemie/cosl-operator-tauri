@@ -9,6 +9,7 @@ import type {
   BoardGroup,
   CreateBoardGroupParams,
   HaltHassJob,
+  HaltHassCurveFile,
 } from '@/views/process-halt-hass/types'
 
 // ==================== 类型定义 ====================
@@ -87,6 +88,12 @@ export interface UpdateHaltHassParams {
   processJson?: HaltHassProcessJson
 }
 
+interface HaltHassCurveUploadEnvelope {
+  code: number
+  msg?: string
+  data?: HaltHassCurveFile
+}
+
 // ==================== API 函数 ====================
 
 /**
@@ -142,6 +149,31 @@ export async function updateHaltHassProcess(
  */
 export async function deleteHaltHassProcess(id: number): Promise<ApiResponse<void>> {
   return http.delete<void>(`/test/halt-hass/delete/${id}/`)
+}
+
+/**
+ * 上传 HALT-HASS 曲线文件。
+ * 文件本体保存在后端，返回值写入工艺 JSON，供后续传输到设备端使用。
+ */
+export async function uploadHaltHassCurveFile(
+  file: File,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HaltHassCurveFile>> {
+  const formData = new FormData()
+  formData.append('file', file, file.name)
+
+  const result = await http.postFormData<HaltHassCurveUploadEnvelope>(
+    '/test/halt-hass/curve/upload/',
+    formData,
+    headers,
+  )
+  if (!result.success || !result.data) {
+    return { success: false, error: result.error || '曲线文件上传失败', status: result.status }
+  }
+  if (result.data.code !== 0 || !result.data.data) {
+    return { success: false, error: result.data.msg || '曲线文件上传失败' }
+  }
+  return { success: true, data: result.data.data, status: result.status }
 }
 
 /**
@@ -277,6 +309,7 @@ export async function loadHaltHassProcess(
   // 确保数据结构完整
   const processJson: HaltHassProcessJson = {
     metadata: {
+      ...(detail.processJson.metadata || {}),
       name: detail.name || detail.processJson.metadata?.name || '',
       version: detail.version || detail.processJson.metadata?.version || '1.0.0',
       boardGroup: detail.boardGroups || detail.processJson.metadata?.boardGroup || [],

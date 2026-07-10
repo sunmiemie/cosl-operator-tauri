@@ -71,6 +71,8 @@ const {
   editForm,
   canSave,
   isSaving,
+  isCurveUploading,
+  isRuntimeConfigComplete,
   errorMessage,
   treeData,
   isOnline,
@@ -81,6 +83,9 @@ const {
   versionsByBoardGroup,
   resetProcess,
   updateMetadata,
+  getRuntimeConfigError,
+  uploadCurveFile,
+  removeCurveFile,
   updateFlowchart,
   getRunSettings,
   getObserveBlocks,
@@ -112,6 +117,7 @@ const showJobDrawer = ref(false)
 const showCreateBoardGroupDialog = ref(false)
 const currentJobId = ref<string | null>(null)
 const boardGroupsLoading = ref(false)
+const curveFileInputRef = ref<HTMLInputElement | null>(null)
 
 // 步骤配置（新流程：选择页 -> 安装指导 -> 流程图 -> 预览）
 const steps = [
@@ -130,6 +136,26 @@ const flowchartEdges = ref<Edge[]>([])
 
 // 计算属性
 const canRun = computed(() => backendRunning.value && socketConnected.value)
+const canStartEditing = computed(() => {
+  return Boolean(
+    selectedBoardGroup.value
+      && processJson.value.metadata.name.trim()
+      && processJson.value.metadata.version.trim()
+      && isRuntimeConfigComplete.value
+      && !isCurveUploading.value
+  )
+})
+
+const durationValidationError = computed(() => {
+  const duration = processJson.value.metadata.durationHours
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
+    return '请填写试验时长'
+  }
+  if (Math.abs(duration * 100 - Math.round(duration * 100)) >= 1e-8) {
+    return '试验时长最多保留两位小数'
+  }
+  return ''
+})
 
 // 预览 JSON
 const previewJson = computed(() => {
@@ -191,6 +217,24 @@ function clearBaseVersionSelection() {
 
 // 新建工艺（保留已填写的 metadata）
 function handleNew() {
+  if (!selectedBoardGroup.value) {
+    ElMessage.warning('请选择电路板组')
+    return
+  }
+  if (!processJson.value.metadata.name.trim()) {
+    ElMessage.warning('请填写工艺名称')
+    return
+  }
+  if (!processJson.value.metadata.version.trim()) {
+    ElMessage.warning('请填写版本号')
+    return
+  }
+  const runtimeError = getRuntimeConfigError()
+  if (runtimeError) {
+    ElMessage.warning(runtimeError)
+    return
+  }
+
   // 注意：不调用 resetProcess()，因为用户已经在选择页填写了 metadata
   // 如果已选择基础版本进行迭代，保留已加载的流程图数据
   if (!selectedBaseVersion.value) {
@@ -199,6 +243,43 @@ function handleNew() {
     flowchartEdges.value = []
   }
   currentStep.value = 1
+}
+
+function handleDurationInput(event: Event) {
+  const rawValue = (event.target as HTMLInputElement).value
+  if (!rawValue.trim()) {
+    updateMetadata({ durationHours: undefined })
+    return
+  }
+  const duration = Number(rawValue)
+  updateMetadata({ durationHours: Number.isFinite(duration) ? duration : undefined })
+}
+
+function chooseCurveFile() {
+  if (!isCurveUploading.value) {
+    curveFileInputRef.value?.click()
+  }
+}
+
+async function handleCurveFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  const success = await uploadCurveFile(file)
+  input.value = ''
+  if (success) {
+    ElMessage.success('曲线文件上传成功')
+  } else {
+    ElMessage.error(errorMessage.value || '曲线文件上传失败')
+  }
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 // 加载/导入流程图文件（支持 Studio 原生格式）
@@ -324,7 +405,11 @@ async function handleExport() {
 // 暂存工艺到本地
 async function handleSaveTemp() {
   if (!canSave.value) {
-    ElMessage.warning('请先填写工艺名称')
+    ElMessage.warning(
+      isCurveUploading.value
+        ? '曲线文件正在上传，请稍候'
+        : getRuntimeConfigError() || '请先填写工艺名称'
+    )
     return
   }
 
@@ -344,7 +429,11 @@ async function handleSaveTemp() {
 // 保存工艺到后端
 async function handleSave() {
   if (!canSave.value) {
-    ElMessage.warning('请先填写工艺名称')
+    ElMessage.warning(
+      isCurveUploading.value
+        ? '曲线文件正在上传，请稍候'
+        : getRuntimeConfigError() || '请先填写工艺名称'
+    )
     return
   }
 
@@ -501,6 +590,13 @@ async function openJobDrawer() {
   await fetchMyJobData()
 }
 
+function restoreSelectedBoardGroupFromProcess() {
+  const boardGroupId = processJson.value.metadata.boardGroup?.[0]?.id
+  if (!boardGroupId) return
+  const group = boardGroups.value.find(item => item.id === boardGroupId)
+  if (group) selectBoardGroup(group)
+}
+
 // 提交审核（从工作抽屉）
 async function handleSubmitFromJob(processId: number) {
   const confirmed = await ElMessageBox.confirm(
@@ -519,6 +615,15 @@ async function handleSubmitFromJob(processId: number) {
   const loadSuccess = await fetchProcess(processId)
   if (!loadSuccess) {
     ElMessage.error('加载工艺失败')
+    return
+  }
+
+  restoreSelectedBoardGroupFromProcess()
+  const runtimeError = getRuntimeConfigError()
+  if (runtimeError) {
+    showJobDrawer.value = false
+    currentStep.value = 0
+    ElMessage.warning(`${runtimeError}，补齐后再提交审核`)
     return
   }
 
@@ -542,16 +647,15 @@ async function handleEditFromJob(row: HaltHassJob) {
       flowchartNodes.value = nodes
       flowchartEdges.value = edges
     }
-    // 设置选中的电路板组
-    if (row.boardGroups.length > 0) {
-      const group = boardGroups.value.find(g => g.id === row.boardGroups[0].id)
-      if (group) {
-        selectBoardGroup(group)
-      }
-    }
+    restoreSelectedBoardGroupFromProcess()
     showJobDrawer.value = false
-    currentStep.value = 1
-    ElMessage.success(`已加载工艺: ${row.name}`)
+    const runtimeError = getRuntimeConfigError()
+    currentStep.value = runtimeError ? 0 : 1
+    if (runtimeError) {
+      ElMessage.warning(`已加载工艺，请先补充运行配置：${runtimeError}`)
+    } else {
+      ElMessage.success(`已加载工艺: ${row.name}`)
+    }
   } else {
     ElMessage.error('加载工艺失败')
   }
@@ -591,9 +695,15 @@ async function handleContinueEdit(item: { fileName: string; name: string }) {
       flowchartNodes.value = nodes
       flowchartEdges.value = edges
     }
+    restoreSelectedBoardGroupFromProcess()
     showJobDrawer.value = false
-    currentStep.value = 1
-    ElMessage.success('加载成功')
+    const runtimeError = getRuntimeConfigError()
+    currentStep.value = runtimeError ? 0 : 1
+    if (runtimeError) {
+      ElMessage.warning(`已加载暂存工艺，请先补充运行配置：${runtimeError}`)
+    } else {
+      ElMessage.success('加载成功')
+    }
   } else {
     ElMessage.error('加载失败')
   }
@@ -833,6 +943,93 @@ watch(currentStep, (step) => {
                     />
                   </div>
 
+                  <div class="runtime-config-grid">
+                    <div class="form-row">
+                      <label for="halt-hass-duration" class="required-label">试验时长</label>
+                      <div class="duration-input">
+                        <input
+                          id="halt-hass-duration"
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          inputmode="decimal"
+                          :value="processJson.metadata.durationHours ?? ''"
+                          placeholder="请输入试验时长"
+                          @input="handleDurationInput"
+                        />
+                        <span class="input-suffix">小时</span>
+                      </div>
+                      <p v-if="durationValidationError" class="field-error">
+                        {{ durationValidationError }}
+                      </p>
+                      <p v-else class="field-hint">最多保留两位小数</p>
+                    </div>
+
+                    <div class="form-row curve-file-row">
+                      <label for="halt-hass-curve-file" class="required-label">HALT-HASS 曲线文件</label>
+                      <input
+                        id="halt-hass-curve-file"
+                        ref="curveFileInputRef"
+                        class="visually-hidden-input"
+                        type="file"
+                        @change="handleCurveFileSelected"
+                      />
+
+                      <div v-if="processJson.metadata.curveFile" class="curve-file-card">
+                        <div class="curve-file-icon">
+                          <Icon icon="mdi:file-chart-outline" />
+                        </div>
+                        <div class="curve-file-info">
+                          <strong :title="processJson.metadata.curveFile.fileName">
+                            {{ processJson.metadata.curveFile.fileName }}
+                          </strong>
+                          <span>
+                            {{ formatFileSize(processJson.metadata.curveFile.fileSize) }}
+                            · SHA-256 已校验
+                          </span>
+                        </div>
+                        <div class="curve-file-actions">
+                          <button
+                            type="button"
+                            class="icon-action-btn"
+                            title="替换曲线文件"
+                            :disabled="isCurveUploading"
+                            @click="chooseCurveFile"
+                          >
+                            <Icon icon="mdi:file-replace-outline" />
+                          </button>
+                          <button
+                            type="button"
+                            class="icon-action-btn danger"
+                            title="移除曲线文件"
+                            :disabled="isCurveUploading"
+                            @click="removeCurveFile"
+                          >
+                            <Icon icon="mdi:delete-outline" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        v-else
+                        type="button"
+                        class="curve-upload-btn"
+                        :disabled="isCurveUploading"
+                        @click="chooseCurveFile"
+                      >
+                        <Icon
+                          :icon="isCurveUploading ? 'mdi:loading' : 'mdi:upload-outline'"
+                          :class="{ spinning: isCurveUploading }"
+                        />
+                        {{ isCurveUploading ? '正在上传...' : '上传曲线文件' }}
+                      </button>
+                      <p v-if="!processJson.metadata.curveFile" class="field-error">
+                        请上传 HALT-HASS 曲线文件
+                      </p>
+                      <p class="field-hint">支持设备可识别的曲线文件，单文件不超过 100 MB</p>
+                    </div>
+                  </div>
+
                   <!-- 版本迭代选择 -->
                   <div v-if="selectedBoardGroup && versionsByBoardGroup.length > 0" class="version-section">
                     <div class="version-section-header">
@@ -891,7 +1088,8 @@ watch(currentStep, (step) => {
 
           <button
             class="primary-btn"
-            :disabled="!selectedBoardGroup || !processJson.metadata.name.trim() || !processJson.metadata.version"
+            :disabled="!canStartEditing"
+            :title="getRuntimeConfigError() || ''"
             @click="handleNew"
           >
             开始编辑
@@ -1425,6 +1623,180 @@ watch(currentStep, (step) => {
 .form-row input::placeholder,
 .form-row textarea::placeholder {
   color: var(--color-text-tertiary, #94a3b8);
+}
+
+.runtime-config-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.75fr) minmax(320px, 1.25fr);
+  gap: 16px;
+  margin-top: 2px;
+}
+
+.runtime-config-grid .form-row {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.required-label::after {
+  content: ' *';
+  color: var(--color-error, #ef4444);
+}
+
+.duration-input {
+  position: relative;
+}
+
+.duration-input input {
+  width: 100%;
+  padding-right: 58px;
+  box-sizing: border-box;
+}
+
+.input-suffix {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  font-size: 13px;
+  color: var(--color-text-secondary, #64748b);
+  pointer-events: none;
+}
+
+.field-error,
+.field-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.field-error {
+  color: var(--color-error, #ef4444);
+}
+
+.field-hint {
+  color: var(--color-text-tertiary, #94a3b8);
+}
+
+.visually-hidden-input {
+  display: none;
+}
+
+.curve-upload-btn {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: #eff6ff;
+  border: 1px dashed #93c5fd;
+  border-radius: 8px;
+  color: var(--color-primary, #2563eb);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.curve-upload-btn:hover:not(:disabled) {
+  background: #dbeafe;
+  border-color: #60a5fa;
+}
+
+.curve-upload-btn:disabled,
+.icon-action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.curve-file-card {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #dbe4ee;
+  border-radius: 8px;
+}
+
+.curve-file-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e0f2fe;
+  border-radius: 6px;
+  color: #0284c7;
+  font-size: 20px;
+}
+
+.curve-file-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.curve-file-info strong {
+  overflow: hidden;
+  color: var(--color-text-primary, #1e293b);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.curve-file-info span {
+  color: var(--color-text-tertiary, #94a3b8);
+  font-size: 11px;
+}
+
+.curve-file-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-action-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--color-text-secondary, #64748b);
+  cursor: pointer;
+}
+
+.icon-action-btn:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: var(--color-primary, #2563eb);
+}
+
+.icon-action-btn.danger:hover:not(:disabled) {
+  background: #fee2e2;
+  color: var(--color-error, #dc2626);
+}
+
+.spinning {
+  animation: halt-hass-spin 0.8s linear infinite;
+}
+
+@keyframes halt-hass-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 980px) {
+  .runtime-config-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 版本迭代选择区域 */

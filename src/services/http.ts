@@ -286,9 +286,19 @@ class HttpClient {
       }
 
       if (!response.ok) {
+        const responseMessage =
+          data && typeof data === 'object'
+            ? String(
+                (data as Record<string, unknown>).msg ||
+                  (data as Record<string, unknown>).message ||
+                  (data as Record<string, unknown>).detail ||
+                  ''
+              )
+            : ''
         return {
           success: false,
-          error: `请求失败: ${response.status} ${response.statusText}`,
+          data,
+          error: responseMessage || `请求失败: ${response.status} ${response.statusText}`,
           status: response.status,
         }
       }

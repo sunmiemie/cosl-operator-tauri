@@ -173,6 +173,18 @@ export interface HaltHassJob {
   auditNum?: number
 }
 
+// HALT-HASS 曲线文件引用（文件本体保存在后端）
+export interface HaltHassCurveFile {
+  fileId: string
+  fileName: string
+  storedName: string
+  storageKey: string
+  fileSize: number
+  contentType: string
+  sha256: string
+  uploadedAt: string
+}
+
 // HALT-HASS 工艺元信息
 export interface HaltHassMetadata {
   // 工艺名称
@@ -183,6 +195,10 @@ export interface HaltHassMetadata {
   boardGroup: BoardGroupItem[]
   // 描述/说明
   description: string
+  // 试验时长（小时，最多两位小数）
+  durationHours?: number
+  // HALT-HASS 曲线文件
+  curveFile?: HaltHassCurveFile
   // 基础版本（用于迭代）
   baseVersion?: {
     processId: number

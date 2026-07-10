@@ -18,6 +18,7 @@ import {
   createBoardGroup as createBoardGroupApi,
   getHaltHassMyJob,
   deleteHaltHassProcess,
+  uploadHaltHassCurveFile,
   type HaltHassProcessListItem,
   type HaltHassVersionItem,
 } from '@/services/halt-hass-api'
@@ -75,6 +76,9 @@ export function useHaltHassProcess() {
   // 保存状态
   const isSaving = ref(false)
 
+  // 曲线文件上传状态
+  const isCurveUploading = ref(false)
+
   // 错误信息
   const errorMessage = ref<string | null>(null)
 
@@ -110,9 +114,32 @@ export function useHaltHassProcess() {
   // 流程图数据快捷访问
   const flowchart = computed(() => processJson.value.flowchart)
   
-  // 是否可以保存（只要有名称就可以保存）
+  function hasAtMostTwoDecimalPlaces(value: number): boolean {
+    return Math.abs(value * 100 - Math.round(value * 100)) < 1e-8
+  }
+
+  function getRuntimeConfigError(): string | null {
+    const duration = metadata.value.durationHours
+    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
+      return '请填写试验时长'
+    }
+    if (!hasAtMostTwoDecimalPlaces(duration)) {
+      return '试验时长最多保留两位小数'
+    }
+    if (!metadata.value.curveFile?.fileId || !metadata.value.curveFile.storageKey) {
+      return '请上传 HALT-HASS 曲线文件'
+    }
+    return null
+  }
+
+  const isRuntimeConfigComplete = computed(() => getRuntimeConfigError() === null)
+
+  // 是否可以保存
   const canSave = computed(() => {
-    return metadata.value.name.trim() !== '' && !isSaving.value
+    return metadata.value.name.trim() !== ''
+      && isRuntimeConfigComplete.value
+      && !isSaving.value
+      && !isCurveUploading.value
   })
 
   // ========== 方法 ==========
@@ -131,6 +158,38 @@ export function useHaltHassProcess() {
       ...updates,
     }
     editForm.hasUnsavedChanges = true
+  }
+
+  async function uploadCurveFile(file: File): Promise<boolean> {
+    if (file.size <= 0) {
+      errorMessage.value = '曲线文件不能为空'
+      return false
+    }
+    if (file.size > 100 * 1024 * 1024) {
+      errorMessage.value = '曲线文件不能超过 100 MB'
+      return false
+    }
+
+    try {
+      isCurveUploading.value = true
+      errorMessage.value = null
+      const result = await uploadHaltHassCurveFile(file, getAuthHeaders())
+      if (!result.success || !result.data) {
+        errorMessage.value = result.error || '曲线文件上传失败'
+        return false
+      }
+      updateMetadata({ curveFile: result.data })
+      return true
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '曲线文件上传失败'
+      return false
+    } finally {
+      isCurveUploading.value = false
+    }
+  }
+
+  function removeCurveFile() {
+    updateMetadata({ curveFile: undefined })
   }
 
   // ========== 安装指导相关方法 ==========
@@ -706,6 +765,7 @@ export function useHaltHassProcess() {
     editForm,
     isLoading,
     isSaving,
+    isCurveUploading,
     errorMessage,
     tempList,
     treeData,
@@ -720,10 +780,14 @@ export function useHaltHassProcess() {
     installGuide,
     flowchart,
     canSave,
+    isRuntimeConfigComplete,
 
     // 基础方法
     resetProcess,
     updateMetadata,
+    getRuntimeConfigError,
+    uploadCurveFile,
+    removeCurveFile,
 
     // 安装指导方法
     updateInstallGuide,
