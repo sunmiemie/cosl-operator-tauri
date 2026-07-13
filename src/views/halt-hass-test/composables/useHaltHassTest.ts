@@ -18,6 +18,7 @@ import {
   downloadTempData,
   downloadFeedbackData,
   downloadProcessData,
+  type HaltHassStartResult,
 } from '@/services/halt-hass-order'
 import { useAuth } from '@/composables/useAuth'
 import { isMockHaltHassOrder, MOCK_HALT_HASS_PROCESS } from '../mock-halt-hass-fixture'
@@ -146,6 +147,57 @@ export function useHaltHassTest() {
     currentOrder.value = order
   }
 
+  function getOrderSerials(order: HaltHassOrder): string[] {
+    const scannedSerials = (order.scannedBoards || []).map(board => board.serial.trim()).filter(Boolean)
+    if (scannedSerials.length) return scannedSerials
+
+    return (order.boardSerials || [])
+      .map((item) => {
+        if (typeof item === 'string') return item.trim()
+        return String(item.serial || item.sn || item.serialNumber || item.serial_num || '').trim()
+      })
+      .filter(Boolean)
+  }
+
+  function applyRuntimeState(order: HaltHassOrder, runtime?: HaltHassStartResult): void {
+    if (!runtime) return
+    order.status = 2
+    order.startedAt = runtime.startedAt || order.startedAt
+    order.cycleCount = runtime.cycleCount ?? order.cycleCount
+    order.singleCycleDurationHours = runtime.singleCycleDurationHours ?? order.singleCycleDurationHours
+    order.totalCycleDurationHours = runtime.totalCycleDurationHours ?? order.totalCycleDurationHours
+    order.requiredRuntimeSeconds = runtime.requiredRuntimeSeconds ?? order.requiredRuntimeSeconds
+    order.elapsedRuntimeSeconds = runtime.elapsedRuntimeSeconds ?? order.elapsedRuntimeSeconds
+    order.remainingRuntimeSeconds = runtime.remainingRuntimeSeconds ?? order.remainingRuntimeSeconds
+    order.runtimeProgress = runtime.runtimeProgress ?? order.runtimeProgress
+    order.runtimeConfigured = runtime.runtimeConfigured ?? order.runtimeConfigured
+    order.runtimeCompleted = runtime.runtimeCompleted ?? order.runtimeCompleted
+    order.currentRunStartedAt = runtime.currentRunStartedAt ?? order.currentRunStartedAt
+  }
+
+  async function activateOrderRuntime(order: HaltHassOrder, serials = getOrderSerials(order)): Promise<boolean> {
+    if (isMockHaltHassOrder(order)) return true
+    if (!userInfo.value) {
+      errorMessage.value = '用户信息不存在'
+      return false
+    }
+    if (serials.length !== order.boardCount) {
+      errorMessage.value = `需要 ${order.boardCount} 个有效电路板序列号，当前仅有 ${serials.length} 个`
+      return false
+    }
+
+    const result = await startOrder(order.id, {
+      operatorId: userInfo.value.id,
+      boardSerials: serials,
+    })
+    if (!result.success) {
+      errorMessage.value = result.error || '开始测试失败'
+      return false
+    }
+    applyRuntimeState(order, result.data)
+    return true
+  }
+
   /**
    * 开始测试（调用 API）
    */
@@ -169,13 +221,8 @@ export function useHaltHassTest() {
         return true
       }
 
-      const result = await startOrder(currentOrder.value.id, {
-        operatorId: userInfo.value!.id,
-        boardSerials,
-      })
-
-      if (!result.success) {
-        errorMessage.value = result.error || '开始测试失败'
+      const activated = await activateOrderRuntime(currentOrder.value, boardSerials)
+      if (!activated) {
         return false
       }
 
@@ -369,6 +416,9 @@ export function useHaltHassTest() {
 
       const tempData = result.data
 
+      const activated = await activateOrderRuntime(order)
+      if (!activated) return false
+
       // 恢复状态
       currentOrder.value = order
       testMode.value = 'continue'
@@ -381,8 +431,11 @@ export function useHaltHassTest() {
         nodeResults.value = tempData.flowchartState.nodeResults || []
       }
 
-      // 下载工艺
-      await downloadProcess()
+      // 下载工艺后恢复到暂存时所在阶段。
+      const savedPhase = tempData.phase
+      const processLoaded = await downloadProcess()
+      if (!processLoaded) return false
+      phase.value = savedPhase
 
       return true
     } catch (error) {
@@ -407,6 +460,9 @@ export function useHaltHassTest() {
         errorMessage.value = result.error || '加载反馈数据失败'
         return false
       }
+
+      const activated = await activateOrderRuntime(order)
+      if (!activated) return false
 
       currentOrder.value = order
       testMode.value = 'feedback'

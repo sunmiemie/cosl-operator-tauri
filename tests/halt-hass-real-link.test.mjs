@@ -5,9 +5,13 @@ import { join } from 'node:path'
 const root = process.cwd()
 const servicePath = join(root, 'src/services/halt-hass-order.ts')
 const schedulePath = join(root, 'src/views/halt-hass-test/composables/useHaltHassSchedule.ts')
+const testFlowPath = join(root, 'src/views/halt-hass-test/composables/useHaltHassTest.ts')
+const reportUploaderPath = join(root, 'src/views/halt-hass-test/components/ReportUploader.vue')
 
 const service = readFileSync(servicePath, 'utf8')
 const schedule = readFileSync(schedulePath, 'utf8')
+const testFlow = readFileSync(testFlowPath, 'utf8')
+const reportUploader = readFileSync(reportUploaderPath, 'utf8')
 
 assert.equal(
   schedule.includes('import.meta.env.DEV'),
@@ -27,6 +31,9 @@ assert.match(
 )
 assert.match(service, /boardSerials,\s*[\s\S]*scannedBoards,/, 'mapHaltHassOrder must preserve management preset board serials')
 assert.match(service, /scheduleSegments,/, 'mapHaltHassOrder must preserve backend schedule segments')
+assert.match(service, /cycleCount:\s*Number\(dto\.cycle_count \?\? dto\.cycleCount/, 'order mapping must preserve cycle count')
+assert.match(service, /totalCycleDurationHours:\s*Number\(/, 'order mapping must preserve cycle total duration')
+assert.match(service, /remainingRuntimeSeconds:\s*Number\(/, 'order mapping must preserve remaining runtime')
 
 assert.match(service, /operatorId:\s*data\.operatorId/, 'startOrder must send camelCase operatorId')
 assert.match(service, /boardSerials:\s*data\.boardSerials/, 'startOrder must send camelCase boardSerials')
@@ -52,6 +59,19 @@ assert.match(
   /downloadProcessData[\s\S]*\/test\/halt-hass\/detail\/\$\{processId\}\//,
   'downloadProcessData must fetch process detail from the existing detail endpoint',
 )
+
+assert.match(
+  testFlow,
+  /restoreTemp[\s\S]*activateOrderRuntime\(order\)/,
+  'restoring saved work must resume backend runtime accounting',
+)
+assert.match(
+  testFlow,
+  /loadFeedback[\s\S]*activateOrderRuntime\(order\)/,
+  'redo work must restart backend runtime accounting',
+)
+assert.match(reportUploader, /循环次数/, 'report upload must display cycle count')
+assert.match(reportUploader, /循环总时长/, 'report upload must display total cycle duration')
 assert.match(
   service,
   /downloadFeedbackData[\s\S]*unwrapBackendEnvelope/,

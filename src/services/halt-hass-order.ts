@@ -40,6 +40,21 @@ export type HaltHassOrderWriteResponse = {
   data?: HaltHassOrderDTO
 }
 
+export type HaltHassStartResult = {
+  success: boolean
+  startedAt?: string | null
+  cycleCount?: number
+  singleCycleDurationHours?: number
+  totalCycleDurationHours?: number
+  requiredRuntimeSeconds?: number
+  elapsedRuntimeSeconds?: number
+  remainingRuntimeSeconds?: number
+  runtimeProgress?: number
+  runtimeConfigured?: boolean
+  runtimeCompleted?: boolean
+  currentRunStartedAt?: string | null
+}
+
 type BackendEnvelope<T> = {
   code: number
   msg?: string
@@ -144,6 +159,16 @@ export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
     orderNo,
     status: Number(dto.status ?? 0),
     boardCount: Number(dto.board_count ?? dto.boardCount ?? scannedBoards.length ?? 0),
+    cycleCount: Number(dto.cycle_count ?? dto.cycleCount ?? 1),
+    singleCycleDurationHours: Number(dto.single_cycle_duration_hours ?? dto.singleCycleDurationHours ?? 0),
+    totalCycleDurationHours: Number(dto.total_cycle_duration_hours ?? dto.totalCycleDurationHours ?? 0),
+    requiredRuntimeSeconds: Number(dto.required_runtime_seconds ?? dto.requiredRuntimeSeconds ?? 0),
+    elapsedRuntimeSeconds: Number(dto.elapsed_runtime_seconds ?? dto.elapsedRuntimeSeconds ?? 0),
+    remainingRuntimeSeconds: Number(dto.remaining_runtime_seconds ?? dto.remainingRuntimeSeconds ?? 0),
+    runtimeProgress: Number(dto.runtime_progress ?? dto.runtimeProgress ?? 0),
+    runtimeConfigured: Boolean(dto.runtime_configured ?? dto.runtimeConfigured ?? false),
+    runtimeCompleted: Boolean(dto.runtime_completed ?? dto.runtimeCompleted ?? false),
+    currentRunStartedAt: dto.current_run_started_at ?? dto.currentRunStartedAt ?? null,
     boardGroup: {
       id: Number(boardGroup.id ?? dto.board_group_id ?? dto.boardGroupId ?? 0),
       name: String(boardGroup.name || dto.board_group_name || dto.boardGroupName || '-'),
@@ -238,7 +263,7 @@ export async function startOrder(
     operatorId: number
     boardSerials: string[]
   }
-): Promise<ApiResponse<{ success: boolean }>> {
+): Promise<ApiResponse<HaltHassStartResult>> {
   const response = await http.post<BackendEnvelope<unknown>>(
     `/test/halt-hass/order/start/${orderId}/`,
     {
@@ -247,8 +272,26 @@ export async function startOrder(
     }
   )
   const unwrapped = unwrapBackendEnvelope(response, '开始测试失败')
-  if (!unwrapped.success) return apiFailure<{ success: boolean }>(unwrapped, '开始测试失败')
-  return { success: true, data: { success: true }, status: response.status }
+  if (!unwrapped.success) return apiFailure<HaltHassStartResult>(unwrapped, '开始测试失败')
+  const runtime = (unwrapped.data || {}) as HaltHassOrderDTO
+  return {
+    success: true,
+    data: {
+      success: true,
+      startedAt: runtime.started_at ?? runtime.startedAt ?? null,
+      cycleCount: Number(runtime.cycle_count ?? runtime.cycleCount ?? 1),
+      singleCycleDurationHours: Number(runtime.single_cycle_duration_hours ?? runtime.singleCycleDurationHours ?? 0),
+      totalCycleDurationHours: Number(runtime.total_cycle_duration_hours ?? runtime.totalCycleDurationHours ?? 0),
+      requiredRuntimeSeconds: Number(runtime.required_runtime_seconds ?? runtime.requiredRuntimeSeconds ?? 0),
+      elapsedRuntimeSeconds: Number(runtime.elapsed_runtime_seconds ?? runtime.elapsedRuntimeSeconds ?? 0),
+      remainingRuntimeSeconds: Number(runtime.remaining_runtime_seconds ?? runtime.remainingRuntimeSeconds ?? 0),
+      runtimeProgress: Number(runtime.runtime_progress ?? runtime.runtimeProgress ?? 0),
+      runtimeConfigured: Boolean(runtime.runtime_configured ?? runtime.runtimeConfigured ?? false),
+      runtimeCompleted: Boolean(runtime.runtime_completed ?? runtime.runtimeCompleted ?? false),
+      currentRunStartedAt: runtime.current_run_started_at ?? runtime.currentRunStartedAt ?? null,
+    },
+    status: response.status,
+  }
 }
 
 /**

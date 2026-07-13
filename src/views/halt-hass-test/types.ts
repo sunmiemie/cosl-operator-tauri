@@ -84,6 +84,16 @@ export interface HaltHassOrder {
   orderNo: string
   status: number  // 0=已创建, 1=待领取, 2=测试中, 3=待审核, 4=待重做, 5=正常, 6=异常, 7=暂存, 8=疑问
   boardCount: number
+  cycleCount: number
+  singleCycleDurationHours: number
+  totalCycleDurationHours: number
+  requiredRuntimeSeconds: number
+  elapsedRuntimeSeconds: number
+  remainingRuntimeSeconds: number
+  runtimeProgress: number
+  runtimeConfigured: boolean
+  runtimeCompleted: boolean
+  currentRunStartedAt?: string | null
   boardGroup: OrderBoardGroup
   process: OrderProcess
   boardSerials?: OrderBoardSerial[]

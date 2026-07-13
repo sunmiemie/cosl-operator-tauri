@@ -649,6 +649,18 @@ onUnmounted(() => {
                   <span class="info-label">需扫描数量</span>
                   <span class="info-value">{{ currentOrder.boardCount }} 块</span>
                 </div>
+                <div class="info-item">
+                  <span class="info-label">循环次数</span>
+                  <span class="info-value">{{ currentOrder.cycleCount }} 次</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">单循环时长</span>
+                  <span class="info-value">{{ currentOrder.singleCycleDurationHours.toFixed(2) }} 小时</span>
+                </div>
+                <div class="info-item">
+                  <span class="info-label">循环总时长</span>
+                  <span class="info-value">{{ currentOrder.totalCycleDurationHours.toFixed(2) }} 小时</span>
+                </div>
               </div>
               <div v-else class="empty-state">
                 <Icon icon="mdi:information-outline" />
@@ -749,6 +761,9 @@ onUnmounted(() => {
             :upload-progress="uploadProgress"
             :upload-error="uploadError"
             :upload-success="!!uploadedReportId"
+            :cycle-count="currentOrder?.cycleCount || 1"
+            :single-cycle-duration-hours="currentOrder?.singleCycleDurationHours || 0"
+            :total-cycle-duration-hours="currentOrder?.totalCycleDurationHours || 0"
             @upload="handleUploadReport"
             @retry="handleRetryUpload"
             @complete="handleComplete"

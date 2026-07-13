@@ -12,6 +12,9 @@ const props = defineProps<{
   uploadProgress: number
   uploadError: string
   uploadSuccess: boolean
+  cycleCount: number
+  singleCycleDurationHours: number
+  totalCycleDurationHours: number
 }>()
 
 // Emits
@@ -45,6 +48,21 @@ const statusClass = computed(() => {
 
 <template>
   <div class="report-uploader">
+    <div class="runtime-summary">
+      <div class="runtime-item">
+        <span class="runtime-label">循环次数</span>
+        <strong>{{ cycleCount }} 次</strong>
+      </div>
+      <div class="runtime-item">
+        <span class="runtime-label">单循环时长</span>
+        <strong>{{ singleCycleDurationHours.toFixed(2) }} 小时</strong>
+      </div>
+      <div class="runtime-item">
+        <span class="runtime-label">循环总时长</span>
+        <strong>{{ totalCycleDurationHours.toFixed(2) }} 小时</strong>
+      </div>
+    </div>
+
     <!-- 上传状态区域 -->
     <div class="upload-status" :class="statusClass">
       <!-- 状态图标 -->
@@ -137,6 +155,31 @@ const statusClass = computed(() => {
   background: var(--color-bg-secondary, #fff);
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: 1rem;
+}
+
+.runtime-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+}
+
+.runtime-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.75rem;
+}
+
+.runtime-item + .runtime-item {
+  border-left: 1px solid var(--color-border, #e2e8f0);
+}
+
+.runtime-label {
+  color: var(--color-text-secondary, #64748b);
+  font-size: 0.75rem;
 }
 
 /* 上传状态 */

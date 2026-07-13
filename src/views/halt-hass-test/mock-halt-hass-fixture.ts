@@ -8,6 +8,15 @@ export const MOCK_HALT_HASS_ORDER: HaltHassOrder = {
   orderNo: 'HH-DEMO-001',
   status: 1,
   boardCount: 2,
+  cycleCount: 1,
+  singleCycleDurationHours: 0.01,
+  totalCycleDurationHours: 0.01,
+  requiredRuntimeSeconds: 36,
+  elapsedRuntimeSeconds: 0,
+  remainingRuntimeSeconds: 36,
+  runtimeProgress: 0,
+  runtimeConfigured: true,
+  runtimeCompleted: false,
   boardGroup: {
     id: 9001,
     name: 'HALT-HASS 演示电路板组',
@@ -36,6 +45,7 @@ export const MOCK_HALT_HASS_PROCESS: HaltHassProcessJson = {
     boardGroup: [{ id: 9001, name: 'HALT-HASS 演示电路板组' }],
     description: '本工艺用于无后端/无硬件环境下验证 HALT-HASS 测试全流程。',
     createdBy: '系统演示',
+    durationHours: 0.01,
   },
   installGuide: {
     steps: [
