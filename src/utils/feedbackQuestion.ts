@@ -99,6 +99,13 @@ export interface TargetItem {
 
 // ==================== 解析函数 ====================
 
+// 历史 JSON 可能包含空项或非数组字段，查找时保留其余有效内容。
+function findById<T>(items: T[] | undefined, id: number): T | undefined {
+  return Array.isArray(items)
+    ? items.find(item => item !== null && typeof item === 'object' && (item as { id?: unknown }).id === id)
+    : undefined
+}
+
 /**
  * 生成目标项的唯一 key
  */
@@ -140,24 +147,24 @@ function findStepInfo(
   
   if (position === 'total') {
     // 整体检测
-    const step = eyesData.total?.step?.find(s => s.id === stepId)
+    const step = findById(eyesData.total?.step, stepId)
     return { step, url: eyesData.total?.url }
   }
   
   if (position === 'area' && areaId !== undefined) {
-    const area = eyesData.area?.find(a => a.id === areaId)
+    const area = findById(eyesData.area, areaId)
     if (!area) return {}
     
     if (areaPosition === 'general') {
       // 区域通用检测
-      const step = area.general?.step?.find(s => s.id === stepId)
+      const step = findById(area.general?.step, stepId)
       return { step, url: area.url }
     }
     
     if (areaPosition === 'detail' && detailId !== undefined) {
       // 具体点位检测
-      const detail = area.detail?.find(d => d.id === detailId)
-      const step = detail?.step?.find(s => s.id === stepId)
+      const detail = findById(area.detail, detailId)
+      const step = findById(detail?.step, stepId)
       return { step, url: detail?.url }
     }
   }
@@ -191,14 +198,14 @@ function findReportData(
   if (position === 'total') {
     target = eyesData.total as Record<string, unknown[]>
   } else if (position === 'area' && areaId !== undefined) {
-    const area = eyesData.area?.find((a: Record<string, unknown>) => a.id === areaId) as Record<string, unknown> | undefined
+    const area = findById(eyesData.area, areaId) as Record<string, unknown> | undefined
     if (!area) return {}
     
     if (areaPosition === 'general') {
       target = area.general as Record<string, unknown[]>
     } else if (areaPosition === 'detail' && detailId !== undefined) {
       const detailArr = area.detail as Record<string, unknown>[] | undefined
-      target = detailArr?.find((d: Record<string, unknown>) => d.id === detailId) as Record<string, unknown[]> | undefined
+      target = findById(detailArr, detailId) as Record<string, unknown[]> | undefined
     }
   }
   
@@ -208,15 +215,15 @@ function findReportData(
   const result: { error?: { url: string[]; desc: string }; question?: { url: string[]; desc: string }; warn?: { url: string[]; desc: string } } = {}
   
   const errorList = target.errorList as Array<{ id: number; error: { url: string[]; desc: string } }> | undefined
-  const errorItem = errorList?.find(e => e.id === stepId)
+  const errorItem = findById(errorList, stepId)
   if (errorItem?.error) result.error = errorItem.error
   
   const questionList = target.questionList as Array<{ id: number; question: { url: string[]; desc: string } }> | undefined
-  const questionItem = questionList?.find(q => q.id === stepId)
+  const questionItem = findById(questionList, stepId)
   if (questionItem?.question) result.question = questionItem.question
   
   const warnList = target.warnList as Array<{ id: number; warn: { url: string[]; desc: string } }> | undefined
-  const warnItem = warnList?.find(w => w.id === stepId)
+  const warnItem = findById(warnList, stepId)
   if (warnItem?.warn) result.warn = warnItem.warn
   
   return result
@@ -243,6 +250,7 @@ export function parseFeedbackTargets(
   const targets: TargetItem[] = []
   
   for (const raw of rawItems) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     // 从工艺中查找步骤信息
     const { step, url } = processJson 
       ? findStepInfo(processJson, raw.type, raw.position, raw.id, raw.areaId, raw.areaPosition, raw.detailId)
@@ -310,6 +318,7 @@ export function parseQuestionTargets(
   const targets: TargetItem[] = []
   
   for (const raw of rawItems) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     // 从工艺中查找步骤信息
     const { step, url } = processJson 
       ? findStepInfo(processJson, raw.type, raw.position, raw.id, raw.areaId, raw.areaPosition, raw.detailId)
