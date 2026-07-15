@@ -46,8 +46,11 @@ function getResultClass(result?: string | number): string {
 }
 
 function getResultText(result?: string | number): string {
-  if (result === 1 || result === '合格') return '合格'
-  if (result === 0 || result === '不合格') return '不合格'
+  if (typeof result === 'number') {
+    result = String(result)
+  }
+  if (result === '2' || result === '合格') return '合格'
+  if (result === '3' || result === '不合格') return '不合格'
   return '未知'
 }
 </script>

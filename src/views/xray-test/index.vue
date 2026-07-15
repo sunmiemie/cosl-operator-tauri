@@ -30,6 +30,7 @@ import { DeviceCheckOverlay, HistoryReportPanel, DownloadProgress } from '@/comp
 // 导入测试执行组件
 import XrayTestExecutor from './components/XrayTestExecutor.vue'
 import TempTestExecutor from '../visual-inspection/components/tests/TempTestExecutor.vue'
+import {useWindow} from "@/composables/useWindow.ts";
 
 // ==================== 类型定义 ====================
 
@@ -58,6 +59,7 @@ const { userInfo, getAuthHeaders } = useAuth()
 const scanner = useScanner()
 const camera = useCamera()
 const { enterEditMode, exitEditMode } = useLayout()
+const {openReportPreview} = useWindow()
 
 // 页面阶段: detect(设备检测) -> ready(准备) -> selecting(选择电路板) -> testing(测试中) -> selecting(循环)
 type PagePhase = 'detect' | 'ready' | 'selecting' | 'testing'
@@ -340,6 +342,12 @@ async function handleBoardScan(serial: string) {
 
   showMessage(`槽位 ${selectedPos.id} 已绑定 [${getStatusText(status)}]`, 'success')
 
+  // 查询该电路板的历史报告并追加
+  const hasBoardId = xrayOrder.board_id != null || xrayOrder.prod_board_id != null || xrayOrder.temp_board_id != null
+  if (hasBoardId) {
+    loadBoardHistory(xrayOrder)
+  }
+
   // 自动选择下一个空槽位
   await nextTick()
   selectNextEmptySlot()
@@ -352,6 +360,7 @@ function resetFixture() {
   fixtureId.value = ''
   positionList.value = []
   addedBoards.value = []
+  historyReports.value = []
   currentTestIndex.value = 0
   currentTestBoard.value = null
 }
@@ -686,34 +695,65 @@ async function handleRequestExit(saveProgress: () => Promise<boolean>) {
 
 // ==================== 历史报告 ====================
 
-async function loadHistoryReports() {
-  if (!fixtureId.value) return
+/**
+ * 追加历史报告（去重 + 字段映射）
+ * 将 API 返回的字段映射为 HistoryReportPanel 期望的字段
+ */
+function appendHistoryReports(newReports: TestReport[]) {
+  const existingIds = new Set(
+    historyReports.value.map(r => (r as any).unit_id || r.report_id || r.id)
+  )
+  const fresh = newReports
+    .filter(r => {
+      const key = (r as any).unit_id || r.report_id || r.id
+      return key && !existingIds.has(key)
+    })
+    .map(r => ({
+      ...r,
+      // API 字段 → HistoryReportPanel 期望字段
+      boardmodel: r.model || r.boardmodel,
+      serial: (r as any).serial || (r as any).name,
+      report_time: r.date || r.report_time,
+      report_result: (r as any).report_result || r.status,
+    })) as TestReport[]
 
-  isLoadingHistory.value = true
+  if (fresh.length > 0) {
+    historyReports.value.push(...fresh)
+  }
+}
+
+/**
+ * 查询当前电路板的历史报告并追加
+ * 根据 testunit_type 区分正式工单(mode=0) 和临时工单(mode=1)
+ */
+async function loadBoardHistory(board: {
+  prod_board_id?: number
+  temp_board_id?: number
+}) {
   try {
-    const response = await reportApi.getXrayHistory(
-      { fixture_id: fixtureId.value },
-      getAuthHeaders()
-    )
-    if (response.success && response.data) {
-      historyReports.value = response.data
+    const response = await reportApi.getHistoryList({mode: 1, prodBoardId: board.prod_board_id, tempBoardId: board.temp_board_id}, getAuthHeaders())
+
+    if (response.success && response.data && response.data.length > 0) {
+      appendHistoryReports(response.data)
     }
   } catch (err) {
-    console.error('加载历史报告失败:', err)
-  } finally {
-    isLoadingHistory.value = false
+    console.error('[历史报告] 查询失败:', err)
   }
 }
 
 function handleHistoryToggle(expanded: boolean) {
   showHistory.value = expanded
-  if (expanded && historyReports.value.length === 0) {
-    loadHistoryReports()
-  }
 }
 
 function handleViewReport(report: TestReport) {
-  console.log('查看报告:', report)
+  const reportMode = ((report as any).mode ?? 0) as 0 | 1
+  const unitId = (report as any).unit_id ?? report.testunit_id ?? report.dev_testunit_id
+  if (!unitId) {
+    ElMessage.error('报告ID无效')
+    return
+  }
+  openReportPreview(reportMode, unitId)
+
 }
 
 // ==================== 工具函数 ====================

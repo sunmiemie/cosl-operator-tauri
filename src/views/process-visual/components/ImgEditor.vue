@@ -35,8 +35,11 @@ const originalImageInfo = ref<{
 // 背景图片对象引用
 let backgroundImageObj: fabric.Image | null = null
 
+// 裁剪框对象引用
+let cropRect: fabric.Rect | null = null
+
 // 工具状态 - 默认颜色红色
-const currentTool = ref<'select' | 'draw' | 'rect' | 'circle' | 'triangle' | 'text' | 'arrow'>('select')
+const currentTool = ref<'select' | 'draw' | 'rect' | 'circle' | 'triangle' | 'text' | 'arrow' | 'crop'>('select')
 const strokeColor = ref('#ff0000')
 const strokeWidth = ref(3)
 const fillColor = ref('transparent')
@@ -265,6 +268,25 @@ function handleMouseDown(e: fabric.IEvent<MouseEvent>) {
         selectable: false,
       })
       break
+    case 'crop':
+      // 裁剪框：半透明填充 + 虚线边框，同一时间只保留一个
+      if (cropRect) {
+        fabricCanvas.remove(cropRect)
+        cropRect = null
+      }
+      currentShape = new fabric.Rect({
+        left: startX,
+        top: startY,
+        width: 0,
+        height: 0,
+        fill: 'rgba(255, 255, 255, 0.15)',
+        stroke: '#ffffff',
+        strokeWidth: 1.5,
+        strokeDashArray: [6, 4],
+        selectable: false,
+        evented: false,
+      })
+      break
     case 'text':
       // 文字直接在点击位置添加
       isDrawing = false
@@ -299,6 +321,7 @@ function handleMouseMove(e: fabric.IEvent<MouseEvent>) {
   
   switch (tool) {
     case 'rect':
+    case 'crop':
       updateRect(pointer.x, pointer.y)
       break
     case 'circle':
@@ -411,6 +434,26 @@ function handleMouseUp(_e: fabric.IEvent<MouseEvent>) {
       fabricCanvas.add(arrow)
       fabricCanvas.setActiveObject(arrow)
       currentShape = null
+    } else if (tool === 'crop') {
+      // 裁剪框：允许选中调整，过小的框直接丢弃
+      const rect = currentShape as fabric.Rect
+      const width = rect.width || 0
+      const height = rect.height || 0
+      if (width < 10 || height < 10) {
+        fabricCanvas.remove(currentShape)
+        cropRect = null
+      } else {
+        rect.set({
+          selectable: true,
+          evented: true,
+          hasControls: true,
+          hasBorders: true,
+          lockRotation: true,
+        })
+        cropRect = rect
+        fabricCanvas.setActiveObject(rect)
+      }
+      currentShape = null
     } else {
       // 其他形状：设置为可选择
       currentShape.set({ selectable: true })
@@ -451,9 +494,14 @@ function resetZoom() {
 // 设置工具
 function setTool(tool: typeof currentTool.value) {
   currentTool.value = tool
-  
+
   if (!fabricCanvas) return
-  
+
+  // 裁剪模式下重置缩放，避免坐标换算复杂
+  if (tool === 'crop') {
+    resetZoom()
+  }
+
   fabricCanvas.isDrawingMode = false
   fabricCanvas.selection = tool === 'select'
   
@@ -479,25 +527,31 @@ function setTool(tool: typeof currentTool.value) {
 // 删除选中
 function deleteSelected() {
   if (!fabricCanvas) return
-  
+
   const activeObjects = fabricCanvas.getActiveObjects()
   if (activeObjects.length) {
     activeObjects.forEach(obj => fabricCanvas!.remove(obj))
     fabricCanvas.discardActiveObject()
     fabricCanvas.renderAll()
     saveHistory()
+
+    // 如果裁剪框被删除，清空引用
+    if (cropRect && activeObjects.includes(cropRect)) {
+      cropRect = null
+    }
   }
 }
 
 // 清除全部标注（保留背景图片）
 function clearAll() {
   if (!fabricCanvas) return
-  
+
   fabricCanvas.getObjects().forEach(obj => {
     if (obj !== backgroundImageObj) {
       fabricCanvas!.remove(obj)
     }
   })
+  cropRect = null
   fabricCanvas.renderAll()
   saveHistory()
 }
@@ -505,58 +559,93 @@ function clearAll() {
 // 保存图片 - 输出原图尺寸
 function handleSave() {
   if (!fabricCanvas || !originalImageInfo.value || !backgroundImageObj) return
-  
+
   const { width: origWidth, height: origHeight, scale, left, top } = originalImageInfo.value
-  
-  // 创建临时 canvas
-  const tempCanvas = document.createElement('canvas')
-  tempCanvas.width = origWidth
-  tempCanvas.height = origHeight
-  const ctx = tempCanvas.getContext('2d')
-  
-  if (!ctx) return
-  
-  // 绘制原始背景图片
   const imgElement = backgroundImageObj.getElement() as HTMLImageElement
-  ctx.drawImage(imgElement, 0, 0, origWidth, origHeight)
-  
-  // 获取标注对象（排除背景）
-  const objects = fabricCanvas.getObjects().filter(obj => obj !== backgroundImageObj)
-  
+
+  // 确保 cropRect 仍然在当前 canvas 上（可能被撤销/删除）
+  const currentCropRect = cropRect && fabricCanvas.getObjects().includes(cropRect) ? cropRect : null
+
+  let tempCanvas: HTMLCanvasElement
+  let ctx: CanvasRenderingContext2D
+  let cropX = 0
+  let cropY = 0
+
+  if (currentCropRect) {
+    // 计算裁剪框在原图上的坐标和尺寸
+    const rectLeft = currentCropRect.left || 0
+    const rectTop = currentCropRect.top || 0
+    const rectScaleX = currentCropRect.scaleX || 1
+    const rectScaleY = currentCropRect.scaleY || 1
+    const rectWidth = (currentCropRect.width || 0) * rectScaleX
+    const rectHeight = (currentCropRect.height || 0) * rectScaleY
+
+    cropX = Math.max(0, Math.round((rectLeft - left) / scale))
+    cropY = Math.max(0, Math.round((rectTop - top) / scale))
+    const cropW = Math.max(1, Math.min(origWidth - cropX, Math.round(rectWidth / scale)))
+    const cropH = Math.max(1, Math.min(origHeight - cropY, Math.round(rectHeight / scale)))
+
+    tempCanvas = document.createElement('canvas')
+    tempCanvas.width = cropW
+    tempCanvas.height = cropH
+    const context = tempCanvas.getContext('2d')
+    if (!context) return
+    ctx = context
+
+    // 绘制被裁剪区域的原图
+    ctx.drawImage(
+      imgElement,
+      cropX, cropY, cropW, cropH,
+      0, 0, cropW, cropH
+    )
+  } else {
+    tempCanvas = document.createElement('canvas')
+    tempCanvas.width = origWidth
+    tempCanvas.height = origHeight
+    const context = tempCanvas.getContext('2d')
+    if (!context) return
+    ctx = context
+
+    ctx.drawImage(imgElement, 0, 0, origWidth, origHeight)
+  }
+
+  // 获取标注对象（排除背景和裁剪框）
+  const objects = fabricCanvas.getObjects().filter(obj => obj !== backgroundImageObj && obj !== currentCropRect)
+
   if (objects.length > 0) {
     // 创建离屏 canvas 用于绘制标注
     const offscreenCanvas = document.createElement('canvas')
-    offscreenCanvas.width = origWidth
-    offscreenCanvas.height = origHeight
-    
+    offscreenCanvas.width = tempCanvas.width
+    offscreenCanvas.height = tempCanvas.height
+
     const tempFabricCanvas = new fabric.Canvas(offscreenCanvas, {
-      width: origWidth,
-      height: origHeight,
+      width: tempCanvas.width,
+      height: tempCanvas.height,
     })
-    
+
     // 克隆并缩放标注对象
     let cloneCount = 0
     objects.forEach(obj => {
       obj.clone((clonedObj: fabric.Object) => {
         clonedObj.set({
-          left: (obj.left! - left) / scale,
-          top: (obj.top! - top) / scale,
+          left: (obj.left! - left) / scale - cropX,
+          top: (obj.top! - top) / scale - cropY,
           scaleX: (obj.scaleX || 1) / scale,
           scaleY: (obj.scaleY || 1) / scale,
         })
         tempFabricCanvas.add(clonedObj)
         cloneCount++
-        
+
         // 所有对象克隆完成后导出
         if (cloneCount === objects.length) {
           tempFabricCanvas.renderAll()
-          
+
           const annotationCanvas = tempFabricCanvas.toCanvasElement()
           ctx.drawImage(annotationCanvas, 0, 0)
-          
+
           const dataUrl = tempCanvas.toDataURL('image/png', 1)
           emit('save', dataUrl)
-          
+
           tempFabricCanvas.dispose()
         }
       })
@@ -564,6 +653,13 @@ function handleSave() {
   } else {
     const dataUrl = tempCanvas.toDataURL('image/png', 1)
     emit('save', dataUrl)
+  }
+
+  // 保存后清理裁剪框
+  if (currentCropRect) {
+    fabricCanvas.remove(currentCropRect)
+    cropRect = null
+    fabricCanvas.renderAll()
   }
 }
 
@@ -724,7 +820,15 @@ onBeforeUnmount(() => {
       </div>
       
       <div class="divider" />
-      
+
+      <div class="tool-group">
+        <button class="tool-btn" :class="{ active: currentTool === 'crop' }" @click="setTool('crop')" title="裁剪 (C)">
+          <Icon icon="mdi:crop" />
+        </button>
+      </div>
+
+      <div class="divider" />
+
       <div class="tool-group">
         <button class="tool-btn" :class="{ active: currentTool === 'text' }" @click="setTool('text')" title="文字 (T)">
           <Icon icon="mdi:format-text" />

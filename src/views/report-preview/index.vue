@@ -11,7 +11,7 @@ import { reportApi, type ReportData } from '@/services/report'
 import { useAuth } from '@/composables/useAuth'
 
 const route = useRoute()
-const { getAuthHeaders } = useAuth()
+const { getAuthHeaders, initAuth } = useAuth()
 
 // 从 URL 参数获取 mode 和 unitId
 const mode = computed(() => Number(route.query.mode) as 0 | 1)
@@ -130,7 +130,17 @@ function hasWarnMark(warnList: any[] | undefined, itemId: number): boolean {
   return warnList.some(w => w.id === itemId)
 }
 
-onMounted(() => {
+onMounted(async () => {
+  /*
+    由于独立窗口中没有token，所以需要重新从store中加载token
+    独立窗口：先初始化认证状态，从 store 加载 token
+   */
+  const authOk = await initAuth()
+  if (!authOk) {
+    error.value = '认证信息无效，请重新登录'
+    loading.value = false
+    return
+  }
   loadReport()
 })
 
