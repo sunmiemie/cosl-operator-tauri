@@ -451,29 +451,34 @@ export function findUnresolvedQuestions(targets: TargetItem[]): TargetItem[] {
  * @returns 未完成的项列表
  */
 export function findIncompleteTargets(targets: TargetItem[]): TargetItem[] {
+  const hasEvidence = (value?: { url?: unknown; desc?: unknown }) => {
+    const urls = Array.isArray(value?.url) ? value.url : [value?.url]
+    return typeof value?.desc === 'string' && Boolean(value.desc.trim()) &&
+      urls.some(url => typeof url === 'string' && Boolean(url.trim()))
+  }
   return targets.filter(item => {
     // pass === 0 表示未检测
-    if (item.pass === 0) return true
+    if (![1, 2, 3, 4].includes(item.pass)) return true
     
     // pass === 2（缺陷）需要有错误信息
     if (item.pass === 2) {
-      if (!item.error?.url?.length || !item.error?.desc) return true
+      if (!hasEvidence(item.error)) return true
     }
     
     // pass === 3（疑问）需要有疑问信息
     if (item.pass === 3) {
-      if (!item.question?.url?.length || !item.question?.desc) return true
+      if (!hasEvidence(item.question)) return true
     }
     
     // pass === 4（缺陷+疑问）需要同时有错误和疑问信息
     if (item.pass === 4) {
-      if (!item.error?.url?.length || !item.error?.desc) return true
-      if (!item.question?.url?.length || !item.question?.desc) return true
+      if (!hasEvidence(item.error)) return true
+      if (!hasEvidence(item.question)) return true
     }
     
     // 如果有警示数据，必须完整
     if (item.warn) {
-      if (!item.warn.url?.length || !item.warn.desc) return true
+      if (!hasEvidence(item.warn)) return true
     }
     
     return false
