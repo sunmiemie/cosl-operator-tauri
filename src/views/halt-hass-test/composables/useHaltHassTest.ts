@@ -307,8 +307,8 @@ export function useHaltHassTest() {
    */
   function startFlowchartTest(): void {
     setPhase('test')
-    isFlowchartRunning.value = true
-    flowchartStartTime.value = new Date()
+    isFlowchartRunning.value = false
+    flowchartStartTime.value = null
     flowchartEndTime.value = null
     nodeResults.value = []
     completedNodes.value = []
@@ -316,6 +316,18 @@ export function useHaltHassTest() {
   }
 
   // ==================== 流程图运行方法 ====================
+
+  /**
+   * 用户确认运行后再开始计时和切换控制按钮。
+   */
+  function beginFlowchartRun(): void {
+    isFlowchartRunning.value = true
+    flowchartStartTime.value = new Date()
+    flowchartEndTime.value = null
+    nodeResults.value = []
+    completedNodes.value = []
+    currentNodeId.value = ''
+  }
 
   /**
    * 更新节点运行结果
@@ -549,6 +561,7 @@ export function useHaltHassTest() {
     startFlowchartTest,
 
     // 流程图运行
+    beginFlowchartRun,
     updateNodeResult,
     onFlowchartComplete,
     stopFlowchart,

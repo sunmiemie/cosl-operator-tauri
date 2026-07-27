@@ -28,7 +28,11 @@ import { useLayout } from '@/composables/useLayout'
 import { runFlowchart, cancelFlowchartRun, configureApi } from '@/services/flojoy-api'
 import { prepareRunFlowchartArgs } from '@/services/flojoy-adapter'
 import { v4 as uuidv4 } from 'uuid'
-import { getMockScannedBoards, isMockHaltHassOrder } from './mock-halt-hass-fixture'
+import {
+  getMockScannedBoards,
+  isMockHaltHassOrder,
+  MOCK_HALT_HASS_ORDER,
+} from './mock-halt-hass-fixture'
 
 // 导入类型
 import type { HaltHassOrder, PagePhase } from './types'
@@ -62,6 +66,7 @@ const {
   nextInstallStep,
   goToInstallStep,
   startFlowchartTest,
+  beginFlowchartRun,
   updateNodeResult,
   onFlowchartComplete,
   stopFlowchart,
@@ -135,6 +140,7 @@ const deviceCheckError = ref('')
 
 // 当前运行的 Job ID
 const currentJobId = ref<string>('')
+let mockFlowchartRunToken = 0
 
 // 阶段标签配置
 const phaseLabels: Record<PagePhase, { label: string; icon: string }> = {
@@ -150,6 +156,10 @@ const phaseLabels: Record<PagePhase, { label: string; icon: string }> = {
 
 // 计算属性
 const currentPhaseLabel = computed(() => phaseLabels[phase.value])
+const flowchartStatusText = computed(() => {
+  if (!isMockHaltHassOrder(currentOrder.value)) return serverStatus.value
+  return isFlowchartRunning.value ? '本地演示运行中' : '演示流程就绪'
+})
 
 // ==================== 设备检测 ====================
 
@@ -313,12 +323,15 @@ async function simulateMockFlowchartRun() {
     return
   }
 
+  const runToken = ++mockFlowchartRunToken
   clearNodeStatuses()
   const nodes = processJson.value.flowchart.nodes
 
   for (const node of nodes) {
     const startTime = new Date()
-    await new Promise(resolve => setTimeout(resolve, 180))
+    await new Promise(resolve => setTimeout(resolve, 800))
+    if (runToken !== mockFlowchartRunToken || !isFlowchartRunning.value) return
+
     const endTime = new Date()
     const nodeData = node.data as { label?: unknown } | undefined
     const nodeName = typeof nodeData?.label === 'string' ? nodeData.label : node.id
@@ -355,6 +368,8 @@ async function handleRunFlowchart() {
     return
   }
 
+  beginFlowchartRun()
+
   if (isMockHaltHassOrder(currentOrder.value)) {
     await simulateMockFlowchartRun()
     return
@@ -384,21 +399,34 @@ async function handleRunFlowchart() {
 
     ElMessage.success('流程图开始运行')
   } catch (e) {
+    stopFlowchart()
     ElMessage.error('运行失败')
     console.error(e)
   }
 }
 
 async function handleStopFlowchart() {
+  if (isMockHaltHassOrder(currentOrder.value)) {
+    mockFlowchartRunToken++
+    stopFlowchart()
+    ElMessage.info('已停止演示流程')
+    return
+  }
+
   if (currentJobId.value) {
     try {
       await cancelFlowchartRun(currentJobId.value)
       stopFlowchart()
+      currentJobId.value = ''
       ElMessage.info('已停止运行')
     } catch (e) {
       ElMessage.error('停止失败')
     }
+    return
   }
+
+  stopFlowchart()
+  ElMessage.info('已停止运行')
 }
 
 async function handleSaveTemp() {
@@ -559,6 +587,16 @@ onUnmounted(() => {
             <p class="header-subtitle">HALT-HASS 测试排程管理</p>
           </div>
         </div>
+        <div class="header-actions">
+          <button
+            class="btn-secondary schedule-demo-btn"
+            type="button"
+            @click="handleStartScheduledTest(MOCK_HALT_HASS_ORDER)"
+          >
+            <Icon icon="mdi:monitor-eye" />
+            无扫码枪演示
+          </button>
+        </div>
       </header>
 
       <HaltHassScheduleDashboard
@@ -672,6 +710,15 @@ onUnmounted(() => {
           <!-- 操作按钮 -->
           <div class="action-section">
             <button
+              v-if="!scannerConnected && !isMockHaltHassOrder(currentOrder)"
+              class="btn-secondary btn-lg"
+              type="button"
+              @click="handleStartScheduledTest(MOCK_HALT_HASS_ORDER)"
+            >
+              <Icon icon="mdi:monitor-eye" />
+              无扫码枪，进入演示流程
+            </button>
+            <button
               class="btn-primary btn-lg"
               :disabled="!isScanComplete || phase === 'download'"
               @click="handleStartTest"
@@ -739,7 +786,7 @@ onUnmounted(() => {
           :current-node-id="currentNodeId"
           :completed-nodes="completedNodes"
           :node-results="nodeResults"
-          :server-status="serverStatus"
+          :server-status="flowchartStatusText"
           @run="handleRunFlowchart"
           @stop="handleStopFlowchart"
           @save="handleSaveTemp"
@@ -889,6 +936,10 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+.schedule-demo-btn {
+  white-space: nowrap;
+}
+
 .status-chip {
   display: flex;
   align-items: center;
@@ -1016,6 +1067,9 @@ onUnmounted(() => {
 
 /* 操作区域 */
 .action-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin-top: auto;
 }
 

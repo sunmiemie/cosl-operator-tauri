@@ -48,7 +48,7 @@ const hasError = computed(() => failedCount.value > 0)
 
 // 获取节点状态
 function getNodeStatus(nodeId: string): 'pending' | 'running' | 'success' | 'error' {
-  if (props.currentNodeId === nodeId) return 'running'
+  if (props.isRunning && props.currentNodeId === nodeId) return 'running'
   const result = props.nodeResults.find(r => r.nodeId === nodeId)
   if (!result || result.status === 'skipped') return 'pending'
   return result.status
