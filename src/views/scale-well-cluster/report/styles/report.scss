@@ -94,7 +94,22 @@
 
   &__ops {
     display: flex;
+    align-items: center;
     gap: 8px;
+
+    :deep(.el-button.is-link),
+    :deep(.el-button.is-text) {
+      padding: 0 4px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+  }
+}
+
+.report-actions {
+  :deep(.el-button--primary:not(.is-link):not(.is-text)) {
+    --el-button-text-color: #fff;
+    --el-button-hover-text-color: #fff;
   }
 }
 

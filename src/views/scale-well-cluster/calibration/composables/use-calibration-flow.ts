@@ -1,9 +1,22 @@
 import { computed, onMounted, ref } from "vue"
 import { useRouter } from "vue-router"
 import { ElMessage } from "element-plus"
+import { useAuth } from "@/composables/useAuth"
+import { completeCalibrationOrder, getCalibrationHistoryLast } from "@/services/scale-well-api"
+import { closeDeviceSession, openDeviceSession, writeCoefficients } from "@/services/calibration-device"
 import { useScaleWellSession } from "../../shared/composables/useScaleWellSession"
 import { getToolDisplayName, TOOL_PARAMS, TOOL_TYPE_OPTIONS } from "../../shared/constants/tool-params"
-import type { CalibrationWorkOrder, SampleStats } from "../../shared/types"
+import { getOrderQualification } from "../../shared/utils/qualification"
+import type { CalibrationWorkOrder } from "../../shared/types"
+import { useSamplingPhase } from "./use-sampling-phase"
+import type { SamplingPhase } from "./sampling-utils"
+import { createEmptyPhaseState, emptyStats } from "./sampling-utils"
+import {
+  buildSummaryText,
+  calcCalibrationResults,
+  mapHistoryToCalCoefficients,
+  type CalCoefficients
+} from "./calibration-results"
 
 export const CAL_STEPS = [
   "通电前检查",
@@ -36,21 +49,30 @@ export const POWER_PARAM_ROWS = (dual: boolean) => [
   ["过流保护阈值", dual ? "120 mA" : "800 mA", "超过此值应立即断电检查"]
 ]
 
-function mockStats(base: number): SampleStats {
-  return {
-    mean: +(base * 0.98).toFixed(2),
-    std: +(base * 0.02).toFixed(3),
-    max: +(base * 1.01).toFixed(2),
-    min: +(base * 0.95).toFixed(2)
-  }
-}
-
 export function useCalibrationFlow() {
   const router = useRouter()
-  const { activeWorkOrder, calibrationDraft, finalizeCalibration } = useScaleWellSession()
+  const { getAuthHeaders } = useAuth()
+  const { activeWorkOrder, calibrationDraft, finalizeCalibration, setCalibrationSummary, setLastCalibrationCoeffs } =
+    useScaleWellSession()
   const step = ref(0)
 
   const editableOrder = ref<CalibrationWorkOrder | null>(null)
+  const lastCal = ref<CalCoefficients | null>(null)
+
+  const loadLastCalibration = async (serialNumber: string) => {
+    try {
+      const response = await getCalibrationHistoryLast(serialNumber, getAuthHeaders())
+      const payload = response.data
+      if (response.success && payload?.code === 0) {
+        const mapped = mapHistoryToCalCoefficients(payload.data)
+        lastCal.value = mapped
+        setLastCalibrationCoeffs(mapped)
+      }
+    } catch {
+      lastCal.value = null
+      setLastCalibrationCoeffs(null)
+    }
+  }
 
   onMounted(() => {
     if (!activeWorkOrder.value) {
@@ -59,29 +81,75 @@ export function useCalibrationFlow() {
       return
     }
     editableOrder.value = { ...activeWorkOrder.value }
+    if (activeWorkOrder.value.serialNumber) {
+      void loadLastCalibration(activeWorkOrder.value.serialNumber)
+    }
   })
 
   const order = computed(() => editableOrder.value ?? activeWorkOrder.value)
+
+  const samplingOrder = computed(() => order.value ?? null)
+
+  const {
+    runCommPretest,
+    runFormalSampling,
+    readSingle,
+    toggleChartSeries,
+    copyDataToExcel,
+    manualCalculate,
+    toggleSdDebug,
+    initPhaseLabels
+  } = useSamplingPhase(calibrationDraft, samplingOrder)
 
   const toolCfg = computed(() => {
     const t = order.value?.toolType
     return t ? TOOL_PARAMS[t as keyof typeof TOOL_PARAMS] : null
   })
 
-  const isDualSensor = computed(() => !!(toolCfg.value as { dualSensor?: boolean })?.dualSensor)
+  const qualification = computed(() => (order.value ? getOrderQualification(order.value) : null))
+
+  const isDualSensor = computed(() => qualification.value?.dualSensor ?? false)
 
   const preCheckCount = computed(() => calibrationDraft.value.preChecks.filter(Boolean).length)
 
   const preCheckDone = computed(() => preCheckCount.value === PRE_CHECK_LABELS.length)
 
   const results = computed(() => {
+    const o = order.value
+    const qual = qualification.value
+    if (!o || !qual) return null
+
+    const calculated = calcCalibrationResults(
+      calibrationDraft.value,
+      o,
+      isDualSensor.value,
+      qual
+    )
+    if (calculated) return calculated
+
     const kc = calibrationDraft.value.hiSampleKc ?? calibrationDraft.value.loSampleKc
+    if (kc == null) return null
     const bb = calibrationDraft.value.hiSampleBa ?? -0.8
-    const cfg = toolCfg.value
-    if (kc == null || !cfg) return null
-    const kcOk = kc >= cfg.kcMin && kc <= cfg.kcMax
-    const bOk = Math.abs(bb) <= 4
-    return { ka: 0, kb: kc, kc, ba: 0, bb, bc: bb, kcOk, bOk, allOk: kcOk && bOk }
+    const kbOk = kc >= qual.kbMin && kc <= qual.kbMax
+    const bbOk = Math.abs(bb) <= qual.bbLimit
+    return {
+      ka: 0,
+      kb: kc,
+      kc,
+      ba: 0,
+      bb,
+      bc: bb,
+      kaOk: true,
+      kbOk,
+      kcOk: kbOk,
+      baOk: true,
+      bbOk,
+      bcOk: bbOk,
+      bOk: bbOk,
+      allOk: kbOk && bbOk,
+      hiMean: calibrationDraft.value.hiStats.mean ?? 0,
+      loMean: calibrationDraft.value.loStats.mean ?? 0
+    }
   })
 
   const canNext = computed(() => {
@@ -130,58 +198,72 @@ export function useCalibrationFlow() {
     calibrationDraft.value.loHole = cfg.hole
   }
 
-  const saveParamsAndNext = () => {
+  const saveParamsAndNext = async () => {
     if (!order.value?.serialNumber.trim() || !order.value.engineer.trim()) {
       ElMessage.warning("仪器编号和测试人员不能为空")
       return
     }
-    calibrationDraft.value.fileCreated = true
-    ElMessage.success("刻度文件已建立")
+    if (!order.value.dbId) {
+      ElMessage.warning("工单 ID 无效")
+      return
+    }
+    try {
+      const session = await openDeviceSession(order.value.dbId, getAuthHeaders())
+      calibrationDraft.value.deviceSessionId = session.sessionId
+      calibrationDraft.value.fileCreated = true
+      ElMessage.success("刻度文件已建立，设备会话已开启")
+      step.value = 3
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : "开启设备会话失败")
+    }
+  }
+
+  const initSamplingPhase = (phase: SamplingPhase) => {
+    initPhaseLabels(phase)
+    const ps = phase === "hi" ? calibrationDraft.value.hiPhase : calibrationDraft.value.loPhase
+    ps.sampleButtonLabel = phase === "hi" ? "▶ 启动高刻采样" : "▶ 启动低刻采样"
+  }
+
+  const writeToInstrument = async () => {
+    const currentResults = results.value
+    const sessionId = calibrationDraft.value.deviceSessionId
+    if (!currentResults || !sessionId) return
+    try {
+      await writeCoefficients(
+        sessionId,
+        {
+          ka: currentResults.ka,
+          kb: currentResults.kb,
+          kc: currentResults.kc,
+          ba: currentResults.ba,
+          bb: currentResults.bb,
+          bc: currentResults.bc
+        },
+        getAuthHeaders()
+      )
+      calibrationDraft.value.dataWritten = true
+      ElMessage.success("刻度数据已写入仪器")
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : "写入仪器失败")
+    }
+  }
+
+  const restartSampling = () => {
+    calibrationDraft.value.hiPhase = createEmptyPhaseState()
+    calibrationDraft.value.loPhase = createEmptyPhaseState()
+    calibrationDraft.value.hiSamplingDone = false
+    calibrationDraft.value.loSamplingDone = false
+    calibrationDraft.value.hiSampleKc = null
+    calibrationDraft.value.loSampleKc = null
+    calibrationDraft.value.hiSampleBa = null
+    calibrationDraft.value.loSampleBa = null
+    calibrationDraft.value.hiSampleProgress = 0
+    calibrationDraft.value.loSampleProgress = 0
+    calibrationDraft.value.hiStats = emptyStats()
+    calibrationDraft.value.loStats = emptyStats()
+    calibrationDraft.value.dataWritten = false
     step.value = 3
-  }
-
-  const runPretest = (phase: "hi" | "lo") => {
-    if (phase === "hi") calibrationDraft.value.hiPretestDone = true
-    else calibrationDraft.value.loPretestDone = true
-    ElMessage.success("常温通信验证通过")
-  }
-
-  const runSampling = (phase: "hi" | "lo") => {
-    const cfg = toolCfg.value
-    if (!cfg) return
-    const kc = +(cfg.kcMin + (cfg.kcMax - cfg.kcMin) * (phase === "hi" ? 0.62 : 0.48)).toFixed(2)
-    const ba = -0.8
-    const count = phase === "hi" ? calibrationDraft.value.hiCount : calibrationDraft.value.loCount
-    const progressKey = phase === "hi" ? "hiSampleProgress" : "loSampleProgress"
-
-    calibrationDraft.value[progressKey] = 0
-    let tick = 0
-    const progressStep = Math.max(10, Math.floor(1000 / count))
-    const timer = window.setInterval(() => {
-      tick += progressStep
-      calibrationDraft.value[progressKey] = Math.min(tick, 100)
-      if (tick >= 100) {
-        window.clearInterval(timer)
-        if (phase === "hi") {
-          calibrationDraft.value.hiSampleKc = kc
-          calibrationDraft.value.hiSampleBa = ba
-          calibrationDraft.value.hiStats = mockStats(kc)
-          calibrationDraft.value.hiSamplingDone = true
-          ElMessage.success("高刻采样完成")
-        } else {
-          calibrationDraft.value.loSampleKc = kc
-          calibrationDraft.value.loSampleBa = ba
-          calibrationDraft.value.loStats = mockStats(kc)
-          calibrationDraft.value.loSamplingDone = true
-          ElMessage.success("低刻采样完成")
-        }
-      }
-    }, 80)
-  }
-
-  const writeToInstrument = () => {
-    calibrationDraft.value.dataWritten = true
-    ElMessage.success("刻度数据已写入仪器")
+    ElMessage.info("已重置采样数据，请重新进行高刻采样")
   }
 
   const nextStep = () => {
@@ -200,11 +282,68 @@ export function useCalibrationFlow() {
     if (step.value > 0) step.value -= 1
   }
 
-  const finish = () => {
-    if (order.value) activeWorkOrder.value = { ...order.value }
-    finalizeCalibration()
+  const finish = async () => {
+    const o = order.value
+    const qual = qualification.value
+    const currentResults = results.value
+
+    if (!currentResults?.allOk) {
+      ElMessage.warning("刻度结果不合格，无法完成流程")
+      return
+    }
+    if (!o?.dbId) {
+      ElMessage.error("工单缺少后端 ID，无法提交刻度结果")
+      return
+    }
+    if (!qual) return
+
+    const summary = buildSummaryText(currentResults, isDualSensor.value, qual)
+    setCalibrationSummary(summary)
+
+    const response = await completeCalibrationOrder(
+      o.dbId,
+      {
+        kc: currentResults.kc,
+        coefficients: {
+          ka: currentResults.ka,
+          kb: currentResults.kb,
+          ba: currentResults.ba,
+          bb: currentResults.bb,
+          bc: currentResults.bc
+        },
+        hiMean: currentResults.hiMean,
+        loMean: currentResults.loMean,
+        calibrationSummary: summary
+      },
+      getAuthHeaders()
+    )
+
+    const payload = response.data
+    if (!response.success || payload?.code !== 0) {
+      ElMessage.error(payload?.msg || response.error || "刻度完成提交失败")
+      return
+    }
+
+    if (order.value) {
+      activeWorkOrder.value = {
+        ...order.value,
+        kc: currentResults.kc,
+        statusCode: 3,
+        statusText: "待审核"
+      }
+    }
+    finalizeCalibration(currentResults)
+    const sessionId = calibrationDraft.value.deviceSessionId
+    if (sessionId) {
+      try {
+        await closeDeviceSession(sessionId, getAuthHeaders())
+      } catch {
+        /* ignore close errors on finish */
+      }
+      calibrationDraft.value.deviceSessionId = null
+    }
     ElMessage.success("刻度流程完成，请填写报告")
-    router.push("/scale-well-cluster/report")
+    router.push("/scale-well-cluster/report/fill")
   }
 
   return {
@@ -216,19 +355,28 @@ export function useCalibrationFlow() {
     editableOrder,
     calibrationDraft,
     toolCfg,
+    qualification,
     isDualSensor,
     preCheckCount,
     preCheckDone,
     results,
+    lastCal,
     canNext,
     togglePreCheck,
     connNext,
     connPrev,
     onToolTypeChange,
     saveParamsAndNext,
-    runPretest,
-    runSampling,
+    initSamplingPhase,
+    runCommPretest,
+    runFormalSampling,
+    readSingle,
+    toggleChartSeries,
+    copyDataToExcel,
+    manualCalculate,
+    toggleSdDebug,
     writeToInstrument,
+    restartSampling,
     nextStep,
     prevStep,
     finish,

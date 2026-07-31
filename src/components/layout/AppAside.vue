@@ -72,7 +72,7 @@ const menuGroups: MenuGroup[] = [
     icon: 'mdi:radioactive',
     label: '刻度井群',
     children: [
-      { icon: 'mdi:view-dashboard-outline', activeIcon: 'mdi:view-dashboard', label: '数据看板', to: '/scale-well-cluster/data-board' },
+      { icon: 'mdi:calendar-clock', activeIcon: 'mdi:calendar-clock', label: '工单排程', to: '/scale-well-cluster/data-board' },
       { icon: 'mdi:flask-outline', activeIcon: 'mdi:flask', label: '伽马刻度流程', to: '/scale-well-cluster/calibration' },
       { icon: 'mdi:file-document-outline', activeIcon: 'mdi:file-document', label: '刻度报告', to: '/scale-well-cluster/report' },
     ]

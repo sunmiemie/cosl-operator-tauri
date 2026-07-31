@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import * as echarts from "echarts"
-import { onMounted, onUnmounted, ref, watch, withDefaults } from "vue"
+import { nextTick, onMounted, onUnmounted, ref, watch, withDefaults } from "vue"
 
 type EChartsOption = echarts.EChartsOption
 
@@ -18,38 +18,61 @@ const prop = withDefaults(defineProps<Prop>(), {
 
 const RefEchart = ref<HTMLDivElement | null>(null)
 let myChart: echarts.ECharts | null = null
+let resizeObserver: ResizeObserver | null = null
 
 const initChart = () => {
+  if (!RefEchart.value) return
   if (myChart) {
     myChart.dispose()
+    myChart = null
   }
-  if (RefEchart.value) {
-    myChart = echarts.init(RefEchart.value)
-    myChart.setOption(prop.option, true)
-    window.addEventListener("resize", resizeChart) // 添加窗口大小变化监听
+  myChart = echarts.init(RefEchart.value)
+  myChart.setOption(prop.option, true)
+  resizeChart()
+}
+
+const applyOption = () => {
+  if (!myChart) {
+    initChart()
+    return
   }
+  myChart.setOption(prop.option, { notMerge: false, lazyUpdate: false })
+  resizeChart()
 }
 
 const resizeChart = () => {
-  if (myChart) {
-    myChart.resize() // 更新图表大小
-  }
+  myChart?.resize()
 }
 
-onMounted(initChart)
-
-watch(prop.option, initChart, {
-  deep: true
+onMounted(async () => {
+  await nextTick()
+  initChart()
+  if (typeof ResizeObserver !== "undefined" && RefEchart.value) {
+    resizeObserver = new ResizeObserver(() => resizeChart())
+    resizeObserver.observe(RefEchart.value)
+  }
+  window.addEventListener("resize", resizeChart)
 })
 
+watch(() => prop.option, applyOption, { deep: true })
+
 onUnmounted(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   if (myChart) {
-    myChart.dispose() // 组件卸载时清理图表
-    window.removeEventListener("resize", resizeChart) // 移除窗口大小变化监听
+    myChart.dispose()
+    myChart = null
   }
+  window.removeEventListener("resize", resizeChart)
 })
 </script>
 
 <template>
-  <div ref="RefEchart" :style="{ width: `${prop.width}`, height: `${prop.height}` }" />
+  <div ref="RefEchart" class="echarts-host" :style="{ width: `${prop.width}`, height: `${prop.height}` }" />
 </template>
+
+<style scoped>
+.echarts-host {
+  min-height: 140px;
+}
+</style>

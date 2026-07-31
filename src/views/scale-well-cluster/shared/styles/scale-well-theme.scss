@@ -734,9 +734,41 @@
     font-weight: 600;
   }
 
-  :deep(.el-button--primary) {
+  :deep(.el-button--primary:not(.is-link):not(.is-text)) {
     --el-button-bg-color: var(--color-primary, var(--color-accent-blue));
     --el-button-border-color: var(--color-primary, var(--color-accent-blue));
+    --el-button-text-color: #fff;
+    --el-button-hover-text-color: #fff;
+    --el-button-active-text-color: #fff;
+  }
+
+  :deep(.el-button--primary.is-plain) {
+    --el-button-bg-color: transparent;
+    --el-button-text-color: var(--color-primary, var(--color-accent-blue));
+    --el-button-border-color: var(--color-primary, var(--color-accent-blue));
+  }
+
+  :deep(.el-button.is-link),
+  :deep(.el-button.is-text) {
+    --el-button-bg-color: transparent !important;
+    --el-button-border-color: transparent !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    height: auto;
+    min-height: unset;
+    padding: 2px 6px;
+  }
+
+  :deep(.el-button.is-link.el-button--primary),
+  :deep(.el-button.is-text.el-button--primary) {
+    --el-button-text-color: var(--color-accent-blue);
+    color: var(--color-accent-blue);
+  }
+
+  :deep(.el-button.is-link.el-button--warning),
+  :deep(.el-button.is-text.el-button--warning) {
+    --el-button-text-color: var(--el-color-warning);
+    color: var(--el-color-warning);
   }
 
   :deep(.el-descriptions__label) {

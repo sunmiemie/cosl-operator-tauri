@@ -4,10 +4,39 @@ export type WorkOrderStatus = "pending" | "in_progress" | "completed"
 /** 刻度井群角色 */
 export type ScaleWellRole = "leader" | "tester"
 
+/** 刻度合格判定阈值（来自后端刻度井配置） */
+export interface QualificationThresholds {
+  kaMin: number
+  kaMax: number
+  baLimit: number
+  kbMin: number
+  kbMax: number
+  bbLimit: number
+  hiRefMin: number
+  hiRefMax: number
+  loRefMin: number
+  loRefMax: number
+  dualSensor: boolean
+}
+
+/** 刻度井通信配置（来自后端 well comm_configs） */
+export interface WellCommConfig {
+  deviceRole: 'instrument' | 'instrument_b' | 'data_stick' | 'power_supply'
+  vid?: string
+  pid?: string
+  adapterSerial?: string
+  baudRate?: number
+  transport?: 'lan' | 'serial'
+  host?: string
+  port?: number
+}
+
 /** 伽马刻度工单 */
 export interface CalibrationWorkOrder {
   id: string
+  dbId?: number
   toolType: string
+  modelName: string
   serialNumber: string
   engineer: string
   location: string
@@ -19,7 +48,14 @@ export interface CalibrationWorkOrder {
   remark: string
   planDate: string
   status: WorkOrderStatus
+  statusCode?: number
+  statusText?: string
   kc: number | null
+  qualification?: QualificationThresholds
+  hiWellCommConfigs?: WellCommConfig[]
+  loWellCommConfigs?: WellCommConfig[]
+  hiWellDataSource?: 'mock' | 'live'
+  loWellDataSource?: 'mock' | 'live'
 }
 
 export interface CalibrationDataGroup {
@@ -91,6 +127,82 @@ export interface SampleStats {
   min: number | null
 }
 
+export type SampleLogType = "info" | "success" | "warn"
+
+export interface SampleLogLine {
+  ts: string
+  msg: string
+  type: SampleLogType
+}
+
+export interface PretestCommState {
+  standbyCur: string
+  cgrTime: string
+  firmware: string
+  flashErase: string
+  sn: string
+  sync: string
+  status: string
+  count: string
+  cps: string
+  gr: string
+  commOk: boolean | null
+  commMessage: string
+  commVisible: boolean
+  running: boolean
+  buttonLabel: string
+}
+
+export interface Pretest100Row {
+  index: number
+  cpsA?: number
+  cpsB: number
+  ok: boolean
+}
+
+export interface SampleTableRow {
+  countA: number
+  countB: number
+  cpsA: number
+  cpsB: number
+}
+
+export interface PhaseSamplingState {
+  pretest: PretestCommState
+  pretestRows: Pretest100Row[]
+  pretestProgress: number
+  pretestLiveCps: number | null
+  pretestMean: number | null
+  pretestFilename: string
+  pretestStart: string
+  pretestEnd: string
+  pretestResultVisible: boolean
+  pretestResultOk: boolean
+  pretestResultMessage: string
+  pretestDone: boolean
+  samplingUnlocked: boolean
+  samples: number[]
+  samplesA: number[]
+  tableData: SampleTableRow[]
+  chartCps: number[]
+  chartCount: number[]
+  chartSeriesVisible: [boolean, boolean]
+  liveCps: number | null
+  liveCpsA: number | null
+  progress: number
+  currentPoint: number
+  done: boolean
+  samplingRunning: boolean
+  sampleButtonLabel: string
+  logs: SampleLogLine[]
+  sdLogs: string[]
+  sdDebug: boolean
+  tStart: string
+  tEnd: string
+  mainTab: "curve" | "table"
+  dataSubTab: "cps" | "count"
+}
+
 export interface CalibrationDraft {
   preChecks: boolean[]
   connectionStep: number
@@ -115,8 +227,11 @@ export interface CalibrationDraft {
   loStats: SampleStats
   hiSamplingDone: boolean
   loSamplingDone: boolean
+  hiPhase: PhaseSamplingState
+  loPhase: PhaseSamplingState
   dataWritten: boolean
   fileCreated: boolean
+  deviceSessionId: number | null
 }
 
 export interface ScheduleEntry {

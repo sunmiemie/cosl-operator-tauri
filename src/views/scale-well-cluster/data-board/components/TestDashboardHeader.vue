@@ -2,8 +2,9 @@
 import { useScaleWellSession } from "../../shared/composables/useScaleWellSession"
 import ScaleWellPageHeader from "../../shared/components/ScaleWellPageHeader.vue"
 
-defineProps<{
+const props = defineProps<{
   subtitle: string
+  title?: string
 }>()
 
 const { role, setRole } = useScaleWellSession()
@@ -16,7 +17,7 @@ function onRoleChange(v: string | number | boolean | undefined) {
 <template>
   <ScaleWellPageHeader
     icon="mdi:view-dashboard"
-    title="数据看板"
+    :title="props.title || '工单排程'"
     :subtitle="subtitle"
     icon-tone="blue"
   >

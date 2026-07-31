@@ -117,6 +117,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/scale-well-cluster/report/index.vue'),
         meta: { title: '刻度报告', requiresAuth: true }
       },
+      {
+        path: 'scale-well-cluster/report/fill',
+        name: 'ScaleWellReportFill',
+        component: () => import('@/views/scale-well-cluster/report/edit.vue'),
+        meta: { title: '填写刻度报告', requiresAuth: true }
+      },
+      {
+        path: 'scale-well-cluster/report/:id',
+        name: 'ScaleWellReportEdit',
+        component: () => import('@/views/scale-well-cluster/report/edit.vue'),
+        meta: { title: '刻度报告详情', requiresAuth: true }
+      },
     ]
   },
   // 模态窗口路由 - 设置

@@ -9,6 +9,7 @@ const props = defineProps<{
   toolTypeOptions: { value: string; label: string }[]
   powerRows: string[][]
   commPorts: { device: string; mode: string; port: string; baud: string }[]
+  settingsHint?: string
 }>()
 
 const emit = defineEmits<{
@@ -158,7 +159,12 @@ const calParamRows = [
 
       <el-col :xs="24" :lg="12">
         <el-card shadow="never" class="step-card">
-          <template #header>通信端口配置</template>
+          <template #header>
+            <div class="comm-header">
+              <span>通信端口配置（只读）</span>
+            </div>
+          </template>
+          <p v-if="settingsHint" class="comm-hint">{{ settingsHint }} · 配置在 Web「刻度井管理」中维护</p>
           <el-table :data="commPorts" size="small" stripe>
             <el-table-column prop="device" label="设备" min-width="100" />
             <el-table-column prop="mode" label="方式" width="90" />
@@ -201,5 +207,18 @@ const calParamRows = [
 
 .param-table {
   width: 100%;
+}
+
+.comm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comm-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 </style>

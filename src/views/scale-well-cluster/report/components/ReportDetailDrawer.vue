@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from "vue"
-import { APPENDIX_TABS } from "../constants/mock-data"
+import { APPENDIX_TABS } from "../constants/options"
 import type { CalibrationReport, ReportAppendixTab } from "../types"
+import { isReportEditable } from "../types"
 import ReportAppendixA from "./ReportAppendixA.vue"
 import ReportAppendixB from "./ReportAppendixB.vue"
 import ReportAppendixC from "./ReportAppendixC.vue"
@@ -11,12 +12,11 @@ const visible = defineModel<boolean>("visible", { default: false })
 const props = defineProps<{
   report: CalibrationReport | null
   statusLabel: string
-  statusType: "success" | "warning" | "danger"
+  statusType: "success" | "warning" | "danger" | "info"
 }>()
 
 const emit = defineEmits<{
-  approve: [report: CalibrationReport]
-  reject: [report: CalibrationReport]
+  edit: [report: CalibrationReport]
 }>()
 
 const activeTab = ref<ReportAppendixTab>("appA")
@@ -40,9 +40,18 @@ watch(
       <div style="margin-bottom: 14px">
         <el-tag :type="statusType">{{ statusLabel }}</el-tag>
         <span style="margin-left: 12px; color: var(--el-text-color-secondary); font-size: 13px">
-          {{ report.id }} · 提交于 {{ report.submittedAt }}
+          {{ report.id }} · {{ report.submittedAt ? `提交于 ${report.submittedAt}` : "尚未提交" }}
         </span>
       </div>
+
+      <el-alert
+        v-if="report.status === 'rejected' && report.reviewRemark"
+        type="error"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 14px"
+        :title="`驳回原因：${report.reviewRemark}`"
+      />
 
       <el-tabs v-model="activeTab">
         <el-tab-pane v-for="tab in APPENDIX_TABS" :key="tab.key" :label="tab.label" :name="tab.key" />
@@ -54,10 +63,9 @@ watch(
 
       <div class="report-drawer-footer">
         <el-button @click="visible = false">关闭</el-button>
-        <template v-if="report.status === 'pending'">
-          <el-button type="danger" @click="emit('reject', report)">驳回</el-button>
-          <el-button type="primary" @click="emit('approve', report)">审核通过</el-button>
-        </template>
+        <el-button v-if="isReportEditable(report.status)" type="primary" @click="emit('edit', report)">
+          编辑报告
+        </el-button>
       </div>
     </template>
   </el-drawer>

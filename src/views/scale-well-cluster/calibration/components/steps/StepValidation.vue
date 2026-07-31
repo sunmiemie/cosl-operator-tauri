@@ -1,136 +1,188 @@
 <script setup lang="ts">
-import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue"
-import CalibrationStepLayout from "../CalibrationStepLayout.vue"
+import { computed } from "vue"
+import { DataAnalysis, RefreshLeft } from "@element-plus/icons-vue"
+import type { CalCoefficients, CalibrationResults } from "../../composables/calibration-results"
+import {
+  buildCompareRows,
+  buildKpiItems,
+  buildSummaryText
+} from "../../composables/calibration-results"
+import type { QualificationThresholds } from "../../../shared/types"
 
-defineProps<{
-  results: {
-    ka: number
-    kb: number
-    kc: number
-    ba: number
-    bb: number
-    bc: number
-    kcOk: boolean
-    bOk: boolean
-    allOk: boolean
-  }
-  kcMin: number
-  kcMax: number
+const props = defineProps<{
+  results: CalibrationResults
+  lastCal: CalCoefficients | null
+  qualification: QualificationThresholds
+  dualSensor: boolean
 }>()
 
 const emit = defineEmits<{
   prev: []
   next: []
+  restart: []
 }>()
 
-const kpiItems = (results: {
-  ka: number
-  kb: number
-  kc: number
-  ba: number
-  bb: number
-  bc: number
-  kcOk: boolean
-  bOk: boolean
-}) => [
-  { key: "Ka", value: results.ka, ok: true },
-  { key: "Kb", value: results.kb, ok: results.kcOk },
-  { key: "Kc", value: results.kc, ok: results.kcOk },
-  { key: "Ba", value: results.ba, ok: true },
-  { key: "Bb", value: results.bb, ok: results.bOk },
-  { key: "Bc", value: results.bc, ok: results.bOk }
-]
+const kpiItems = computed(() =>
+  buildKpiItems(props.results, props.dualSensor, props.qualification)
+)
+
+const compareRows = computed(() =>
+  buildCompareRows(props.results, props.lastCal, props.dualSensor, props.qualification)
+)
+
+const summaryDetail = computed(() => buildSummaryText(props.results, props.dualSensor, props.qualification))
 </script>
 
 <template>
-  <CalibrationStepLayout title="刻度结果校验" description="核对 Kc / B 参数是否在合格范围内">
-    <el-alert
-      :type="results.allOk ? 'success' : 'warning'"
-      :closable="false"
-      show-icon
-      :title="results.allOk ? '刻度结果在校验范围内，可以写入仪器' : '部分参数超出合格范围，请检查采样数据'"
-      :description="`Kc 合格范围 [${kcMin}, ${kcMax}]`"
-      class="step-alert"
-    />
+  <div class="cal-result-step">
+    <div class="cal-result-card">
+      <header class="cal-result-card__head">
+        <span class="cal-result-card__icon">
+          <el-icon><DataAnalysis /></el-icon>
+        </span>
+        <div>
+          <h3 class="cal-result-card__title">刻度结果校验</h3>
+          <p class="cal-result-card__desc">
+            Ka/Kb、Ba/Bb 按刻度井配置校验 · Kc/Bc 为客户端自动计算
+          </p>
+        </div>
+      </header>
 
-    <el-row :gutter="12">
-      <el-col v-for="item in kpiItems(results)" :key="item.key" :xs="12" :sm="8" :lg="4">
-        <el-card shadow="never" class="kpi-card" :class="item.ok ? 'is-ok' : 'is-bad'">
-          <el-statistic :title="item.key" :value="item.value" :precision="2" />
-          <el-tag :type="item.ok ? 'success' : 'danger'" size="small" effect="plain">
-            {{ item.ok ? "合格" : "超限" }}
-          </el-tag>
-        </el-card>
-      </el-col>
-    </el-row>
+      <div class="cal-result-card__body">
+        <div
+          class="cal-ibox"
+          :class="results.allOk ? 'cal-ibox--success' : 'cal-ibox--warn'"
+        >
+          <b>{{ results.allOk ? "✅ 刻度结果合格！" : "⚠️ 刻度结果超出范围！" }}</b>
+          {{ summaryDetail }}
+        </div>
 
-    <el-card shadow="never" class="step-card compare-card">
-      <template #header>本次 vs 上次刻度数据对比</template>
-      <el-table
-        :data="[
-          { param: 'Kc', last: '—', current: results.kc, delta: '—', status: results.kcOk ? '正常' : '异常', ok: results.kcOk },
-          { param: 'Bb', last: '—', current: results.bb, delta: '—', status: results.bOk ? '正常' : '异常', ok: results.bOk }
-        ]"
-        size="small"
-        stripe
-      >
-        <el-table-column prop="param" label="参数" width="80" />
-        <el-table-column prop="last" label="上次刻度" width="100" />
-        <el-table-column prop="current" label="本次刻度" width="100" />
-        <el-table-column prop="delta" label="变化" width="80" />
-        <el-table-column prop="status" label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.ok ? 'success' : 'info'" size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        <div class="cal-kpi-grid">
+          <div
+            v-for="item in kpiItems"
+            :key="item.key"
+            class="cal-kpi-card"
+            :class="item.ok ? 'is-ok' : 'is-bad'"
+          >
+            <div class="cal-kpi-card__key">{{ item.key }}</div>
+            <div class="cal-kpi-card__val">{{ item.value }}</div>
+            <div class="cal-kpi-card__range">{{ item.range }}</div>
+          </div>
+        </div>
 
-    <template #footer>
-      <el-button @click="emit('prev')">
-        <el-icon class="el-icon--left"><ArrowLeft /></el-icon>
-        上一步
-      </el-button>
-      <el-button type="primary" :disabled="!results.allOk" @click="emit('next')">
-        写入仪器
-        <el-icon class="el-icon--right"><ArrowRight /></el-icon>
-      </el-button>
-    </template>
-  </CalibrationStepLayout>
+        <div class="cal-mean-strip">
+          <span class="cal-mean-strip__item">
+            <span class="k">高刻均值 CPS</span>
+            <span class="v">{{ results.hiMean }}</span>
+          </span>
+          <span class="cal-mean-strip__divider" />
+          <span class="cal-mean-strip__item">
+            <span class="k">低刻均值 CPS</span>
+            <span class="v">{{ results.loMean }}</span>
+          </span>
+        </div>
+
+        <div class="cal-section-divider" />
+
+        <h4 class="cal-section-title">本次 vs 上次刻度数据对比</h4>
+
+        <div class="cal-cmp-table">
+          <div class="cal-cmp-table__head">
+            <span>参数</span>
+            <span>上次刻度</span>
+            <span>本次刻度</span>
+            <span>变化</span>
+            <span>状态</span>
+          </div>
+          <div v-for="row in compareRows" :key="row.param" class="cal-cmp-table__row">
+            <span class="param">{{ row.param }}</span>
+            <span>{{ row.last ?? "—" }}</span>
+            <span :class="row.ok ? 'cur-ok' : 'cur-bad'">{{ row.current }}</span>
+            <span :class="row.delta != null && row.delta > 0 ? 'delta-up' : row.delta != null && row.delta < 0 ? 'delta-down' : ''">
+              {{ row.deltaStr }}
+            </span>
+            <span>
+              <span class="cal-status-tag" :class="row.ok ? 'is-ok' : 'is-bad'">
+                {{ row.ok ? "合格" : "异常" }}
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <footer class="cal-result-card__foot">
+        <button type="button" class="cal-result-btn cal-result-btn--ghost" @click="emit('prev')">
+          ← 上一步
+        </button>
+        <div class="cal-result-card__foot-actions">
+          <button
+            v-if="!results.allOk"
+            type="button"
+            class="cal-result-btn cal-result-btn--warn"
+            @click="emit('restart')"
+          >
+            <el-icon><RefreshLeft /></el-icon>
+            重新采样
+          </button>
+          <button
+            type="button"
+            class="cal-result-btn cal-result-btn--primary"
+            :disabled="!results.allOk"
+            @click="emit('next')"
+          >
+            写入仪器 →
+          </button>
+        </div>
+      </footer>
+    </div>
+  </div>
 </template>
 
 <style scoped lang="scss">
-.step-alert {
-  margin-bottom: 16px;
-}
+@import "../../styles/validation-write.scss";
 
-.kpi-card {
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-secondary);
-  text-align: center;
-  margin-bottom: 12px;
+.cal-mean-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-bg-tertiary) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  flex-shrink: 0;
 
-  &.is-ok {
-    border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+  &__item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 0 12px;
+
+    .k {
+      font-size: 9px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--color-text-secondary);
+    }
+
+    .v {
+      font-family: var(--cal-mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--color-text-primary);
+    }
   }
 
-  &.is-bad {
-    border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);
-  }
-
-  :deep(.el-statistic__number) {
-    font-size: 22px;
-    font-weight: 700;
+  &__divider {
+    width: 1px;
+    height: 16px;
+    background: color-mix(in srgb, var(--color-border) 70%, transparent);
   }
 }
 
-.step-card {
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-primary);
-  margin-top: 4px;
-}
-
-.compare-card :deep(.el-table) {
-  margin-bottom: 8px;
+.cal-result-card__foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

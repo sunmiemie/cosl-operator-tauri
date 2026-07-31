@@ -1,12 +1,13 @@
-import { getToolDefaults } from "./tool-params"
+import { getToolDefaults, getToolDisplayName } from "./tool-params"
 import type { CalibrationWorkOrder } from "../types"
 
 function buildOrder(
-  partial: Omit<CalibrationWorkOrder, "hiWell" | "loWell" | "hiApi" | "loApi"> & { toolType: string }
+  partial: Omit<CalibrationWorkOrder, "hiWell" | "loWell" | "hiApi" | "loApi" | "modelName"> & { toolType: string }
 ): CalibrationWorkOrder {
   const defaults = getToolDefaults(partial.toolType)
   return {
     ...partial,
+    modelName: getToolDisplayName(partial.toolType),
     hiWell: defaults.hiWell,
     loWell: defaults.loWell,
     hiApi: defaults.hiApi ?? 0,

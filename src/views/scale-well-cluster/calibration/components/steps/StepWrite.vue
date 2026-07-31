@@ -86,7 +86,7 @@ const params = (r: { ka: number; kb: number; kc: number; ba: number; bb: number;
       </template>
       <template v-else>
         <span />
-        <el-button type="primary" @click="emit('finish')">
+        <el-button class="step-write-finish-btn" type="primary" @click="emit('finish')">
           <el-icon class="el-icon--left"><Document /></el-icon>
           查看刻度报告
         </el-button>
@@ -128,5 +128,14 @@ const params = (r: { ka: number; kb: number; kc: number; ba: number; bb: number;
   width: 100%;
   max-width: 720px;
   margin: 0 auto;
+}
+
+.step-write-finish-btn {
+  min-width: 148px;
+  color: #fff;
+
+  :deep(.el-icon) {
+    color: inherit;
+  }
 }
 </style>

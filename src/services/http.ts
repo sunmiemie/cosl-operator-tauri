@@ -415,6 +415,110 @@ class HttpClient {
   }
 
   /**
+   * 订阅 Server-Sent Events（支持 Authorization 头，无默认超时）
+   */
+  async subscribeEventStream(
+    endpoint: string,
+    onEvent: (event: string, data: Record<string, unknown>) => void,
+    options: {
+      headers?: Record<string, string>
+      queryParams?: Record<string, string>
+      signal?: AbortSignal
+      timeout?: number
+    } = {}
+  ): Promise<void> {
+    await this.ensureInit()
+
+    const { headers = {}, queryParams, signal, timeout = 0 } = options
+    const url = this.buildUrl(endpoint, queryParams)
+
+    const controller = new AbortController()
+    const abortFromParent = () => controller.abort()
+    signal?.addEventListener('abort', abortFromParent)
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    if (timeout > 0) {
+      timeoutId = setTimeout(() => controller.abort(), timeout)
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'text/event-stream',
+          ...headers,
+        },
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        let message = `请求失败: ${response.status} ${response.statusText}`
+        try {
+          const errJson = await response.json()
+          if (errJson && typeof errJson === 'object' && 'msg' in errJson) {
+            message = String((errJson as Record<string, unknown>).msg)
+          }
+        } catch {
+          // ignore non-json error body
+        }
+        throw new Error(message)
+      }
+
+      if (!response.body) {
+        throw new Error('响应不支持流式读取')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      const dispatchBlock = async (block: string) => {
+        const trimmed = block.trim()
+        if (!trimmed || trimmed.startsWith(':')) return
+
+        let eventName = 'message'
+        let dataLine = ''
+        for (const line of trimmed.split('\n')) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim()
+          } else if (line.startsWith('data:')) {
+            dataLine = line.slice(5).trim()
+          }
+        }
+        if (!dataLine) return
+        const data = JSON.parse(dataLine) as Record<string, unknown>
+        await Promise.resolve(onEvent(eventName, data))
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        let splitAt = buffer.indexOf('\n\n')
+        while (splitAt >= 0) {
+          const block = buffer.slice(0, splitAt)
+          buffer = buffer.slice(splitAt + 2)
+          await dispatchBlock(block)
+          splitAt = buffer.indexOf('\n\n')
+        }
+      }
+
+      if (buffer.trim()) {
+        await dispatchBlock(buffer)
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('流式请求已取消或超时')
+      }
+      throw error
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId)
+      signal?.removeEventListener('abort', abortFromParent)
+    }
+  }
+
+  /**
    * 下载文件（返回 ArrayBuffer）
    * 用于二进制文件下载
    */

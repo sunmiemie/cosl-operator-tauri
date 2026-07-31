@@ -5,13 +5,12 @@ import ReportCard from "./ReportCard.vue"
 defineProps<{
   reports: CalibrationReport[]
   getStatusLabel: (status: CalibrationReport["status"]) => string
-  getStatusType: (status: CalibrationReport["status"]) => "success" | "warning" | "danger"
+  getStatusType: (status: CalibrationReport["status"]) => "success" | "warning" | "danger" | "info"
 }>()
 
 const emit = defineEmits<{
   open: [report: CalibrationReport]
-  approve: [report: CalibrationReport]
-  reject: [report: CalibrationReport]
+  edit: [report: CalibrationReport]
 }>()
 </script>
 
@@ -24,8 +23,7 @@ const emit = defineEmits<{
       :status-label="getStatusLabel(report.status)"
       :status-type="getStatusType(report.status)"
       @open="emit('open', $event)"
-      @approve="emit('approve', $event)"
-      @reject="emit('reject', $event)"
+      @edit="emit('edit', $event)"
     />
   </div>
   <el-empty v-else description="暂无刻度报告" />

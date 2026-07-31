@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Refresh, Search } from "@element-plus/icons-vue"
-import { REPORT_STATUS_OPTIONS } from "../constants/mock-data"
+import { REPORT_STATUS_OPTIONS } from "../constants/options"
 import type { ReportFilter } from "../types"
 
 const filter = defineModel<ReportFilter>("filter", { required: true })

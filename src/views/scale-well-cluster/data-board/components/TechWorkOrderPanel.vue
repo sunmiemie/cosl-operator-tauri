@@ -3,7 +3,6 @@ import type { CalibrationWorkOrder } from "../../shared/types"
 
 defineProps<{
   orders: CalibrationWorkOrder[]
-  getToolDisplayName: (type: string) => string
 }>()
 
 const emit = defineEmits<{
@@ -24,10 +23,10 @@ const emit = defineEmits<{
           <span class="sw-tag is-warn">待测</span>
         </div>
         <div class="tech-wo-card__row">
-          <span>仪器型号</span><b>{{ getToolDisplayName(order.toolType) }}</b>
+          <span>仪器型号</span><b>{{ order.modelName }}</b>
         </div>
         <div class="tech-wo-card__row">
-          <span>仪器编号</span><b>{{ order.serialNumber }}</b>
+          <span>仪器 SN</span><b>{{ order.serialNumber }}</b>
         </div>
         <div class="tech-wo-card__row">
           <span>测试人员</span><b>{{ order.engineer }}</b>

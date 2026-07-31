@@ -1,67 +1,28 @@
-/** 报告审核状态 */
-export type ReportReviewStatus = "pending" | "approved" | "rejected"
+import type {
+  CalibrationDataGroup,
+  ReportAppendixA,
+  ReportAppendixB,
+  ReportAppendixC,
+  ReportDraft
+} from "../shared/types"
 
-/** Kc/B 数据组 */
-export interface CalibrationDataGroup {
-  ka: number | null
-  kb: number | null
-  kc: number | null
-  ba: number | null
-  bb: number | null
-  bc: number | null
-}
+export type {
+  CalibrationDataGroup,
+  ReportAppendixA,
+  ReportAppendixB,
+  ReportAppendixC,
+  ReportDraft,
+  ReportAppendixTab
+} from "../shared/types"
 
-/** 附录 A 数据 */
-export interface ReportAppendixA {
-  serialNumber: string
-  testDate: string
-  engineer: string
-  softVer: string
-  cycleHours: string
-  location: string
-  useWell: boolean
-  useJig: boolean
-  beforeData: CalibrationDataGroup
-  currentData: CalibrationDataGroup
-  remark: string
-}
+/** 报告状态（客户端） */
+export type ReportReviewStatus = "draft" | "pending" | "approved" | "rejected"
 
-/** 附录 B 数据 */
-export interface ReportAppendixB {
-  toolTypeName: string
-  serialNumber: string
-  engineer: string
-  testDate: string
-  qcEngineer: string
-  qcDate: string
-  loWell: string
-  hiWell: string
-  loApi: number
-  hiApi: number
-  ka: number | null
-  kb: number | null
-  kc: number | null
-  ba: number | null
-  bb: number | null
-  bc: number | null
-}
-
-/** 附录 C 数据 */
-export interface ReportAppendixC {
-  recordNo: string
-  serialNumber: string
-  engineer: string
-  testDate: string
-  hiWell: string
-  loWell: string
-  hiApi: number
-  loApi: number
-  remark: string
-}
-
-/** 刻度报告 */
+/** 刻度报告列表项 */
 export interface CalibrationReport {
   id: string
+  dbId: number
+  orderDbId: number
   workOrderId: string
   toolType: string
   serialNumber: string
@@ -75,7 +36,10 @@ export interface CalibrationReport {
   loApi: number
   softVer: string
   status: ReportReviewStatus
+  statusCode: number
+  statusText?: string
   submittedAt: string
+  reviewRemark?: string
   appendixA: ReportAppendixA
   appendixB: ReportAppendixB
   appendixC: ReportAppendixC
@@ -87,4 +51,7 @@ export interface ReportFilter {
   status: ReportReviewStatus | ""
 }
 
-export type ReportAppendixTab = "appA" | "appB" | "appC"
+export function isReportEditable(status: ReportReviewStatus | number): boolean {
+  if (typeof status === "number") return status === 0 || status === 3
+  return status === "draft" || status === "rejected"
+}

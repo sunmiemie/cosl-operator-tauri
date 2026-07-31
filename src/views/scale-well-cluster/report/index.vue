@@ -1,59 +1,68 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue"
+import { ref } from "vue"
 import { useRouter } from "vue-router"
-import { ElMessage } from "element-plus"
-import ReportFillHeader from "./components/ReportFillHeader.vue"
-import ReportAppendixAForm from "./components/ReportAppendixAForm.vue"
-import ReportAppendixBForm from "./components/ReportAppendixBForm.vue"
-import ReportAppendixCForm from "./components/ReportAppendixCForm.vue"
-import { useScaleWellSession } from "../shared/composables/useScaleWellSession"
-import type { ReportAppendixTab } from "../shared/types"
+import ReportHeader from "./components/ReportHeader.vue"
+import ReportToolbar from "./components/ReportToolbar.vue"
+import ReportCardList from "./components/ReportCardList.vue"
+import ReportDetailDrawer from "./components/ReportDetailDrawer.vue"
+import { useMyCalibrationReports } from "./composables/use-my-calibration-reports"
+import type { CalibrationReport } from "./types"
 
 const router = useRouter()
-const { reportDraft, initReportDraftIfEmpty, activeWorkOrder } = useScaleWellSession()
-const activeTab = ref<ReportAppendixTab>("appA")
+const {
+  loading,
+  filter,
+  filteredReports,
+  pendingCount,
+  draftCount,
+  fetchReports,
+  resetFilter,
+  getStatusLabel,
+  getStatusType
+} = useMyCalibrationReports()
 
-onMounted(() => {
-  if (!activeWorkOrder.value && !reportDraft.value) {
-    ElMessage.info("请先从数据看板开始刻度流程")
-    router.replace("/scale-well-cluster/data-board")
-    return
-  }
-  initReportDraftIfEmpty()
-})
+const drawerVisible = ref(false)
+const currentReport = ref<CalibrationReport | null>(null)
 
-const saveDraft = () => {
-  ElMessage.success("报告草稿已保存（本地 mock）")
+const openReport = (report: CalibrationReport) => {
+  currentReport.value = report
+  drawerVisible.value = true
 }
 
-const exportPlaceholder = () => {
-  ElMessage.info("导出 Word/PDF 功能待对接")
+const editReport = (report: CalibrationReport) => {
+  drawerVisible.value = false
+  router.push(`/scale-well-cluster/report/${report.dbId}`)
 }
 </script>
 
 <template>
-  <div v-if="reportDraft" class="scale-well-page">
-    <ReportFillHeader />
+  <div class="scale-well-page report-page">
+    <ReportHeader :pending-count="pendingCount" :draft-count="draftCount" />
 
     <div class="sw-content-panel report-panel">
-      <el-tabs v-model="activeTab" class="report-tabs">
-        <el-tab-pane label="附录A · 伽马刻度工单" name="appA">
-          <ReportAppendixAForm :draft="reportDraft" />
-        </el-tab-pane>
-        <el-tab-pane label="附录B · 测试记录表" name="appB">
-          <ReportAppendixBForm :draft="reportDraft" />
-        </el-tab-pane>
-        <el-tab-pane label="附录C · 刻度井记录表" name="appC">
-          <ReportAppendixCForm :draft="reportDraft" />
-        </el-tab-pane>
-      </el-tabs>
+      <ReportToolbar
+        v-model:filter="filter"
+        :loading="loading"
+        @search="fetchReports"
+        @reset="resetFilter"
+      />
 
-      <div class="report-actions">
-        <el-button @click="exportPlaceholder">导出 Word</el-button>
-        <el-button @click="exportPlaceholder">导出 PDF</el-button>
-        <el-button type="primary" @click="saveDraft">保存草稿</el-button>
-      </div>
+      <ReportCardList
+        :reports="filteredReports"
+        :get-status-label="getStatusLabel"
+        :get-status-type="getStatusType"
+        @open="openReport"
+        @edit="editReport"
+      />
     </div>
+
+    <ReportDetailDrawer
+      v-model:visible="drawerVisible"
+      :report="currentReport"
+      :status-label="currentReport ? getStatusLabel(currentReport.status) : ''"
+      :status-type="currentReport ? getStatusType(currentReport.status) : 'info'"
+      @edit="editReport"
+    />
   </div>
 </template>
 
@@ -62,22 +71,9 @@ const exportPlaceholder = () => {
 @import "./styles/report.scss";
 
 .report-panel {
+  flex: 1;
+  min-height: 0;
   padding: 16px 18px 18px;
   overflow: auto;
-}
-
-.report-tabs {
-  :deep(.el-tabs__content) {
-    overflow: visible;
-  }
-}
-
-.report-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-border);
 }
 </style>

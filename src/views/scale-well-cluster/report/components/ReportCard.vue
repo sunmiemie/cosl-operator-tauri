@@ -2,17 +2,17 @@
 import { Document } from "@element-plus/icons-vue"
 import { getToolDisplayName } from "../../shared/constants/tool-params"
 import type { CalibrationReport } from "../types"
+import { isReportEditable } from "../types"
 
 defineProps<{
   report: CalibrationReport
   statusLabel: string
-  statusType: "success" | "warning" | "danger"
+  statusType: "success" | "warning" | "danger" | "info"
 }>()
 
 const emit = defineEmits<{
   open: [report: CalibrationReport]
-  approve: [report: CalibrationReport]
-  reject: [report: CalibrationReport]
+  edit: [report: CalibrationReport]
 }>()
 </script>
 
@@ -35,10 +35,9 @@ const emit = defineEmits<{
       <el-tag :type="statusType" size="small">{{ statusLabel }}</el-tag>
       <div class="report-card__ops">
         <el-button link type="primary" @click="emit('open', report)">查看</el-button>
-        <template v-if="report.status === 'pending'">
-          <el-button link type="success" @click="emit('approve', report)">通过</el-button>
-          <el-button link type="danger" @click="emit('reject', report)">驳回</el-button>
-        </template>
+        <el-button v-if="isReportEditable(report.status)" link type="warning" @click="emit('edit', report)">
+          编辑
+        </el-button>
       </div>
     </div>
   </article>
