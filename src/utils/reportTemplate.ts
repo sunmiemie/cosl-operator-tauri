@@ -301,6 +301,7 @@ export function trimReportJson(
       // XrayTest: 删除 threeD, twoD, plane
       delete json.threeD
       delete json.twoD
+      delete json.twoDBak
       delete json.plane
       break
   }
