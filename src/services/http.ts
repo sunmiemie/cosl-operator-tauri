@@ -257,6 +257,26 @@ class HttpClient {
     formData: FormData,
     headers?: Record<string, string>
   ): Promise<ApiResponse<T>> {
+    return this.requestFormData<T>('POST', endpoint, formData, headers)
+  }
+
+  /**
+   * PUT FormData 请求（用于带文件更新）
+   */
+  async putFormData<T>(
+    endpoint: string,
+    formData: FormData,
+    headers?: Record<string, string>
+  ): Promise<ApiResponse<T>> {
+    return this.requestFormData<T>('PUT', endpoint, formData, headers)
+  }
+
+  private async requestFormData<T>(
+    method: 'POST' | 'PUT',
+    endpoint: string,
+    formData: FormData,
+    headers?: Record<string, string>
+  ): Promise<ApiResponse<T>> {
     // 确保客户端已初始化
     await this.ensureInit()
 
@@ -271,7 +291,7 @@ class HttpClient {
 
     try {
       const response = await fetch(url, {
-        method: 'POST',
+        method,
         headers: requestHeaders,
         body: formData,
         signal: controller.signal,

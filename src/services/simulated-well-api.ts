@@ -10,6 +10,9 @@ export interface SimulatedWellOrderDeviceDTO {
     scheduled_start_at?: string | null
     scheduled_end_at?: string | null
   }>
+  instrument_status?: number
+  is_completed?: boolean
+  completed_at?: string | null
 }
 
 export interface SimulatedWellOrderDTO {
@@ -24,6 +27,7 @@ export interface SimulatedWellOrderDTO {
   research_no?: string
   project_budget_no?: string
   project_name?: string
+  well_name?: string
   tested_instrument?: string
   instrument_sn_numbers?: string
   quantity?: number

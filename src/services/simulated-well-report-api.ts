@@ -11,10 +11,17 @@ export interface SimulatedWellReportItem {
   submit_time: string
   audit_time?: string | null
   reviewer_id?: number | null
+  operator_user_id?: number | null
+  operator_signature_url?: string | null
   report_json?: Record<string, unknown>
   attachments?: Array<Record<string, unknown>>
   order_ids?: number[]
   order_numbers?: string[]
+  instrument_results?: Array<{
+    order_id: number
+    device_id: number
+    instrument_sn: string
+  }>
   client_submit_id?: string | null
   remark?: string | null
 }
@@ -66,8 +73,12 @@ export interface CreateSimulatedWellReportPayload {
   attachments?: Array<Record<string, unknown>>
   order_ids?: number[]
   order_numbers?: string[]
+  instrument_results?: Array<{
+    order_id: number
+    device_id: number
+    instrument_sn: string
+  }>
   client_submit_id?: string | null
-  remark?: string
 }
 
 export interface SimulatedWellReportMutationResponse {
@@ -119,6 +130,22 @@ export async function updateSimulatedWellReport(
   return http.put<SimulatedWellReportMutationResponse>(
     `/test/simulated-well/report/detail/${id}/`,
     payload,
+    headers
+  )
+}
+
+export async function updateSimulatedWellReportWithSignature(
+  id: number,
+  payload: Partial<CreateSimulatedWellReportPayload>,
+  signature: SimulatedWellReportUploadFile,
+  headers?: Record<string, string>
+): Promise<ApiResponse<SimulatedWellReportMutationResponse>> {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  formData.append(signature.fieldName, signature.blob, signature.fileName)
+  return http.putFormData<SimulatedWellReportMutationResponse>(
+    `/test/simulated-well/report/detail/${id}/`,
+    formData,
     headers
   )
 }

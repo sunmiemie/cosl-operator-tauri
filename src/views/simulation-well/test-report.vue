@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -9,8 +9,10 @@ import {
   deleteSimulatedWellReport,
   listSimulatedWellReports,
   updateSimulatedWellReport,
+  updateSimulatedWellReportWithSignature,
   type SimulatedWellReportItem
 } from '@/services/simulated-well-report-api'
+import { getMySignature, getSignatureImage } from '@/services/signature-api'
 import { http } from '@/services/http'
 import {
   getSimulatedWellReportTemplateDetail,
@@ -19,6 +21,8 @@ import {
   type SimulatedWellReportTemplateListItem
 } from '@/services/simulated-well-report-template-api'
 import {
+  formatSimulatedWellEnvironment,
+  formatSimulatedWellInterval,
   listSimulatedWellDownholeWorks,
   updateSimulatedWellDownholeWork,
   type SimulatedWellDownholeWorkItem
@@ -51,6 +55,8 @@ type ReportAttachment = {
 type ReportOperationDevice = {
   id: string
   orderId: string
+  orderDbId?: number
+  deviceDbId?: number
   customer: string
   deviceName: string
   sn: string
@@ -85,9 +91,15 @@ const previewAttachment = ref<{ title: string; url: string; isImage: boolean } |
 const operationDate = ref(new Date().toISOString().slice(0, 10))
 const conclusion = ref<'qualified' | 'unqualified'>('qualified')
 const note = ref('')
+const noteEn = ref('')
 const curveChartNo = ref('')
 const curveFiles = ref<File[]>([])
 const reportFiles = ref<File[]>([])
+const operatorSignatureFile = ref<File | null>(null)
+const operatorSignaturePreviewUrl = ref('')
+const operatorSignatureObjectUrl = ref('')
+const operatorSignatureSource = ref<'saved' | 'report' | 'local' | ''>('')
+const operatorSignatureLoading = ref(false)
 const reportNextStepVisible = ref(false)
 const reportNextStepRemaining = ref(0)
 const autoStartedWorkNo = ref('')
@@ -183,21 +195,8 @@ function statusText(value: number | undefined, fallback?: string) {
   return fallback || REPORT_STATUS_MAP[value ?? 0] || '待审核'
 }
 
-function safeParseRemark(remark: unknown): ReportMeta {
-  if (!remark || typeof remark !== 'string') return {}
-  try {
-    const parsed = JSON.parse(remark)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return { rawRemark: remark }
-  }
-}
-
 function getReportMeta(report: SimulatedWellReportItem): ReportMeta {
-  return {
-    ...safeParseRemark(report.remark),
-    ...(report.report_json && typeof report.report_json === 'object' ? report.report_json : {}),
-  }
+  return report.report_json && typeof report.report_json === 'object' ? { ...report.report_json } : {}
 }
 
 function getReportAttachments(report: SimulatedWellReportItem | null | undefined): ReportAttachment[] {
@@ -218,6 +217,11 @@ function isImageAttachment(attachment: ReportAttachment) {
   return contentType.startsWith('image/') || /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(name)
 }
 
+function attachmentDisplayType(attachment: ReportAttachment) {
+  const type = String(attachment.type || attachment.field || '').toLowerCase()
+  return type.startsWith('curve') ? '原始文件' : isImageAttachment(attachment) ? '图片' : '文件'
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return '-'
   return String(value).replace('T', ' ').slice(0, 19)
@@ -225,6 +229,80 @@ function formatDateTime(value: string | null | undefined) {
 
 function getCurrentUserName() {
   return userInfo.value?.nickName || userInfo.value?.username || '当前操作人'
+}
+
+const operatorSignatureSourceText = computed(() => {
+  if (operatorSignatureSource.value === 'saved') return '已读取个人签名'
+  if (operatorSignatureSource.value === 'report') return '报告已保存签名'
+  if (operatorSignatureSource.value === 'local') return '已选择本次报告签名'
+  return '未设置电子签名'
+})
+
+function revokeOperatorSignatureObjectUrl() {
+  if (operatorSignatureObjectUrl.value) {
+    URL.revokeObjectURL(operatorSignatureObjectUrl.value)
+    operatorSignatureObjectUrl.value = ''
+  }
+}
+
+function clearOperatorSignature() {
+  revokeOperatorSignatureObjectUrl()
+  operatorSignatureFile.value = null
+  operatorSignaturePreviewUrl.value = ''
+  operatorSignatureSource.value = ''
+}
+
+async function loadCurrentUserSignature() {
+  clearOperatorSignature()
+  operatorSignatureLoading.value = true
+  try {
+    await initAuth()
+    const infoRes = await getMySignature(getAuthHeaders())
+    const info = infoRes.data?.data
+    if (!infoRes.success || infoRes.data?.code !== 0 || !info?.hasSignature) return
+
+    const imageRes = await getSignatureImage(info.userId, getAuthHeaders())
+    if (!imageRes.success || !imageRes.data) return
+    const blob = new Blob([imageRes.data], { type: info.mimeType || 'image/png' })
+    const objectUrl = URL.createObjectURL(blob)
+    operatorSignatureObjectUrl.value = objectUrl
+    operatorSignaturePreviewUrl.value = objectUrl
+    operatorSignatureSource.value = 'saved'
+  } catch (error) {
+    console.warn('读取当前操作人电子签名失败', error)
+  } finally {
+    operatorSignatureLoading.value = false
+  }
+}
+
+function validateOperatorSignatureFile(file: File) {
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp']
+  const allowedExtension = /\.(png|jpe?g|webp)$/i.test(file.name)
+  if (!allowedTypes.includes(file.type.toLowerCase()) || !allowedExtension) {
+    return '电子签名仅支持 PNG、JPG、JPEG、WEBP 格式'
+  }
+  if (!file.size) return '电子签名图片不能为空'
+  if (file.size > 5 * 1024 * 1024) return '电子签名图片大小不能超过 5MB'
+  return ''
+}
+
+function handleOperatorSignatureChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const error = validateOperatorSignatureFile(file)
+  if (error) {
+    ElMessage.warning(error)
+    return
+  }
+
+  revokeOperatorSignatureObjectUrl()
+  const objectUrl = URL.createObjectURL(file)
+  operatorSignatureObjectUrl.value = objectUrl
+  operatorSignaturePreviewUrl.value = objectUrl
+  operatorSignatureFile.value = file
+  operatorSignatureSource.value = 'local'
 }
 
 function extractStructuredStringValue(text: string, key: string) {
@@ -294,6 +372,97 @@ function fieldKey(prefix: string, index: number, suffix = '') {
   return `${prefix}_${index}${suffix ? `_${suffix}` : ''}`
 }
 
+type ReadonlyReportRow = {
+  label: string
+  value: string
+}
+
+function displayReadonlyReportValue(value: unknown, empty = '未填写') {
+  if (value === undefined || value === null || value === '') return empty
+  const statusText: Record<string, string> = {
+    normal: '正常',
+    abnormal: '异常',
+    qualified: '符合',
+    unqualified: '不符合',
+  }
+  if (typeof value === 'string') return statusText[value] || value
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  return String(value)
+}
+
+function positiveFieldCount(value: unknown, fallback: number) {
+  const count = Number(value)
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : fallback
+}
+
+function buildReadonlyReportRows(fields: unknown, values: unknown, prefix: string, sectionName: string): ReadonlyReportRow[] {
+  if (!Array.isArray(fields)) return []
+  const valueMap = values && typeof values === 'object' ? values as Record<string, unknown> : {}
+
+  return fields.map((rawField, index) => {
+    const field = normalizeField(rawField)
+    const definition = typeof field === 'object' && field ? field as Record<string, any> : {}
+    const key = fieldKey(prefix, index)
+    const label = getFieldLabel(rawField, `${sectionName}${index + 1}`)
+    const type = getFieldType(rawField)
+
+    if (!COMPOUND_TYPES.includes(type)) {
+      return { label, value: displayReadonlyReportValue(valueMap[key]) }
+    }
+
+    if (type === 'depth-group') {
+      const unit = displayReadonlyReportValue(definition.unit, 'm')
+      const points = Array.from({ length: positiveFieldCount(definition.pointCount, 4) }, (_, pointIndex) => {
+        const point = pointIndex + 1
+        const depth = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `p${point}`)])
+        const result = valueMap[fieldKey(prefix, index, `p${point}_result`)]
+        return `第${point}点：${depth}${unit}${result === undefined || result === null || result === '' ? '' : `，${displayReadonlyReportValue(result)}`}`
+      })
+      return { label, value: points.join('；') }
+    }
+
+    if (type === 'range-radio') {
+      const start = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'from')])
+      const end = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'to')])
+      const result = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'result')])
+      return { label, value: `${start} ~ ${end}；${result}` }
+    }
+
+    if (type === 'multi-input-row') {
+      const columns = Array.isArray(definition.columns) ? definition.columns : []
+      const rows = Array.from({ length: positiveFieldCount(definition.rowCount, 2) }, (_, rowIndex) => {
+        const values = columns.map((column, columnIndex) =>
+          `${getFieldLabel(column, `输入${columnIndex + 1}`)}：${displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `r${rowIndex + 1}c${columnIndex}`)])}`
+        )
+        return `第${rowIndex + 1}点：${values.join('，') || '未填写'}`
+      })
+      return { label, value: rows.join('；') }
+    }
+
+    if (type === 'sampling-group') {
+      const items = Array.isArray(definition.items) ? definition.items : []
+      const points = Array.from({ length: positiveFieldCount(definition.pointCount, 2) }, (_, pointIndex) => {
+        const values = items.map((item, itemIndex) =>
+          `${getFieldLabel(item, `项目${itemIndex + 1}`)}：${displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `p${pointIndex + 1}i${itemIndex}`)])}`
+        )
+        return `第${pointIndex + 1}点：${values.join('，') || '未填写'}`
+      })
+      return { label, value: points.join('；') }
+    }
+
+    const cards = Array.isArray(definition.cards) ? definition.cards : []
+    const cardValues = cards.map((card, cardIndex) => {
+      const cardDefinition = card && typeof card === 'object' ? card as Record<string, any> : {}
+      const cardFields = Array.isArray(cardDefinition.fields) ? cardDefinition.fields : []
+      const values = cardFields.map((item, itemIndex) =>
+        `${getFieldLabel(item, `字段${itemIndex + 1}`)}：${displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `c${cardIndex}f${itemIndex}`)])}`
+      )
+      return `${displayReadonlyReportValue(cardDefinition.title, `卡片${cardIndex + 1}`)}：${values.join('，') || '未填写'}`
+    })
+    return { label, value: cardValues.join('；') || '未填写' }
+  })
+}
+
 function clearReactiveMap(target: Record<string, any>) {
   Object.keys(target).forEach((key) => delete target[key])
 }
@@ -310,9 +479,11 @@ function resetReportForm() {
   operationDate.value = new Date().toISOString().slice(0, 10)
   conclusion.value = 'qualified'
   note.value = ''
+  noteEn.value = ''
   curveChartNo.value = ''
   curveFiles.value = []
   reportFiles.value = []
+  clearOperatorSignature()
   clearReactiveMap(testItemValues)
   clearReactiveMap(evaluationValues)
 }
@@ -331,6 +502,8 @@ function buildOperationDevices(work: SimulatedWellDownholeWorkItem | null): Repo
   return devices.map((device: any, index: number) => ({
     id: `${work?.work_no || 'work'}_${device?.sn || device?.code || index + 1}`,
     orderId: String(device?.orderId || device?.order_id || ''),
+    orderDbId: Number(device?.orderDbId || device?.order_db_id || 0) || undefined,
+    deviceDbId: Number(device?.deviceDbId || device?.device_db_id || device?.dbId || 0) || undefined,
     customer: String(device?.customer || ''),
     deviceName: String(device?.deviceName || device?.device_name || device?.name || '-'),
     sn: String(device?.sn || device?.code || device?.device_number || ''),
@@ -372,7 +545,7 @@ const selectableOperations = computed(() => {
 const reportedDeviceKeys = computed(() => {
   const set = new Set<string>()
   reports.value.forEach((report) => {
-    const meta = safeParseRemark((report as any).remark)
+    const meta = getReportMeta(report)
     const workNo = (report as any).task_number || meta?.downhole_work_no || meta?.task_number || meta?.work_no
     const sn =
       meta?.device_sn ||
@@ -402,6 +575,26 @@ const reportTitle = computed(
 )
 const templateCode = computed(
   () => selectedTemplate.value?.report_no || selectedDevice.value?.template || '-'
+)
+const previewTemplateSnapshot = computed<Record<string, any> | null>(() => {
+  const snapshot = previewReport.value?.meta?.template_snapshot
+  return snapshot && typeof snapshot === 'object' ? snapshot as Record<string, any> : null
+})
+const previewTestItemRows = computed(() =>
+  buildReadonlyReportRows(
+    previewTemplateSnapshot.value?.test_items,
+    previewReport.value?.meta?.test_items,
+    'test',
+    '测试项目'
+  )
+)
+const previewEvaluationRows = computed(() =>
+  buildReadonlyReportRows(
+    previewTemplateSnapshot.value?.evaluation_standards,
+    previewReport.value?.meta?.evaluation_standards,
+    'eval',
+    '评价标准'
+  )
 )
 
 async function fetchReports() {
@@ -553,7 +746,7 @@ function findMatchedTemplateByCode(templateCodeValue: string) {
     templateLibrary.value.find(
       (item) =>
         normalizeCode(item.report_no) === normalized ||
-        normalizeCode(item.report_name).includes(normalized)
+        normalizeCode(item.report_name) === normalized
     ) || null
   )
 }
@@ -566,20 +759,25 @@ async function loadTemplate(device: ReportOperationDevice) {
   try {
     await ensureTemplateCatalog()
 
-    const matchByProduct = findMatchedTemplateByProduct(device.deviceName)
-    if (matchByProduct) {
-      selectedTemplate.value = matchByProduct
-      return
-    }
-
     const matchByCode = findMatchedTemplateByCode(device.template)
     if (matchByCode) {
       selectedTemplate.value = matchByCode
-      templateMessage.value = '未按测试产品匹配到模板，已按模板编号回退匹配。'
+      templateMessage.value = '已使用下井作业中保存的关联模板。'
       return
     }
 
-    templateMessage.value = '未找到与当前测试产品对应的报告模板，将使用基础报告表单。'
+    const matchByProduct = findMatchedTemplateByProduct(device.deviceName)
+    if (matchByProduct) {
+      selectedTemplate.value = matchByProduct
+      if (String(device.template || '').trim()) {
+        templateMessage.value = '已保存的关联模板不存在，已按测试产品自动匹配。'
+      } else {
+        templateMessage.value = '未保存关联模板，已按测试产品自动匹配。'
+      }
+      return
+    }
+
+    templateMessage.value = '未找到与当前测试产品对应的报告模板，无法创建测试报告。'
   } finally {
     templateLoading.value = false
   }
@@ -647,20 +845,21 @@ async function pickDevice(device: ReportOperationDevice) {
   // 选择工单后将工单号设置为曲线图编号前缀
   curveChartNoPrefix.value = device.orderId + "-"
   resetReportForm()
-  await loadTemplate(device)
+  await Promise.all([loadTemplate(device), loadCurrentUserSignature()])
   mode.value = 'add-report'
 }
 
 function buildEditFallbackTemplate(meta: ReportMeta): SimulatedWellReportTemplateDetail {
+  const snapshot = meta.template_snapshot && typeof meta.template_snapshot === 'object' ? meta.template_snapshot : {}
   return {
-    id: -Date.now(),
-    report_no: String(meta.template_code || meta.template_name || ''),
-    report_name: String(meta.template_name || meta.report_name || meta.template_code || '井下测试综合报告'),
-    test_products: [],
-    match_instruments: [],
-    test_items: [],
-    evaluation_standards: [],
-    updated_at: '',
+    id: Number(snapshot.id || meta.template_id || -Date.now()),
+    report_no: String(snapshot.report_no || meta.template_code || meta.template_name || ''),
+    report_name: String(snapshot.report_name || meta.template_name || meta.report_name || meta.template_code || '井下测试综合报告'),
+    test_products: Array.isArray(snapshot.test_products) ? snapshot.test_products : [],
+    match_instruments: Array.isArray(snapshot.match_instruments) ? snapshot.match_instruments : [],
+    test_items: Array.isArray(snapshot.test_items) ? snapshot.test_items : [],
+    evaluation_standards: Array.isArray(snapshot.evaluation_standards) ? snapshot.evaluation_standards : [],
+    updated_at: String(snapshot.updated_at || ''),
   }
 }
 
@@ -673,6 +872,11 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
     id: -report.id,
     work_no: String(report.task_number || meta.downhole_work_no || meta.work_no || ''),
     well_name: String(meta.well_name || ''),
+    testing_device: String(meta.testing_device || ''),
+    test_objective: String(meta.test_objective || ''),
+    test_type: String(meta.test_type || ''),
+    test_count: String(meta.test_count || ''),
+    repair_order_number: String(meta.repair_order_number || ''),
     env_text: String(meta.env_text || ''),
     interval_text: String(meta.interval_text || ''),
     device_count: 1,
@@ -690,9 +894,15 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   operationDate.value = report.test_date || new Date().toISOString().slice(0, 10)
   conclusion.value = meta.conclusion === 'unqualified' ? 'unqualified' : 'qualified'
   note.value = String(meta.note || '')
+  noteEn.value = String(meta.note_en || '')
   curveChartNo.value = String(meta.curve_chart_no || '')
   curveFiles.value = []
   reportFiles.value = []
+  clearOperatorSignature()
+  if (report.operator_signature_url) {
+    operatorSignaturePreviewUrl.value = resolveFileUrl(report.operator_signature_url)
+    operatorSignatureSource.value = 'report'
+  }
   assignReactiveMap(testItemValues, meta.test_items)
   assignReactiveMap(evaluationValues, meta.evaluation_standards)
 
@@ -708,10 +918,11 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   }
   try {
     await ensureTemplateCatalog()
-    selectedTemplate.value =
-      findMatchedTemplateByCode(String(meta.template_code || selectedDevice.value.template)) ||
-      findMatchedTemplateByProduct(String(meta.device_name || '')) ||
-      buildEditFallbackTemplate(meta)
+    selectedTemplate.value = meta.template_snapshot
+      ? buildEditFallbackTemplate(meta)
+      : findMatchedTemplateByCode(String(meta.template_code || selectedDevice.value.template)) ||
+        findMatchedTemplateByProduct(String(meta.device_name || '')) ||
+        buildEditFallbackTemplate(meta)
   } finally {
     templateLoading.value = false
   }
@@ -746,8 +957,21 @@ async function deleteReport(row: SimulatedWellReportItem & { meta: ReportMeta })
 }
 
 function handleFileChange(event: Event) {
-  const files = Array.from((event.target as HTMLInputElement)?.files || [])
-  reportFiles.value = files
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) {
+    reportFiles.value = []
+    return
+  }
+  const isPdfName = file.name.toLowerCase().endsWith('.pdf')
+  const isPdfType = !file.type || file.type === 'application/pdf'
+  if (!isPdfName || !isPdfType) {
+    reportFiles.value = []
+    input.value = ''
+    ElMessage.error('测试报告文件仅支持 PDF')
+    return
+  }
+  reportFiles.value = [file]
 }
 
 function handleCurveFileChange(event: Event) {
@@ -770,6 +994,16 @@ async function saveReport() {
     ElMessage.warning('请先选择下井作业和测试设备')
     return
   }
+  if (!selectedTemplate.value || (!editingReport.value && selectedTemplate.value.id <= 0)) {
+    ElMessage.warning('当前测试设备未关联有效报告模板，请先在管理端配置模板后再提交')
+    return
+  }
+  const description = note.value.trim()
+  const descriptionEn = noteEn.value.trim()
+  if (!operatorSignaturePreviewUrl.value) {
+    ElMessage.warning('请上传操作人的电子签名')
+    return
+  }
 
   saving.value = true
   try {
@@ -779,10 +1013,16 @@ async function saveReport() {
     const reportNo = editing?.report_no || buildReportNo()
     const reportJson = {
       report_name: reportTitle.value,
+      template_id: selectedTemplate.value.id,
       template_code: templateCode.value,
       template_name: selectedTemplate.value?.report_name || '',
       downhole_work_no: selectedOperation.value.work_no,
       well_name: selectedOperation.value.well_name,
+      testing_device: selectedOperation.value.testing_device || '',
+      test_objective: selectedOperation.value.test_objective || '',
+      test_type: selectedOperation.value.test_type || '',
+      test_count: selectedOperation.value.test_count || '',
+      repair_order_number: selectedOperation.value.repair_order_number || '',
       env_text: selectedOperation.value.env_text,
       interval_text: selectedOperation.value.interval_text,
       device_name: selectedDevice.value.deviceName,
@@ -794,29 +1034,55 @@ async function saveReport() {
       curve_chart_files: curveFiles.value.map((file) => file.name),
       report_files: reportFiles.value.map((file) => file.name),
       pdf_files: reportFiles.value.map((file) => file.name),
-      note: note.value.trim()
+      note: description,
+      note_en: descriptionEn
+    }
+    if (!editing && (!selectedDevice.value.orderDbId || !selectedDevice.value.deviceDbId)) {
+      ElMessage.error('当前测试产品缺少工单关联信息，请重新从排程日历领取')
+      return
     }
     const payload = {
       report_no: reportNo,
       task_number: selectedOperation.value.work_no,
       test_date: operationDate.value,
-      tester: getCurrentUserName(),
-      status: editing?.status ?? 0,
+      tester: editing?.tester || getCurrentUserName(),
+      status: 0,
       report_json: reportJson,
-      order_numbers: [selectedOperation.value.work_no],
+      order_ids: selectedDevice.value.orderDbId ? [selectedDevice.value.orderDbId] : undefined,
+      order_numbers: [selectedDevice.value.orderId],
+      instrument_results: selectedDevice.value.orderDbId && selectedDevice.value.deviceDbId
+        ? [{
+            order_id: selectedDevice.value.orderDbId,
+            device_id: selectedDevice.value.deviceDbId,
+            instrument_sn: selectedDevice.value.sn,
+          }]
+        : undefined,
       client_submit_id: editing?.client_submit_id || `${reportNo}-${Date.now()}`,
-      remark: JSON.stringify(reportJson)
     }
     const uploadFiles = [
       ...curveFiles.value.map((file) => ({ fieldName: 'curve_chart', fileName: file.name, blob: file })),
       ...reportFiles.value.map((file) => ({ fieldName: 'report_file', fileName: file.name, blob: file })),
+      ...(operatorSignatureFile.value
+        ? [{ fieldName: 'operator_signature', fileName: operatorSignatureFile.value.name, blob: operatorSignatureFile.value }]
+        : []),
     ]
 
-    if (editing && uploadFiles.length) {
+    if (editing && (curveFiles.value.length || reportFiles.value.length)) {
       ElMessage.warning('编辑模式暂不替换已上传附件，本次仅保存报告字段')
     }
     const res = editing
-      ? await updateSimulatedWellReport(editing.id, payload, getAuthHeaders())
+      ? operatorSignatureFile.value
+        ? await updateSimulatedWellReportWithSignature(
+            editing.id,
+            payload,
+            {
+              fieldName: 'operator_signature',
+              fileName: operatorSignatureFile.value.name,
+              blob: operatorSignatureFile.value,
+            },
+            getAuthHeaders()
+          )
+        : await updateSimulatedWellReport(editing.id, payload, getAuthHeaders())
       : uploadFiles.length
         ? await createSimulatedWellReportWithFiles(payload, uploadFiles, getAuthHeaders())
         : await createSimulatedWellReport(payload, getAuthHeaders())
@@ -851,6 +1117,8 @@ async function saveReport() {
     saving.value = false
   }
 }
+
+onBeforeUnmount(() => revokeOperatorSignatureObjectUrl())
 
 function continueReportFill() {
   reportNextStepVisible.value = false
@@ -956,7 +1224,7 @@ watch(
       <!-- 驳回编辑时显示驳回原因 -->
       <div class="reject-message" v-if="mode === 'add-report' && editingReport?.status === 2">
         <Icon icon="mdi:alert-circle-outline" />
-        <span>审核驳回消息：{{editingReport.meta.rawRemark}}</span>
+        <span>审核驳回消息：{{ editingReport.remark || '-' }}</span>
       </div>
       <div v-if="mode === 'list'" class="downhole-card">
         <div class="section-header-row list-toolbar">
@@ -1029,7 +1297,7 @@ watch(
                       <Icon icon="mdi:eye-outline" />
                       <span>查看</span>
                     </button>
-                    <button class="action-btn action-btn-edit" @click="openEditReport(row)">
+                    <button v-if="row.status !== 1" class="action-btn action-btn-edit" @click="openEditReport(row)">
                       <Icon icon="mdi:pencil-outline" />
                       <span>编辑</span>
                     </button>
@@ -1082,8 +1350,8 @@ watch(
                 >
                   <td>{{ work.work_no }}</td>
                   <td>{{ work.well_name || '-' }}</td>
-                  <td>{{ work.env_text || '-' }}</td>
-                  <td>{{ work.interval_text || '-' }}</td>
+                  <td>{{ formatSimulatedWellEnvironment(work.env_text) }}</td>
+                  <td>{{ formatSimulatedWellInterval(work.interval_text) }}</td>
                   <td>{{ work.device_count || 0 }}台</td>
                   <td>{{ work.status_text || (work.status === 2 ? '已完成' : work.status === 1 ? '进行中' : '已创建') }}</td>
                   <td><button class="action-btn action-btn-view" @click="pickOperation(work)">选择</button></td>
@@ -1145,11 +1413,11 @@ watch(
             </div>
             <div class="info-item wide">
               <div class="info-label">测试环境</div>
-              <div class="info-value">{{ selectedOperation?.env_text || '-' }}</div>
+              <div class="info-value">{{ formatSimulatedWellEnvironment(selectedOperation?.env_text) }}</div>
             </div>
             <div class="info-item wide">
               <div class="info-label">测试井段</div>
-              <div class="info-value">{{ selectedOperation?.interval_text || '-' }}</div>
+              <div class="info-value">{{ formatSimulatedWellInterval(selectedOperation?.interval_text) }}</div>
             </div>
           </div>
         </div>
@@ -1365,6 +1633,16 @@ watch(
               <span class="radio-label-fail">所测资料存在不合格项</span>
             </label>
           </div>
+          <div class="info-grid two-col conclusion-description-grid">
+            <div class="info-item">
+              <div class="info-label">描述（中文）</div>
+              <textarea v-model="note" class="form-input textarea" rows="2" placeholder="请输入中文描述" />
+            </div>
+            <div class="info-item">
+              <div class="info-label">描述（英文）</div>
+              <textarea v-model="noteEn" class="form-input textarea" rows="2" placeholder="Please enter the description in English" />
+            </div>
+          </div>
         </div>
 
         <div class="downhole-card">
@@ -1374,19 +1652,37 @@ watch(
               <div class="info-label">操作工程师</div>
               <div class="info-value">{{ getCurrentUserName() }}</div>
             </div>
+            <div class="info-item operator-signature-item">
+              <div class="info-label">电子签名 <span class="required-mark">*</span></div>
+              <div class="operator-signature-content">
+                <div class="operator-signature-preview" :class="{ empty: !operatorSignaturePreviewUrl }">
+                  <span v-if="operatorSignatureLoading">签名加载中...</span>
+                  <img v-else-if="operatorSignaturePreviewUrl" :src="operatorSignaturePreviewUrl" alt="操作人电子签名" />
+                  <span v-else>请上传操作人的电子签名</span>
+                </div>
+                <div class="operator-signature-actions">
+                  <span class="tiny-hint">{{ operatorSignatureSourceText }}</span>
+                  <label class="signature-upload-btn">
+                    {{ operatorSignaturePreviewUrl ? '重新上传' : '上传签名' }}
+                    <input
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                      @change="handleOperatorSignatureChange"
+                    />
+                  </label>
+                  <span class="tiny-hint">支持 PNG、JPG、WEBP，最大 5MB；本次上传不会修改个人签名</span>
+                </div>
+              </div>
+            </div>
             <div class="info-item">
               <div class="info-label">操作日期</div>
               <input v-model="operationDate" type="date" class="form-input" />
-            </div>
-            <div class="info-item">
-              <div class="info-label">备注</div>
-              <textarea v-model="note" class="form-input textarea" rows="2" placeholder="补充说明或备注" />
             </div>
           </div>
         </div>
 
         <div class="downhole-card">
-          <div class="downhole-card-title">测试曲线图 <span class="english-sub">Test Curve Chart</span></div>
+          <div class="downhole-card-title">测试原始文件 <span class="english-sub">Test Raw File</span></div>
           <div class="upload-grid">
             <div class="upload-box">
               <div class="upload-title">曲线图编号 Curve Chart No.</div>
@@ -1397,7 +1693,7 @@ watch(
               </div>
             </div>
             <div class="upload-box">
-              <div class="upload-title">上传测试曲线图</div>
+              <div class="upload-title">上传测试原始文件</div>
               <input type="file" accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.pdf" multiple @change="handleCurveFileChange" />
               <div class="file-list">
                 <div v-for="file in curveFiles" :key="file.name" class="file-row">{{ file.name }}</div>
@@ -1412,10 +1708,10 @@ watch(
           <div class="upload-grid">
             <div class="upload-box">
               <div class="upload-title">测试报告文件</div>
-              <input type="file" multiple @change="handleFileChange" />
+              <input type="file" accept="application/pdf,.pdf" @change="handleFileChange" />
               <div class="file-list">
                 <div v-for="file in reportFiles" :key="file.name" class="file-row">{{ file.name }}</div>
-                <div v-if="!reportFiles.length" class="tiny-hint">支持所有文件格式（PDF、LAS、CSV、Word 等），可多选</div>
+                <div v-if="!reportFiles.length" class="tiny-hint">仅支持上传一份 PDF 文件</div>
               </div>
             </div>
           </div>
@@ -1468,21 +1764,54 @@ watch(
               <div class="info-label">操作工程师</div>
               <div class="info-value">{{ previewReport.tester }}</div>
             </div>
+            <div class="info-item wide">
+              <div class="info-label">电子签名</div>
+              <div v-if="previewReport.operator_signature_url" class="report-signature-preview">
+                <img :src="resolveFileUrl(previewReport.operator_signature_url)" alt="操作人电子签名" />
+              </div>
+              <div v-else class="info-value">未记录电子签名</div>
+            </div>
             <div class="info-item">
               <div class="info-label">测试环境</div>
-              <div class="info-value">{{ previewReport.meta.env_text || '-' }}</div>
+              <div class="info-value">{{ formatSimulatedWellEnvironment(previewReport.meta.env_text) }}</div>
             </div>
             <div class="info-item wide">
               <div class="info-label">测试井段</div>
-              <div class="info-value">{{ previewReport.meta.interval_text || '-' }}</div>
+              <div class="info-value">{{ formatSimulatedWellInterval(previewReport.meta.interval_text) }}</div>
             </div>
             <div class="info-item wide">
               <div class="info-label">测试结论</div>
               <div class="info-value">{{ previewReport.meta.conclusion === 'unqualified' ? '所测资料存在不合格项' : '所测资料合格' }}</div>
             </div>
             <div class="info-item wide" v-if="previewReport.meta.note">
-              <div class="info-label">备注</div>
+              <div class="info-label">描述（中文）</div>
               <div class="info-value">{{ previewReport.meta.note }}</div>
+            </div>
+            <div class="info-item wide" v-if="previewReport.meta.note_en">
+              <div class="info-label">描述（英文）</div>
+              <div class="info-value">{{ previewReport.meta.note_en }}</div>
+            </div>
+          </div>
+          <div class="report-data-section">
+            <div class="downhole-card-title">测试项目 <span class="english-sub">Test Item</span></div>
+            <div v-if="!previewTemplateSnapshot" class="tiny-hint">暂无可用项目定义</div>
+            <div v-else-if="!previewTestItemRows.length" class="tiny-hint">当前模板未配置测试项目</div>
+            <div v-else class="readonly-report-list">
+              <div v-for="row in previewTestItemRows" :key="row.label" class="readonly-report-row">
+                <div class="readonly-report-label">{{ row.label }}</div>
+                <div class="readonly-report-value">{{ row.value }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="report-data-section">
+            <div class="downhole-card-title">资料评价标准值 <span class="english-sub">Data Evaluation Standard Value</span></div>
+            <div v-if="!previewTemplateSnapshot" class="tiny-hint">暂无可用项目定义</div>
+            <div v-else-if="!previewEvaluationRows.length" class="tiny-hint">当前模板未配置评价标准</div>
+            <div v-else class="readonly-report-list">
+              <div v-for="row in previewEvaluationRows" :key="row.label" class="readonly-report-row">
+                <div class="readonly-report-label">{{ row.label }}</div>
+                <div class="readonly-report-value">{{ row.value }}</div>
+              </div>
             </div>
           </div>
           <div class="attachment-section">
@@ -1491,7 +1820,7 @@ watch(
             <div v-else class="attachment-list">
               <div v-for="attachment in getReportAttachments(previewReport)" :key="`${attachment.field}-${attachment.file_name || attachment.name}`" class="attachment-row">
                 <div class="attachment-main">
-                  <span class="attachment-badge">{{ isImageAttachment(attachment) ? '图片' : '文件' }}</span>
+                  <span class="attachment-badge">{{ attachmentDisplayType(attachment) }}</span>
                   <span class="attachment-name" :title="attachment.name || attachment.file_name">{{ attachment.name || attachment.file_name }}</span>
                 </div>
                 <button class="action-btn action-btn-view" @click="openAttachment(attachment)">
@@ -2027,6 +2356,10 @@ watch(
   margin-top: 12px;
 }
 
+.conclusion-description-grid {
+  margin-top: 12px;
+}
+
 .conclusion-radio {
   min-height: 44px;
   padding: 0 16px;
@@ -2214,6 +2547,47 @@ watch(
   background: #f8fafc;
 }
 
+.report-data-section {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--color-border, #dce6ee);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.readonly-report-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.readonly-report-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 32%) 1fr;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.readonly-report-label,
+.readonly-report-value {
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.readonly-report-label {
+  font-weight: 600;
+  color: #334155;
+  background: #f1f5f9;
+}
+
+.readonly-report-value {
+  color: #475569;
+}
+
 .attachment-list {
   display: flex;
   flex-direction: column;
@@ -2301,6 +2675,68 @@ watch(
   align-items: center;
 }
 
+.required-mark {
+  color: #dc2626;
+}
+
+.operator-signature-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.operator-signature-preview,
+.report-signature-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 1 240px;
+  width: 240px;
+  min-height: 96px;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.operator-signature-preview.empty {
+  border-style: dashed;
+  color: #94a3b8;
+}
+
+.operator-signature-preview img,
+.report-signature-preview img {
+  display: block;
+  width: 100%;
+  height: 96px;
+  object-fit: contain;
+}
+
+.operator-signature-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  min-width: 0;
+  gap: 8px;
+}
+
+.signature-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid #0b78d0;
+  border-radius: 8px;
+  color: #0b78d0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.signature-upload-btn input {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .info-grid,
   .info-grid.two-col,
@@ -2324,6 +2760,16 @@ watch(
   .attachment-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .operator-signature-content {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operator-signature-preview,
+  .report-signature-preview {
+    width: 100%;
   }
 }
 </style>

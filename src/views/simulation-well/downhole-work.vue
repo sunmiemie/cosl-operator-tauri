@@ -12,6 +12,9 @@ import {
   deleteSimulatedWellDownholeWork,
   listSimulatedWellDownholeWorks,
   updateSimulatedWellDownholeWork,
+  buildSimulatedWellDownholeWorkPayload,
+  formatSimulatedWellEnvironment,
+  formatSimulatedWellInterval,
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 
@@ -33,74 +36,6 @@ const editDevices = ref<any[]>([])
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailRow = ref<SimulatedWellDownholeWorkItem | null>(null)
-
-const formatTestEnv = (value: any) => {
-  if (typeof value === 'string' && value.trim() !== '') return value.trim()
-  const env = value || {}
-  const text = env?.text ?? env?.env_text
-  if (text !== undefined && text !== null && `${text}`.trim() !== '') return String(text).trim()
-  const depth = env?.wellDepth ?? env?.depth
-  const temp = env?.wellTemperature ?? env?.temperature
-  const pressure = env?.wellPressure ?? env?.pressure
-  const parts: string[] = []
-  if (depth !== undefined && depth !== null && `${depth}`.trim() !== '') parts.push(`井深${depth}`)
-  if (temp !== undefined && temp !== null && `${temp}`.trim() !== '') parts.push(`井温${temp}`)
-  if (pressure !== undefined && pressure !== null && `${pressure}`.trim() !== '') parts.push(`井压${pressure}`)
-  return parts.length ? parts.join(' / ') : '-'
-}
-
-const formatInterval = (value: any) => {
-  if (typeof value === 'string' && value.trim() !== '') return value.trim()
-  const interval = value || {}
-  const text = interval?.text ?? interval?.interval_text
-  if (text !== undefined && text !== null && `${text}`.trim() !== '') return String(text).trim()
-  const mainFrom = interval?.mainFrom
-  const mainTo = interval?.mainTo
-  const repeatFrom = interval?.repeatFrom
-  const repeatTo = interval?.repeatTo
-  const main = mainFrom || mainTo ? `${mainFrom || '-'}~${mainTo || '-'}` : ''
-  const repeat = repeatFrom || repeatTo ? `${repeatFrom || '-'}~${repeatTo || '-'}` : ''
-  if (main && repeat) return `${main} / ${repeat}`
-  if (main) return main
-  if (repeat) return repeat
-  return '-'
-}
-
-const buildEnvText = (payload: any) => {
-  return [
-    payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
-    payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
-    payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-const buildIntervalText = (payload: any) => {
-  const main =
-    payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
-      ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
-      : ''
-  const repeat =
-    payload?.testInterval?.repeatFrom || payload?.testInterval?.repeatTo
-      ? `复测井段: ${payload?.testInterval?.repeatFrom || '-'}~${payload?.testInterval?.repeatTo || '-'}`
-      : ''
-  return [main, repeat].filter(Boolean).join(' / ')
-}
-
-const buildDownholeWorkBody = (payload: any, status: number, reportCount: any) => {
-  return {
-    well_name: payload?.wellName || '',
-    env_text: buildEnvText(payload),
-    interval_text: buildIntervalText(payload),
-    order_ids: payload?.orderIds || [],
-    devices: payload?.devices || [],
-    supportingTools: payload?.supportingTools || [],
-    supporting_tools: payload?.supportingTools || [],
-    status,
-    report_count: Number(reportCount ?? 0) || 0
-  }
-}
 
 const fetchList = async () => {
   loading.value = true
@@ -127,7 +62,10 @@ const fetchList = async () => {
 const handleSave = async (payload: any) => {
   try {
     await initAuth()
-    const body = buildDownholeWorkBody(payload, 0, payload?.reportCount ?? payload?.report_count ?? 0)
+    const body = buildSimulatedWellDownholeWorkPayload(payload, {
+      status: 0,
+      reportCount: payload?.reportCount ?? payload?.report_count
+    })
     const res = await createSimulatedWellDownholeWork(body, getAuthHeaders())
     if (!res.success) {
       ElMessage.error(res.error || '新增下井作业失败')
@@ -353,7 +291,10 @@ const handleEditSaveV3 = async (payload: any) => {
     await initAuth()
     const editedId = editingRow.value.id
     const editedWorkNo = editingRow.value.work_no
-    const body = buildDownholeWorkBody(payload, editingRow.value.status, payload?.reportCount ?? editingRow.value.report_count ?? 0)
+    const body = buildSimulatedWellDownholeWorkPayload(payload, {
+      status: editingRow.value.status,
+      reportCount: payload?.reportCount ?? editingRow.value.report_count
+    })
     const res = await updateSimulatedWellDownholeWork(editedId, body, getAuthHeaders())
     if (!res.success || res.data?.code !== 0) {
       ElMessage.error(res.error || res.data?.msg || '编辑下井作业失败')
@@ -468,8 +409,8 @@ onMounted(() => {
               <tr v-for="row in list" :key="row.id">
                 <td class="cell-id">{{ row.work_no }}</td>
                 <td>{{ row.well_name || '-' }}</td>
-                <td>{{ formatTestEnv((row as any).env_text ?? (row as any).test_environment) }}</td>
-                <td>{{ formatInterval((row as any).interval_text ?? (row as any).test_interval) }}</td>
+                <td>{{ formatSimulatedWellEnvironment((row as any).env_text ?? (row as any).test_environment) }}</td>
+                <td>{{ formatSimulatedWellInterval((row as any).interval_text ?? (row as any).test_interval) }}</td>
                 <td style="text-align: center">{{ row.device_count || 0 }}</td>
                 <td style="text-align: center">
                   <span :class="getStatusClass(row)">{{ getStatusLabel(row) }}</span>
@@ -504,12 +445,32 @@ onMounted(() => {
               <span class="detail-value">{{ detailRow.well_name || '-' }}</span>
             </div>
             <div class="detail-item">
+              <span class="detail-label">测试设备</span>
+              <span class="detail-value">{{ detailRow.testing_device || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">测试目的</span>
+              <span class="detail-value">{{ detailRow.test_objective || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">测试类型</span>
+              <span class="detail-value">{{ detailRow.test_type || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">测试次数</span>
+              <span class="detail-value">{{ detailRow.test_count || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">维修工单编号</span>
+              <span class="detail-value">{{ detailRow.repair_order_number || '-' }}</span>
+            </div>
+            <div class="detail-item">
               <span class="detail-label">测试环境</span>
-              <span class="detail-value">{{ formatTestEnv((detailRow as any).env_text ?? (detailRow as any).test_environment) }}</span>
+              <span class="detail-value">{{ formatSimulatedWellEnvironment((detailRow as any).env_text ?? (detailRow as any).test_environment) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">测试井段</span>
-              <span class="detail-value">{{ formatInterval((detailRow as any).interval_text ?? (detailRow as any).test_interval) }}</span>
+              <span class="detail-value">{{ formatSimulatedWellInterval((detailRow as any).interval_text ?? (detailRow as any).test_interval) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">状态</span>

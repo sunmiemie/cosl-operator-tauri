@@ -6,11 +6,8 @@ import {
   getSimulatedWellOrderDetail,
   listSimulatedWellOrders,
   saveSimulatedWellDeviceSchedule,
-  type SimulatedWellOrderDeviceDTO,
   type SimulatedWellOrderDTO,
 } from '@/services/simulated-well-api'
-import { listSimulatedWellDownholeWorks } from '@/services/simulated-well-downhole-api'
-import { listSimulatedWellReports } from '@/services/simulated-well-report-api'
 import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 import type { CalendarDay, DownholeDevice, TimeSlot, UnscheduledDeviceRow, WorkOrder } from '../types'
 
@@ -71,56 +68,11 @@ export function useSimulationWellSchedule() {
   const workOrders = ref<WorkOrder[]>([])
   const hostDeviceNames = ref<string[]>([])
 
-  const safeParseJson = (value: unknown) => {
-    if (!value || typeof value !== 'string') return {}
-    try {
-      return JSON.parse(value)
-    } catch {
-      return {}
-    }
-  }
-
-  const buildReportedDownholeWorkNos = (items: any[]) => {
-    const set = new Set<string>()
-    ;(items || []).forEach((report) => {
-      const meta = {
-        ...safeParseJson(report?.remark),
-        ...(report?.report_json && typeof report.report_json === 'object' ? report.report_json : {}),
-      } as Record<string, unknown>
-      const workNo = normalizeText(
-        String(report?.task_number || meta.downhole_work_no || meta.task_number || meta.work_no || '')
-      )
-      if (workNo) set.add(workNo)
-    })
-    return set
-  }
-
-  const buildSavedDownholeDeviceIds = (items: any[], reportedWorkNos: Set<string>) => {
-    const set = new Set<string>()
-    ;(items || []).forEach((work) => {
-      const workNo = normalizeText(work?.work_no || '')
-      if (workNo && reportedWorkNos.has(workNo)) return
-      const devices = Array.isArray(work?.devices) ? work.devices : []
-      devices.forEach((device: any) => {
-        const orderId = normalizeText(device?.orderId || device?.order_id || '')
-        const sn = normalizeText(device?.sn || device?.code || device?.device_number || '')
-        if (!orderId || !sn) return
-        set.add(`${orderId}::${sn}`)
-      })
-    })
-    return set
-  }
-
-  const hasDeviceSchedule = (device: SimulatedWellOrderDeviceDTO) => {
-    if (normalizeScheduleSegments(device.schedule_segments).length > 0) return true
-    return !!(normalizeText(device.scheduled_start_at) && normalizeText(device.scheduled_end_at))
-  }
-
   const refreshWorkOrders = async () => {
     await initAuth()
     const headers = getAuthHeaders()
     await refreshHostDeviceNames(headers)
-    const [orderRes1, orderRes2, downholeRes, reportRes] = await Promise.all([
+    const [orderRes1, orderRes2, orderRes4] = await Promise.all([
       listSimulatedWellOrders(
         { page: 1, pageSize: 2000, status: 1, includeDevices: true },
         headers
@@ -129,30 +81,24 @@ export function useSimulationWellSchedule() {
         { page: 1, pageSize: 2000, status: 2, includeDevices: true },
         headers
       ),
-      listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000 }, headers),
-      listSimulatedWellReports({ page: 1, pageSize: 2000 }, headers)
+      listSimulatedWellOrders(
+        { page: 1, pageSize: 2000, status: 4, includeDevices: true },
+        headers
+      )
     ])
-    if (!orderRes1.success || !orderRes2.success) return
-    if (orderRes1.data?.code !== 0 || orderRes2.data?.code !== 0) return
+    if (!orderRes1.success || !orderRes2.success || !orderRes4.success) return
+    if (orderRes1.data?.code !== 0 || orderRes2.data?.code !== 0 || orderRes4.data?.code !== 0) return
 
-    const reportedDownholeWorkNos =
-      reportRes.success && reportRes.data?.code === 0
-        ? buildReportedDownholeWorkNos(reportRes.data.data?.list || [])
-        : new Set<string>()
-
-    const savedDownholeDeviceIds =
-      downholeRes.success && downholeRes.data?.code === 0
-        ? buildSavedDownholeDeviceIds(downholeRes.data.data?.list || [], reportedDownholeWorkNos)
-        : new Set<string>()
-
-    const combined = [...(orderRes1.data.data?.list || []), ...(orderRes2.data.data?.list || [])]
+    const combined = [
+      ...(orderRes1.data.data?.list || []),
+      ...(orderRes2.data.data?.list || []),
+      ...(orderRes4.data.data?.list || []),
+    ]
     workOrders.value = combined
       .map((dto) => {
         const orderId = dto.task_number
         const devices = dto.devices || []
-        const remainingDevices = devices.filter(
-          (d) => hasDeviceSchedule(d) || !savedDownholeDeviceIds.has(`${orderId}::${normalizeText(d.device_number)}`)
-        )
+        const remainingDevices = devices.filter((d) => !d.is_completed && Number(d.instrument_status || 0) !== 2)
         return {
           id: orderId,
           dbId: dto.id,
@@ -162,6 +108,7 @@ export function useSimulationWellSchedule() {
           createTime: toYmd(dto.created_at) || '',
           planTime: toYmd(dto.plan_date) || '',
           taskDesc: normalizeText(dto.project_name || dto.task_desc) || '',
+          wellName: normalizeText(dto.well_name) || '',
           testPurpose: normalizeText(dto.test_purpose) || '',
           testSteps: normalizeText(dto.test_steps) || '',
           safetyRisks: normalizeText(dto.safety_risks) || '',
@@ -174,7 +121,9 @@ export function useSimulationWellSchedule() {
             template: normalizeText(d.device_number) || '',
             scheduledStartAt: d.scheduled_start_at || null,
             scheduledEndAt: d.scheduled_end_at || null,
-            scheduleSegments: normalizeScheduleSegments(d.schedule_segments)
+            scheduleSegments: normalizeScheduleSegments(d.schedule_segments),
+            instrumentStatus: Number(d.instrument_status || 0),
+            isCompleted: !!d.is_completed,
           })),
           supportingTools: []
         }
@@ -318,7 +267,7 @@ export function useSimulationWellSchedule() {
 
   const timeSlots = computed<TimeSlot[]>(() => {
     const slots: TimeSlot[] = []
-    for (let h = 6; h <= 22; h++) {
+    for (let h = 0; h <= 24; h++) {
       slots.push({
         key: `${String(h).padStart(2, '0')}00`,
         label: `${String(h).padStart(2, '0')}:00`,
@@ -477,12 +426,14 @@ export function useSimulationWellSchedule() {
     todayScheduledOrderIds.value.forEach((orderId) => {
       const order = getWorkOrderById(orderId)
       if (!order) return
-      ;(order.deviceList || []).forEach((device) => {
+      ;(order.deviceList || []).filter((device) => todayScheduledDeviceIds.value.includes(device.id)).forEach((device) => {
         const deviceNumber = normalizeText(device.code || device.sn)
         const key = `${order.id}::${deviceNumber}`
         if (list.has(key)) return
         list.set(key, {
           orderId: order.id,
+          orderDbId: order.dbId,
+          deviceDbId: device.dbId,
           customer: order.customer,
           deviceName: device.name,
           sn: deviceNumber,
@@ -505,12 +456,14 @@ export function useSimulationWellSchedule() {
       const ev = getScheduledEvent(eventId)
       const order = ev ? getWorkOrderById(ev.orderId) : null
       if (!order) return
-      ;(order.deviceList || []).forEach((device) => {
+      ;(order.deviceList || []).filter((device) => device.id === ev.scheduleOwnerDeviceId).forEach((device) => {
         const deviceNumber = normalizeText(device.code || device.sn)
         const key = `${order.id}::${deviceNumber}`
         if (list.has(key)) return
         list.set(key, {
           orderId: order.id,
+          orderDbId: order.dbId,
+          deviceDbId: device.dbId,
           customer: order.customer,
           deviceName: device.name,
           sn: deviceNumber,
@@ -617,12 +570,9 @@ export function useSimulationWellSchedule() {
   const getEndTimeKey = (startTimeKey: string, span: number) => {
     const startIdx = timeKeyToIndex.value[startTimeKey]
     if (startIdx === undefined) return ''
-    const endIdx = startIdx + Math.max(1, span)
-    const endSlot = timeSlots.value[endIdx]
-    if (endSlot) return endSlot.key
-    const startHour = Number(startTimeKey.slice(0, 2))
-    if (!Number.isFinite(startHour)) return ''
-    return `${String(startHour + Math.max(1, span)).padStart(2, '0')}00`
+    // 结束时间封顶在当天最后一个槽位（24:00），不允许跨天产生非法时间（如 25:00）
+    const endIdx = Math.min(startIdx + Math.max(1, span), timeSlots.value.length - 1)
+    return timeSlots.value[endIdx]?.key || ''
   }
 
   function getOwnerEvents(scheduleOwnerDeviceId: string) {
@@ -875,6 +825,7 @@ export function useSimulationWellSchedule() {
     meta?: { label?: string } | null
   ) {
     if (isPast) return
+    // 24:00 是当天排程的结束边界；全天可排程的最后一个有效时段为 23:00–24:00。
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
 

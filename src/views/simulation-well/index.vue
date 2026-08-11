@@ -13,7 +13,10 @@ import SanxinOrderDetailModal from './components/SanxinOrderDetailModal.vue'
 import { listSimulatedWellOrders, type SimulatedWellOrderDTO } from '@/services/simulated-well-api'
 import { useAuth } from '@/composables/useAuth'
 import {
+  buildSimulatedWellDownholeWorkPayload,
   createSimulatedWellDownholeWork,
+  formatSimulatedWellEnvironment,
+  formatSimulatedWellInterval,
   listSimulatedWellDownholeWorks,
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
@@ -43,6 +46,8 @@ const productPickerRows = computed(() => {
     (order.deviceList || []).map((device) => ({
       id: device.id,
       orderId: order.id,
+      orderDbId: order.dbId,
+      deviceDbId: device.dbId,
       customer: order.customer,
       name: device.name,
       sn: device.code || device.sn || '',
@@ -57,6 +62,8 @@ const selectedDevicesFromSchedule = computed<DownholeDevice[]>(() => {
     .filter((row) => selected.has(row.id))
     .map((row) => ({
       orderId: row.orderId,
+      orderDbId: row.orderDbId,
+      deviceDbId: row.deviceDbId,
       customer: row.customer,
       deviceName: row.name,
       sn: row.sn,
@@ -73,6 +80,8 @@ const selectedDevicesFromRoute = computed<DownholeDevice[]>(() => {
     if (!Array.isArray(parsed)) return []
     return parsed.filter(Boolean).map((item: any) => ({
       orderId: String(item.orderId || ''),
+      orderDbId: Number(item.orderDbId || 0) || undefined,
+      deviceDbId: Number(item.deviceDbId || 0) || undefined,
       customer: String(item.customer || ''),
       deviceName: String(item.deviceName || ''),
       sn: String(item.sn || ''),
@@ -102,6 +111,7 @@ const startSelectedOrders = computed<WorkOrder[]>(() => {
         createTime: order?.createTime || '',
         planTime: order?.planTime || '',
         taskDesc: order?.taskDesc || '',
+        wellName: order?.wellName || '',
         testPurpose: order?.testPurpose || '',
         testSteps: order?.testSteps || '',
         safetyRisks: order?.safetyRisks || '',
@@ -250,6 +260,7 @@ function mapDtoToWorkOrder(dto: SimulatedWellOrderDTO): WorkOrder {
     createTime: textValue(dto.created_at).slice(0, 10),
     planTime: textValue(dto.plan_date || dto.application_date).slice(0, 10),
     taskDesc: textValue(dto.project_name || dto.task_desc),
+    wellName: textValue(dto.well_name),
     testPurpose: textValue(dto.test_purpose),
     testSteps: textValue(dto.test_steps),
     safetyRisks: textValue(dto.safety_risks),
@@ -348,7 +359,19 @@ function activeTestParamRows() {
 
 function finishActiveTestToReportPrep() {
   activeTestPaused.value = false
-  router.replace({ path: '/simulation-well', query: { view: 'test-report' } })
+  const workNo = activeTestWorkNo.value
+  if (!workNo) {
+    ElMessage.error('未找到当前下井作业号，无法创建报告')
+    return
+  }
+  router.replace({
+    path: '/simulation-well',
+    query: {
+      view: 'test-report',
+      autoCreate: '1',
+      workNo,
+    },
+  })
 }
 
 async function handleViewOrderDetail(orderId: string) {
@@ -404,6 +427,8 @@ async function hydrateActiveTestFromDatabase() {
           if (!activeStartDevicesSnapshot.value.length && Array.isArray(found.devices)) {
             activeStartDevicesSnapshot.value = found.devices.map((device: any) => ({
               orderId: textValue(device.orderId || device.order_id),
+              orderDbId: Number(device.orderDbId || device.order_db_id || 0) || undefined,
+              deviceDbId: Number(device.deviceDbId || device.device_db_id || 0) || undefined,
               customer: textValue(device.customer),
               deviceName: textValue(device.deviceName || device.name),
               sn: textValue(device.sn || device.code || device.device_number),
@@ -449,33 +474,10 @@ async function handleSaveDownhole(payload: any) {
       router.replace({ path: '/login', query: { redirect: route.fullPath } })
       return
     }
-    const envText = [
-      payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
-      payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
-      payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
-    ]
-      .filter(Boolean)
-      .join(' ')
-    const mainInterval =
-      payload?.testInterval?.mainFrom || payload?.testInterval?.mainTo
-        ? `主测井段: ${payload?.testInterval?.mainFrom || '-'}~${payload?.testInterval?.mainTo || '-'}`
-        : ''
-    const repeatInterval =
-      payload?.testInterval?.repeatFrom || payload?.testInterval?.repeatTo
-        ? `复测井段: ${payload?.testInterval?.repeatFrom || '-'}~${payload?.testInterval?.repeatTo || '-'}`
-        : ''
-    const intervalText = [mainInterval, repeatInterval].filter(Boolean).join(' / ')
-    const body = {
-      well_name: payload?.wellName || '',
-      env_text: envText,
-      interval_text: intervalText,
-      order_ids: payload?.orderIds || [],
-      devices: payload?.devices || [],
-      supportingTools: payload?.supportingTools || [],
-      supporting_tools: payload?.supportingTools || [],
+    const body = buildSimulatedWellDownholeWorkPayload(payload, {
       status: 1,
-      report_count: Number(payload?.reportCount ?? payload?.report_count ?? 0) || 0
-    }
+      reportCount: payload?.reportCount ?? payload?.report_count
+    })
 
     const res = await createSimulatedWellDownholeWork(body, getAuthHeaders())
     if (!res.success) {
@@ -690,8 +692,8 @@ async function handleSaveDownhole(payload: any) {
             </div>
           </div>
           <div class="active-params">
-            <div class="param-chip inline">测试环境：{{ activeTestOperation?.env_text || '-' }}</div>
-            <div class="param-chip inline">测试井段：{{ activeTestOperation?.interval_text || '-' }}</div>
+            <div class="param-chip inline">测试环境：{{ formatSimulatedWellEnvironment(activeTestOperation?.env_text) }}</div>
+            <div class="param-chip inline">测试井段：{{ formatSimulatedWellInterval(activeTestOperation?.interval_text) }}</div>
           </div>
         </div>
       </div>

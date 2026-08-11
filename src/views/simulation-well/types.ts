@@ -13,6 +13,8 @@ export interface DeviceItem {
     scheduledStartAt: string
     scheduledEndAt: string
   }>
+  instrumentStatus?: number
+  isCompleted?: boolean
 }
 
 export interface WorkOrder {
@@ -24,6 +26,7 @@ export interface WorkOrder {
   createTime: string
   planTime: string
   taskDesc: string
+  wellName?: string
   testPurpose?: string
   testSteps?: string
   safetyRisks?: string
@@ -49,6 +52,8 @@ export interface TimeSlot {
 
 export interface DownholeDevice {
   orderId: string
+  orderDbId?: number
+  deviceDbId?: number
   customer: string
   deviceName: string
   sn: string

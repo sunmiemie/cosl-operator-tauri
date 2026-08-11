@@ -12,6 +12,7 @@ import {
   listSimInstruments,
   type SimInstrumentListItem,
 } from '@/services/sim-instrument-api'
+import { stripSimulatedWellUnit } from '@/services/simulated-well-downhole-api'
 
 const props = defineProps<{
   todayScheduledOrders: any[]
@@ -44,6 +45,7 @@ type ResolvedTemplateMeta = {
 
 type ResolvedDeviceRow = {
   id: string
+  deviceDbId?: number
   stateKey: string
   name: string
   sn: string
@@ -328,6 +330,7 @@ const startedOrderDevices = computed(() => {
     if (!grouped.has(orderId)) {
       grouped.set(orderId, {
         id: orderId,
+        orderDbId: device?.orderDbId || orderMeta?.dbId,
         customer: device?.customer || orderMeta?.customer || '-',
         deviceList: []
       })
@@ -347,6 +350,7 @@ const startedOrderDevices = computed(() => {
     )
     grouped.get(orderId).deviceList.push({
       id: device?.id || `${orderId}_${device?.sn || index + 1}`,
+      deviceDbId: device?.deviceDbId || device?.dbId,
       stateKey: deviceStateKey,
       name: device?.deviceName || device?.name || '-',
       sn: device?.sn || device?.code || '',
@@ -584,6 +588,8 @@ const resolvedDownholeDevices = computed(() =>
       return {
         id: device.id,
         orderId: order.id,
+        orderDbId: order.orderDbId,
+        deviceDbId: device.deviceDbId,
         customer: order.customer,
         deviceName: device.name,
         name: device.name,
@@ -617,12 +623,15 @@ const flattenedSupportingTools = computed(() =>
 // --- 表单状态 ---
 const selectedWellName = ref('')
 const customWellName = ref('') // 联动：试验井名-其他
+const customWellNameEn = ref('')
 
 const selectedTestingDevice = ref('')
 const customTestingDevice = ref('') // 联动：测试设备-其他
+const customTestingDeviceEn = ref('')
 
 const selectedTestObjective = ref('')
 const customTestObjective = ref('') // 联动：测试目的-其他
+const customTestObjectiveEn = ref('')
 
 const selectedTestType = ref('first_test')
 const testCount = ref('2')
@@ -637,6 +646,34 @@ const mainIntervalTo = ref('')
 const repeatIntervalFrom = ref('')
 const repeatIntervalTo = ref('')
 const TODAY_ENV_CACHE_KEY = 'simwell.todayTestEnvironment'
+
+const wellNameOptions = new Set(['cosl1', 'yanjiao1', 'yanjiao2', 'ren91', 'gugu8', 'other'])
+const testingDeviceOptions = new Set(['cosl1_skid', 'yanjiao1_skid', 'yanjiao2_skid', 'other'])
+const testObjectiveOptions = new Set(['new_product', 'first_test'])
+const wellDeviceDefaults: Record<string, string> = {
+  cosl1: 'cosl1_skid',
+  yanjiao1: 'yanjiao1_skid',
+  yanjiao2: 'yanjiao2_skid',
+  ren91: 'other',
+  gugu8: 'other',
+  other: 'other',
+}
+
+function restoreOptionValue(
+  value: unknown,
+  options: Set<string>,
+  selected: { value: string },
+  custom: { value: string },
+) {
+  const text = String(value || '').trim()
+  if (!text || options.has(text)) {
+    selected.value = text
+    custom.value = ''
+    return
+  }
+  selected.value = 'other'
+  custom.value = text
+}
 
 function todayText() {
   const d = new Date()
@@ -678,30 +715,101 @@ function saveTodayTestEnvironment() {
   )
 }
 
+watch(selectedWellName, (value) => {
+  if (value !== 'other') {
+    customWellName.value = ''
+    customWellNameEn.value = ''
+  }
+})
+
+watch(selectedTestingDevice, (value) => {
+  if (value !== 'other') {
+    customTestingDevice.value = ''
+    customTestingDeviceEn.value = ''
+  }
+})
+
+watch(selectedTestObjective, (value) => {
+  if (value !== 'other') {
+    customTestObjective.value = ''
+    customTestObjectiveEn.value = ''
+  }
+})
+
+watch(
+  () => props.todayScheduledOrders.map((order: any) => String(order?.wellName || order?.well_name || '').trim()).join('|'),
+  () => {
+    // 编辑历史下井作业时，始终以已保存的作业数据为准。
+    if (props.mode === 'edit' || props.initialWork) return
+    const wellNames = Array.from(
+      new Set(
+        props.todayScheduledOrders
+          .map((order: any) => String(order?.wellName || order?.well_name || '').trim())
+          .filter(Boolean),
+      ),
+    )
+    // 多井工单或历史工单没有实验井时，由操作人员自行选择。
+    if (wellNames.length !== 1) {
+      selectedWellName.value = ''
+      selectedTestingDevice.value = ''
+      return
+    }
+    const wellName = wellNames[0]
+    const testingDevice = wellDeviceDefaults[wellName]
+    if (!testingDevice) return
+    selectedWellName.value = wellName
+    selectedTestingDevice.value = testingDevice
+  },
+  { immediate: true },
+)
+
 watch(
   () => props.initialWork,
   (work) => {
     if (!work) return
-    selectedWellName.value = work.well_name || ''
+    restoreOptionValue(work.well_name, wellNameOptions, selectedWellName, customWellName)
+    restoreOptionValue(work.testing_device, testingDeviceOptions, selectedTestingDevice, customTestingDevice)
+    restoreOptionValue(work.test_objective, testObjectiveOptions, selectedTestObjective, customTestObjective)
+    customWellNameEn.value = selectedWellName.value === 'other' ? String(work.well_name_en || '') : ''
+    customTestingDeviceEn.value = selectedTestingDevice.value === 'other' ? String(work.testing_device_en || '') : ''
+    customTestObjectiveEn.value = selectedTestObjective.value === 'other' ? String(work.test_objective_en || '') : ''
+    selectedTestType.value = work.test_type || 'first_test'
+    testCount.value = work.test_count || '2'
+    repairOrderNumber.value = work.repair_order_number || ''
     const envText = String(work.env_text || '')
     const depth = envText.match(/井深:?\s*([^\s/]+)/)?.[1]
     const temp = envText.match(/井温:?\s*([^\s/]+)/)?.[1]
     const pressure = envText.match(/井压:?\s*([^\s/]+)/)?.[1]
-    wellDepth.value = depth || ''
-    wellTemperature.value = temp || ''
-    wellPressure.value = pressure || ''
+    wellDepth.value = stripSimulatedWellUnit(depth, 'm')
+    wellTemperature.value = stripSimulatedWellUnit(temp, '℃')
+    wellPressure.value = stripSimulatedWellUnit(pressure, 'MPa')
     const intervalText = String(work.interval_text || '')
     const mainMatch = intervalText.match(/主测井段:?\s*([^~\s/]+)\s*~\s*([^\s/]+)/)
     const repeatMatch = intervalText.match(/复测井段:?\s*([^~\s/]+)\s*~\s*([^\s/]+)/)
-    mainIntervalFrom.value = mainMatch?.[1] || ''
-    mainIntervalTo.value = mainMatch?.[2] || ''
-    repeatIntervalFrom.value = repeatMatch?.[1] || ''
-    repeatIntervalTo.value = repeatMatch?.[2] || ''
+    mainIntervalFrom.value = stripSimulatedWellUnit(mainMatch?.[1], 'm')
+    mainIntervalTo.value = stripSimulatedWellUnit(mainMatch?.[2], 'm')
+    repeatIntervalFrom.value = stripSimulatedWellUnit(repeatMatch?.[1], 'm')
+    repeatIntervalTo.value = stripSimulatedWellUnit(repeatMatch?.[2], 'm')
   },
   { immediate: true },
 )
 
 function saveDownholeOperation() {
+  const bilingualCustomFields = [
+    { selected: selectedWellName, chinese: customWellName, english: customWellNameEn, label: '实验井名' },
+    { selected: selectedTestingDevice, chinese: customTestingDevice, english: customTestingDeviceEn, label: '测试设备' },
+    { selected: selectedTestObjective, chinese: customTestObjective, english: customTestObjectiveEn, label: '测试目的' },
+  ]
+  for (const field of bilingualCustomFields) {
+    if (field.selected.value !== 'other') continue
+    field.chinese.value = field.chinese.value.trim()
+    field.english.value = field.english.value.trim()
+    if (!field.chinese.value || !field.english.value) {
+      ElMessage.warning(`${field.label}选择其他时，请同时填写中文和英文内容`)
+      return
+    }
+  }
+
   for (const order of selectedSupportingOrders.value) {
     for (const device of order.deviceList || []) {
       for (const tool of device.supportTools || []) {
@@ -726,8 +834,11 @@ function saveDownholeOperation() {
     devices: resolvedDownholeDevices.value,
     supportingTools: flattenedSupportingTools.value,
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
+    wellNameEn: selectedWellName.value === 'other' ? customWellNameEn.value : '',
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
+    testingDeviceEn: selectedTestingDevice.value === 'other' ? customTestingDeviceEn.value : '',
     testObjective: selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value,
+    testObjectiveEn: selectedTestObjective.value === 'other' ? customTestObjectiveEn.value : '',
     testType: selectedTestType.value,
     testCount: testCount.value,
     repairOrderNumber: repairOrderNumber.value,
@@ -917,8 +1028,9 @@ onMounted(() => {
               <label class="rect-radio"><input v-model="selectedWellName" type="radio" value="gugu8" /> 孤古8井 Well Gugu 8</label>
               <label class="rect-radio"><input v-model="selectedWellName" type="radio" value="other" /> 其他 Other</label>
             </div>
-            <div v-if="selectedWellName === 'other'" class="field-sub-input">
-              <input v-model="customWellName" class="form-input full-width" placeholder="请输入自定义井名" />
+            <div v-if="selectedWellName === 'other'" class="field-sub-input bilingual-custom-inputs">
+              <input v-model="customWellName" class="form-input" placeholder="请输入自定义井名（中文）" />
+              <input v-model="customWellNameEn" class="form-input" placeholder="Please enter the well name in English" />
             </div>
           </div>
         </div>
@@ -930,12 +1042,12 @@ onMounted(() => {
             <div class="option-grid">
               <label class="rect-radio"><input v-model="selectedTestingDevice" type="radio" value="cosl1_skid" /> 科索1井电橇 Well COSL 1 Electrical Skid</label>
               <label class="rect-radio"><input v-model="selectedTestingDevice" type="radio" value="yanjiao1_skid" /> 燕郊1井电橇 Well Yanjiao 1 Electrical Skid</label>
-              <label class="rect-radio"><input v-model="selectedTestingDevice" type="radio" value="3595_trips" /> 3595测井车 3595 Trips</label>
-              <label class="rect-radio"><input v-model="selectedTestingDevice" type="radio" value="3590_trips" /> 3590测井车 3590 Trips</label>
+              <label class="rect-radio"><input v-model="selectedTestingDevice" type="radio" value="yanjiao2_skid" /> 燕郊2井电橇 Well Yanjiao 2 Electrical Skid</label>
               <label class="rect-radio"><input v-model="selectedTestingDevice" type="radio" value="other" /> 其他 Other</label>
             </div>
-            <div v-if="selectedTestingDevice === 'other'" class="field-sub-input">
-              <input v-model="customTestingDevice" class="form-input full-width" placeholder="请输入自定义测试设备" />
+            <div v-if="selectedTestingDevice === 'other'" class="field-sub-input bilingual-custom-inputs">
+              <input v-model="customTestingDevice" class="form-input" placeholder="请输入自定义测试设备（中文）" />
+              <input v-model="customTestingDeviceEn" class="form-input" placeholder="Please enter the testing device in English" />
             </div>
           </div>
         </div>
@@ -949,8 +1061,9 @@ onMounted(() => {
               <label class="rect-radio"><input v-model="selectedTestObjective" type="radio" value="first_test" /> 首次测试 First test</label>
               <label class="rect-radio"><input v-model="selectedTestObjective" type="radio" value="other" /> 其他 Other</label>
             </div>
-            <div v-if="selectedTestObjective === 'other'" class="field-sub-input">
-              <input v-model="customTestObjective" class="form-input full-width" placeholder="请输入自定义测试目的" />
+            <div v-if="selectedTestObjective === 'other'" class="field-sub-input bilingual-custom-inputs">
+              <input v-model="customTestObjective" class="form-input" placeholder="请输入自定义测试目的（中文）" />
+              <input v-model="customTestObjectiveEn" class="form-input" placeholder="Please enter the test objective in English" />
             </div>
           </div>
         </div>
@@ -993,7 +1106,7 @@ onMounted(() => {
               <label class="labeled-input">
                 <span class="input-label">井温：</span>
                 <input v-model="wellTemperature" class="form-input inline-field" />
-                <span class="input-unit">°C</span>
+                <span class="input-unit">℃</span>
               </label>
               <label class="labeled-input">
                 <span class="input-label">井压：</span>
@@ -1373,6 +1486,17 @@ onMounted(() => {
 
 .field-sub-input {
   margin-top: 12px;
+}
+
+.bilingual-custom-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.bilingual-custom-inputs .form-input {
+  width: 100%;
+  min-width: 0;
 }
 
 .nth-test-layout {
