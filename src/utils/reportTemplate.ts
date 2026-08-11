@@ -323,14 +323,16 @@ export function collectStepLists(steps: any[]): {
   const warnList: any[] = []
   
   steps.forEach(step => {
+    // 报告证据应保留生成时的快照，后续编辑步骤不能改写待提交报告。
+    const snapshot = JSON.parse(JSON.stringify(step))
     if (step.error) {
-      errorList.push(step)
+      errorList.push(snapshot)
     }
     if (step.question) {
-      questionList.push(step)
+      questionList.push(snapshot)
     }
     if (step.warn) {
-      warnList.push(step)
+      warnList.push(snapshot)
     }
   })
   
@@ -355,7 +357,7 @@ export function picsToPicList(pics: any[]): PicListItem[] {
   return pics.map(p => ({
     id: p.id,
     name: p.name,
-    save: p.save || []
+    save: Array.isArray(p.save) ? [...p.save] : []
   }))
 }
 
