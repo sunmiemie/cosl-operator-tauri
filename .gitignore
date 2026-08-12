@@ -16,6 +16,16 @@ dist-ssr
 *.local
 .specstory
 .cursor
+
+# Rust / Tauri build artifacts
+.cargo-target-temp/
+src-tauri/target/
+
+# OCR models — download locally (see src-tauri/resources/models/README.md)
+src-tauri/resources/models/*.onnx
+
+# Flojoy packaged Electron app (~137MB build artifact)
+src-tauri/resources/flojoy/app.asar
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
