@@ -238,7 +238,9 @@ export function useFlojoySocket() {
     }
 
     // 更新运行中的节点
-    if (res.RUNNING_NODE) {
+    if (res.RUNNING_NODE !== undefined) {
+      // Flojoy 使用空字符串表示当前节点已经结束；必须同步清空，
+      // 否则最后一个节点会一直保持 running 状态。
       runningBlock.value = res.RUNNING_NODE
     }
 

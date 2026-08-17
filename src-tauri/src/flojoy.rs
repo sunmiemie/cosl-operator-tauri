@@ -207,7 +207,13 @@ fn get_poetry_path(python_path: &str) -> String {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows: 检查 Scripts 目录
+        // 虚拟环境中的 python.exe 和 poetry.exe 通常同在 Scripts 目录。
+        let poetry_next_to_python = format!("{}\\poetry.exe", python_dir);
+        if std::path::Path::new(&poetry_next_to_python).exists() {
+            return poetry_next_to_python;
+        }
+
+        // 系统 Python 的 poetry.exe 通常位于解释器旁的 Scripts 子目录。
         let poetry_in_scripts = format!("{}\\Scripts\\poetry.exe", python_dir);
         if std::path::Path::new(&poetry_in_scripts).exists() {
             return poetry_in_scripts;
@@ -528,6 +534,8 @@ pub fn start_flojoy_backend(
         .args(["run", "python", "main.py", "--port", &port.to_string()])
         .current_dir(&working_dir_clean)
         .env("PATH", &new_path)
+        // 避免运行 Block 时写入 resources 下的 __pycache__，触发 tauri dev 自动重启。
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn();
@@ -552,6 +560,7 @@ pub fn start_flojoy_backend(
                 ])
                 .current_dir(&working_dir_clean)
                 .env("PATH", &new_path)
+                .env("PYTHONDONTWRITEBYTECODE", "1")
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
                 .spawn()

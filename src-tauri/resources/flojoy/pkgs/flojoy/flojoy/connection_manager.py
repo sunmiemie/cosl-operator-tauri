@@ -27,6 +27,15 @@ class DeviceConnectionManager:
     tm = DeviceManager(verbose=False)
     tm.visa_library = PYVISA_PY_BACKEND
 
+    @staticmethod
+    def _connection_is_closed(connection: HardwareConnection) -> bool:
+        if connection.is_closed():
+            return True
+
+        # pyserial may have been closed directly by an older CLOSE_SERIAL block.
+        is_open = getattr(connection.get_handle(), "is_open", None)
+        return is_open is False
+
     @classmethod
     def register_connection(
         cls,
@@ -36,8 +45,13 @@ class DeviceConnectionManager:
     ):
         with _connection_lock:
             id = device.get_id()
-            if id in cls.handles:
-                raise ValueError(f"Connection with id {id} already exists")
+            existing = cls.handles.get(id)
+            if existing is not None:
+                if cls._connection_is_closed(existing):
+                    existing.close()
+                    del cls.handles[id]
+                else:
+                    raise ValueError(f"Connection with id {id} already exists")
 
             # Let tm_devices take care of any devices it created
             if isinstance(connection, PIDevice) and cleanup is None:
@@ -61,12 +75,29 @@ class DeviceConnectionManager:
             return cls.handles[id]
 
     @classmethod
+    def remove_connection(cls, id: str | int) -> bool:
+        """Close and unregister one connection without affecting other devices."""
+        with _connection_lock:
+            connection = cls.handles.get(id)
+            if connection is None:
+                return False
+
+            connection.close()
+            del cls.handles[id]
+            return True
+
+    @classmethod
     def clear(cls):
         cls.tm.remove_all_devices()
         logger.info("Cleaned up tm_devices DeviceManager")
 
         with _connection_lock:
             logger.info(f"Connections closed: {cls.handles}")
+            for connection in cls.handles.values():
+                try:
+                    connection.close()
+                except Exception:
+                    logger.exception("Failed to close a hardware connection")
             cls.handles.clear()
 
 

@@ -1,10 +1,9 @@
-from flojoy import flojoy, DataContainer
-from typing import Optional
-import subprocess
-import threading
 import logging
-import os
-import sys
+import time
+from typing import Optional
+
+import paho.mqtt.client as mqtt
+from flojoy import DataContainer, flojoy
 
 
 @flojoy
@@ -12,29 +11,28 @@ def START_EDM(
         broker_ip: str = "localhost",
         default: Optional[DataContainer] = None,
 ) -> Optional[DataContainer]:
-    """
-    非阻塞展示HASS振动台温度和振动数据
-    """
+    """启动 EDM 工作台测试，不在 Flojoy Worker 内创建图形窗口。"""
     logging.info(f"EDM BROKER IP:{broker_ip}")
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    run_file = os.path.join(current_dir, "mqtt_signal_chart.py")
-    logging.info(f"脚本路径:{run_file}")
-    command = f"{sys.executable} {run_file} {broker_ip}"
-    logging.info(f"command:{command}")
-
-    def run_command(cmd):
-        # 启动子进程（不等待完成）
-        subprocess.Popen(cmd, shell=True, start_new_session=True)
-
-    thread = threading.Thread(target=run_command, args=(command,))
-    thread.daemon = True
-    thread.start()
+    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set("Admin", "123456")
+    client.connect(broker_ip, 1883, keepalive=15)
+    client.loop_start()
 
     try:
-        os.remove('status.txt')
-        logging.info("运行前重置EDM状态记录文件")
-    except FileNotFoundError:
-        logging.info("status.txt 文件不存在")
-        pass
+        commands = (
+            ("EDM/App/Test/Command", "Connect"),
+            ("EDM/App/Test/Command", "Run"),
+            ("EDM/THV/Test/Command", "RequestDetailStatus"),
+        )
+        for topic, command in commands:
+            message_info = client.publish(topic, command, qos=1)
+            message_info.wait_for_publish(timeout=3.0)
+            if not message_info.is_published():
+                raise RuntimeError(f"EDM MQTT 指令发送超时: {command}")
+            logging.info("EDM MQTT command sent: %s", command)
+            time.sleep(0.1)
+    finally:
+        client.loop_stop()
+        client.disconnect()
 
-    return None
+    return default

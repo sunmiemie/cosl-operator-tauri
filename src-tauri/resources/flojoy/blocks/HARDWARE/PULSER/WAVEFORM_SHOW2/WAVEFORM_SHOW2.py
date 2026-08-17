@@ -162,7 +162,11 @@ class RealTimePlot:
         sys.exit(self.app.exec())
 
 
-@flojoy(deps={"pyserial": "3.5"})
+@flojoy(deps={
+    "pyserial": "3.5",
+    "pyqtgraph": "0.13.7",
+    "PyQt5": "5.15.11",
+})
 def WAVEFORM_SHOW2(
         device: SerialDevice,
         default: Optional[DataContainer] = None,

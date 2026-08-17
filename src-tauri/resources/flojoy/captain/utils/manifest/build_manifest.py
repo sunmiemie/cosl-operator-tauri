@@ -67,7 +67,7 @@ SPECIAL_TYPES = [
     Secret,
 ]
 
-SPECIAL_NODES = ["LOOP", "CONDITIONAL"]
+SPECIAL_NODES = ["LOOP", "CONDITIONAL", "HALT_HASS_DURATION_LOOP"]
 
 
 class ManifestBuilder:

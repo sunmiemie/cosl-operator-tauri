@@ -12,7 +12,6 @@ import {
   type NIDAQmxDevice,
   type NIDMMDevice,
   type DeviceCategory,
-  convertLegacyDeviceInfo,
   getTotalDeviceCount,
   hasAnyDevices,
 } from '@/types'
@@ -49,11 +48,10 @@ async function refreshDevices(): Promise<DeviceInfo> {
   error.value = null
 
   try {
-    const legacyInfo = await fetchDeviceInfo(
+    devices.value = await fetchDeviceInfo(
       discoverNIDAQmx.value,
       discoverNIDMM.value
     )
-    devices.value = convertLegacyDeviceInfo(legacyInfo)
     lastRefreshTime.value = Date.now()
     return devices.value
   } catch (e) {

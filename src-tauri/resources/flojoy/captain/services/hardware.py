@@ -18,6 +18,38 @@ from captain.types.devices import (
 __all__ = ["get_device_finder"]
 
 
+def _get_persistent_serial_port(port: str) -> str:
+    """Return a stable Linux serial path when udev provides one."""
+    if not platform.startswith("linux"):
+        return port
+
+    resolved_port = os.path.realpath(port)
+    for directory in ("/dev/serial/by-id", "/dev/serial/by-path"):
+        if not os.path.isdir(directory):
+            continue
+
+        for entry in sorted(os.listdir(directory)):
+            candidate = os.path.join(directory, entry)
+            if os.path.realpath(candidate) == resolved_port:
+                return candidate
+
+    return port
+
+
+def _get_persistent_visa_address(address: str) -> str:
+    """Use the same stable Linux path for ASRL VISA resources."""
+    prefix = "ASRL"
+    suffix = "::INSTR"
+    if not address.startswith(prefix) or not address.endswith(suffix):
+        return address
+
+    port = address[len(prefix) : -len(suffix)]
+    if not port.startswith("/dev/"):
+        return address
+
+    return f"{prefix}{_get_persistent_serial_port(port)}{suffix}"
+
+
 class DefaultDeviceFinder:
     def get_cameras(self) -> list[CameraDevice]:
         """Returns a list of camera indices connected to the system."""
@@ -44,15 +76,23 @@ class DefaultDeviceFinder:
         """Returns a list of serial devices connected to the system."""
         ports = serial.tools.list_ports.comports()
 
-        return [
-            SerialDevice(
-                port=p.device,
-                description=p.description,
-                hwid=p.hwid,
-                manufacturer=p.manufacturer,
+        devices = []
+        for port in ports:
+            persistent_port = _get_persistent_serial_port(port.device)
+            description = port.description
+            if persistent_port != port.device:
+                description = f"{description} [{port.device}]"
+
+            devices.append(
+                SerialDevice(
+                    port=persistent_port,
+                    description=description,
+                    hwid=port.hwid,
+                    manufacturer=port.manufacturer,
+                )
             )
-            for p in ports
-        ]
+
+        return sorted(devices, key=lambda device: device.port)
 
     def get_visa_devices(self) -> list[VISADevice]:
         """Returns a list of VISA devices connected to the system."""
@@ -61,19 +101,20 @@ class DefaultDeviceFinder:
         used_addrs = set()
 
         for addr in rm.list_resources():
-            if addr in used_addrs:
+            persistent_addr = _get_persistent_visa_address(addr)
+            if persistent_addr in used_addrs:
                 continue
             try:
                 device = rm.open_resource(addr)
                 devices.append(
                     VISADevice(
                         name=addr.split("::")[0],
-                        address=addr,
+                        address=persistent_addr,
                         description=device.query("*IDN?"),
                     )
                 )
                 device.close()
-                used_addrs.add(addr)
+                used_addrs.add(persistent_addr)
             except (pyvisa.VisaIOError, serial.serialutil.SerialException):
                 pass
 

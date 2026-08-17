@@ -12,7 +12,10 @@ import type {
   OrderScheduleSegment,
   ScannedBoard,
 } from '@/views/halt-hass-test/types'
-import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
+import type {
+  HaltHassFlowchart,
+  HaltHassProcessJson,
+} from '@/views/process-halt-hass/types'
 
 export type HaltHassOrderDTO = Record<string, any>
 
@@ -66,6 +69,25 @@ export type HaltHassOrderScheduleBody = {
   scheduled_end_at: string
 }
 
+function mapHaltHassRuntimeResult(
+  runtime: HaltHassOrderDTO
+): HaltHassStartResult {
+  return {
+    success: true,
+    startedAt: runtime.started_at ?? runtime.startedAt ?? null,
+    cycleCount: Number(runtime.cycle_count ?? runtime.cycleCount ?? 1),
+    singleCycleDurationHours: Number(runtime.single_cycle_duration_hours ?? runtime.singleCycleDurationHours ?? 0),
+    totalCycleDurationHours: Number(runtime.total_cycle_duration_hours ?? runtime.totalCycleDurationHours ?? 0),
+    requiredRuntimeSeconds: Number(runtime.required_runtime_seconds ?? runtime.requiredRuntimeSeconds ?? 0),
+    elapsedRuntimeSeconds: Number(runtime.elapsed_runtime_seconds ?? runtime.elapsedRuntimeSeconds ?? 0),
+    remainingRuntimeSeconds: Number(runtime.remaining_runtime_seconds ?? runtime.remainingRuntimeSeconds ?? 0),
+    runtimeProgress: Number(runtime.runtime_progress ?? runtime.runtimeProgress ?? 0),
+    runtimeConfigured: Boolean(runtime.runtime_configured ?? runtime.runtimeConfigured ?? false),
+    runtimeCompleted: Boolean(runtime.runtime_completed ?? runtime.runtimeCompleted ?? false),
+    currentRunStartedAt: runtime.current_run_started_at ?? runtime.currentRunStartedAt ?? null,
+  }
+}
+
 function unwrapBackendEnvelope<T>(
   response: ApiResponse<BackendEnvelope<T>>,
   fallbackError: string
@@ -102,15 +124,27 @@ function apiFailure<T>(response: ApiResponse<unknown>, fallbackError: string): A
 }
 
 function normalizeProcessJson(value: unknown): HaltHassProcessJson | null {
-  if (!value) return null
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value) as HaltHassProcessJson
-    } catch {
-      return null
-    }
+  if (!value || typeof value !== 'object') return null
+  const process = value as Partial<HaltHassProcessJson>
+  if (
+    process.schemaVersion !== 2
+    || !process.metadata
+    || !process.installGuide
+    || !isFlowchart(process.testFlow)
+    || !isFlowchart(process.cycleFlow)
+  ) {
+    return null
   }
-  return value as HaltHassProcessJson
+  return process as HaltHassProcessJson
+}
+
+function isFlowchart(value: unknown): value is HaltHassFlowchart {
+  if (!value || typeof value !== 'object') return false
+  const flow = value as Partial<HaltHassFlowchart>
+  return Array.isArray(flow.nodes)
+    && Array.isArray(flow.edges)
+    && Array.isArray(flow.observeBlocks)
+    && Boolean(flow.runSettings && typeof flow.runSettings === 'object')
 }
 
 function getSerialText(value: OrderBoardSerial | undefined): string {
@@ -276,20 +310,74 @@ export async function startOrder(
   const runtime = (unwrapped.data || {}) as HaltHassOrderDTO
   return {
     success: true,
-    data: {
-      success: true,
-      startedAt: runtime.started_at ?? runtime.startedAt ?? null,
-      cycleCount: Number(runtime.cycle_count ?? runtime.cycleCount ?? 1),
-      singleCycleDurationHours: Number(runtime.single_cycle_duration_hours ?? runtime.singleCycleDurationHours ?? 0),
-      totalCycleDurationHours: Number(runtime.total_cycle_duration_hours ?? runtime.totalCycleDurationHours ?? 0),
-      requiredRuntimeSeconds: Number(runtime.required_runtime_seconds ?? runtime.requiredRuntimeSeconds ?? 0),
-      elapsedRuntimeSeconds: Number(runtime.elapsed_runtime_seconds ?? runtime.elapsedRuntimeSeconds ?? 0),
-      remainingRuntimeSeconds: Number(runtime.remaining_runtime_seconds ?? runtime.remainingRuntimeSeconds ?? 0),
-      runtimeProgress: Number(runtime.runtime_progress ?? runtime.runtimeProgress ?? 0),
-      runtimeConfigured: Boolean(runtime.runtime_configured ?? runtime.runtimeConfigured ?? false),
-      runtimeCompleted: Boolean(runtime.runtime_completed ?? runtime.runtimeCompleted ?? false),
-      currentRunStartedAt: runtime.current_run_started_at ?? runtime.currentRunStartedAt ?? null,
-    },
+    data: mapHaltHassRuntimeResult(runtime),
+    status: response.status,
+  }
+}
+
+/**
+ * 循环流实际启动时才开始或继续累计循环总时长。
+ */
+export async function startOrderCycleRuntime(
+  orderId: number
+): Promise<ApiResponse<HaltHassStartResult>> {
+  const response = await http.post<BackendEnvelope<unknown>>(
+    `/test/halt-hass/order/cycle/start/${orderId}/`
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '启动循环流计时失败')
+  if (!unwrapped.success) {
+    return apiFailure<HaltHassStartResult>(unwrapped, '启动循环流计时失败')
+  }
+
+  return {
+    success: true,
+    data: mapHaltHassRuntimeResult(
+      (unwrapped.data || {}) as HaltHassOrderDTO
+    ),
+    status: response.status,
+  }
+}
+
+/**
+ * 循环流结束、失败或手动停止时冻结已累计时长。
+ */
+export async function pauseOrderCycleRuntime(
+  orderId: number
+): Promise<ApiResponse<HaltHassStartResult>> {
+  const response = await http.post<BackendEnvelope<unknown>>(
+    `/test/halt-hass/order/cycle/pause/${orderId}/`
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '暂停循环流计时失败')
+  if (!unwrapped.success) {
+    return apiFailure<HaltHassStartResult>(unwrapped, '暂停循环流计时失败')
+  }
+
+  return {
+    success: true,
+    data: mapHaltHassRuntimeResult(
+      (unwrapped.data || {}) as HaltHassOrderDTO
+    ),
+    status: response.status,
+  }
+}
+
+/**
+ * 清空测试中工单的上一轮执行状态。
+ * 后端保留工单配置与排程，只删除实际扫码和运行状态。
+ */
+export async function resetRunningOrderExecution(
+  orderId: number
+): Promise<ApiResponse<{ id: number; status: number }>> {
+  const response = await http.post<BackendEnvelope<{ id: number; status: number }>>(
+    `/test/halt-hass/order/reset-running/${orderId}/`
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '清空工单执行状态失败')
+  if (!unwrapped.success) {
+    return apiFailure<{ id: number; status: number }>(unwrapped, '清空工单执行状态失败')
+  }
+  return {
+    success: true,
+    data: unwrapped.data,
     status: response.status,
   }
 }
@@ -381,15 +469,12 @@ export async function downloadProcessData(
   if (!unwrapped.success) return apiFailure<HaltHassProcessJson>(unwrapped, '下载工艺数据失败')
 
   const detail = unwrapped.data || {}
-  const processInfo = detail.process as Record<string, unknown> | undefined
-  const processJson = normalizeProcessJson(
-    detail.processJson ?? processInfo?.content ?? detail.content
-  )
+  const processJson = normalizeProcessJson(detail.processJson)
 
   if (!processJson) {
     return {
       success: false,
-      error: '工艺数据为空',
+      error: '工艺不是有效的 HALT-HASS 双流程数据',
       status: response.status,
     }
   }

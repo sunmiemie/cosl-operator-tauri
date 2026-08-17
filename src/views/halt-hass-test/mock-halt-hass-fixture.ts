@@ -39,6 +39,7 @@ export const MOCK_HALT_HASS_ORDER: HaltHassOrder = {
 }
 
 export const MOCK_HALT_HASS_PROCESS: HaltHassProcessJson = {
+  schemaVersion: 2,
   metadata: {
     name: 'HALT-HASS 演示工艺',
     version: '1.0.0-demo',
@@ -69,7 +70,7 @@ export const MOCK_HALT_HASS_PROCESS: HaltHassProcessJson = {
       },
     ],
   },
-  flowchart: {
+  testFlow: {
     nodes: [
       {
         id: 'demo-thermal-ramp',
@@ -124,6 +125,49 @@ export const MOCK_HALT_HASS_PROCESS: HaltHassProcessJson = {
       },
     ],
     observeBlocks: ['demo-result-check'],
+    runSettings: {
+      nodeDelay: 0,
+      maximumRuntime: 3000,
+      maximumConcurrentWorkers: 1,
+    },
+  },
+  cycleFlow: {
+    nodes: [
+      {
+        id: 'demo-duration-loop',
+        type: 'default',
+        position: { x: 120, y: 320 },
+        data: {
+          id: 'demo-duration-loop',
+          label: '循环时长控制',
+          type: 'LOGIC',
+          func: 'HALT_HASS_DURATION_LOOP',
+          path: 'LOGIC/LOOPS/HALT_HASS_DURATION_LOOP',
+          ctrls: {},
+        },
+      },
+      {
+        id: 'demo-cycle-telemetry',
+        type: 'default',
+        position: { x: 380, y: 320 },
+        data: {
+          id: 'demo-cycle-telemetry',
+          label: '持续采集状态与曲线',
+          type: 'SIMULATION',
+          func: 'demoCycleTelemetry',
+          path: 'mock/halt-hass/demoCycleTelemetry',
+          ctrls: {},
+        },
+      },
+    ],
+    edges: [
+      {
+        id: 'demo-cycle-edge-1',
+        source: 'demo-duration-loop',
+        target: 'demo-cycle-telemetry',
+      },
+    ],
+    observeBlocks: ['demo-duration-loop', 'demo-cycle-telemetry'],
     runSettings: {
       nodeDelay: 0,
       maximumRuntime: 3000,

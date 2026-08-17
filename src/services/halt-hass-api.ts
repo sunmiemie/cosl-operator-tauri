@@ -5,6 +5,7 @@
 import { http, type ApiResponse } from './http'
 import type {
   HaltHassProcessJson,
+  HaltHassFlowchart,
   BoardGroupItem,
   BoardGroup,
   CreateBoardGroupParams,
@@ -273,58 +274,44 @@ export async function loadHaltHassProcess(
     return { success: false, error: '工艺 JSON 数据为空' }
   }
 
-  // 默认运行设置
-  const defaultRunSettings = {
-    nodeDelay: 0,
-    maximumRuntime: 3000,
-    maximumConcurrentWorkers: 1,
+  const source = detail.processJson
+  if (
+    source.schemaVersion !== 2
+    || !isHaltHassFlowchart(source.testFlow)
+    || !isHaltHassFlowchart(source.cycleFlow)
+    || !source.metadata
+    || !source.installGuide
+  ) {
+    return { success: false, error: '工艺不是有效的 HALT-HASS 双流程数据' }
   }
 
-  // 获取流程图数据
-  let flowchartData = detail.processJson.flowchart
-  let nodes: any[] = []
-  let edges: any[] = []
-
-  // 检测数据格式并处理
-  if (flowchartData) {
-    // 检查是否是 Studio 格式（有 rfInstance 包装）
-    if ((flowchartData as any).rfInstance) {
-      const rfInstance = (flowchartData as any).rfInstance
-      nodes = rfInstance.nodes || []
-      edges = rfInstance.edges || []
-    } else {
-      // 我们自己的格式
-      nodes = flowchartData.nodes || []
-      edges = flowchartData.edges || []
-    }
-  }
-
-  const flowchart = {
-    nodes,
-    edges,
-    observeBlocks: flowchartData?.observeBlocks || [],
-    runSettings: flowchartData?.runSettings || defaultRunSettings,
-  }
-
-  // 确保数据结构完整
+  // 服务端名称、版本和电路板组是工艺主记录的权威值，双流程内容按原样读取。
   const processJson: HaltHassProcessJson = {
+    schemaVersion: 2,
     metadata: {
-      ...(detail.processJson.metadata || {}),
-      name: detail.name || detail.processJson.metadata?.name || '',
-      version: detail.version || detail.processJson.metadata?.version || '1.0.0',
-      boardGroup: detail.boardGroups || detail.processJson.metadata?.boardGroup || [],
-      description: detail.processJson.metadata?.description || '',
-      createdAt: detail.createdAt || detail.processJson.metadata?.createdAt,
-      updatedAt: detail.processJson.metadata?.updatedAt,
-      createdBy: detail.userName || detail.processJson.metadata?.createdBy,
+      ...source.metadata,
+      name: detail.name,
+      version: detail.version,
+      boardGroup: detail.boardGroups,
+      createdAt: detail.createdAt || source.metadata.createdAt,
+      createdBy: detail.userName || source.metadata.createdBy,
     },
-    installGuide: detail.processJson.installGuide || { steps: [] },
-    flowchart,
-    // 保存审核反馈
+    installGuide: source.installGuide,
+    testFlow: source.testFlow,
+    cycleFlow: source.cycleFlow,
     feedback: detail.feedback || [],
   }
 
   return { success: true, data: processJson }
+}
+
+function isHaltHassFlowchart(value: unknown): value is HaltHassFlowchart {
+  if (!value || typeof value !== 'object') return false
+  const flow = value as Partial<HaltHassFlowchart>
+  return Array.isArray(flow.nodes)
+    && Array.isArray(flow.edges)
+    && Array.isArray(flow.observeBlocks)
+    && Boolean(flow.runSettings && typeof flow.runSettings === 'object')
 }
 
 // ==================== 电路板组 API ====================

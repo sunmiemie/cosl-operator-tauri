@@ -92,10 +92,10 @@ function getBoardCount(order: HaltHassOrder) {
 }
 
 function getOrderStatusText(order: HaltHassOrder) {
-  if (scheduledOrderIdSet.value.has(getOrderKey(order))) return '已排程'
   if (order.status === 2) return '测试中'
   if (order.status === 4) return '待重做'
   if (order.status === 7) return '暂存'
+  if (scheduledOrderIdSet.value.has(getOrderKey(order))) return '已排程'
   return '待排程'
 }
 
@@ -105,6 +105,48 @@ function getStatusClass(statusText: string) {
   if (statusText === '暂存') return 'status-saved'
   if (statusText === '待重做') return 'status-redo'
   return 'status-pending'
+}
+
+function formatScheduleDateTime(value?: string | null) {
+  if (!value) return ''
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return value
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${month}/${day} ${hour}:${minute}`
+}
+
+function getOrderScheduleText(order: HaltHassOrder) {
+  const ranges = (order.scheduleSegments || [])
+    .map(segment => ({
+      start: segment.scheduledStartAt || segment.scheduled_start_at,
+      end: segment.scheduledEndAt || segment.scheduled_end_at,
+    }))
+    .filter(range => range.start && range.end)
+
+  if (!ranges.length && order.scheduledStartAt && order.scheduledEndAt) {
+    ranges.push({ start: order.scheduledStartAt, end: order.scheduledEndAt })
+  }
+  if (!ranges.length) return '未排程'
+
+  const first = ranges[0]
+  const last = ranges[ranges.length - 1]
+  const rangeText = `${formatScheduleDateTime(first.start)} – ${formatScheduleDateTime(last.end)}`
+  return ranges.length > 1 ? `${rangeText}（${ranges.length} 段）` : rangeText
+}
+
+function getScheduledItemTime(item: any) {
+  const start = timeSlots.value[item.startIdx]?.label || ''
+  const end = timeSlots.value[item.startIdx + item.span]?.label || ''
+  return start && end ? `${start}–${end}` : start
+}
+
+function getScheduledItemStatus(item: any) {
+  const order = getOrderById(item.orderId)
+  return order ? getOrderStatusText(order) : '已排程'
 }
 
 function openDetail(order: HaltHassOrder) {
@@ -358,7 +400,7 @@ function startSelectedOrder() {
                     'is-resizing': isResizing && resizingEventId === item.eventId
                   }"
                   :style="getScheduledStyle(item)"
-                  :title="`${item.orderId} · ${getOrderById(item.orderId)?.process?.name || ''}`"
+                  :title="`${item.orderId} · ${getScheduledItemStatus(item)} · ${getScheduledItemTime(item)} · ${getOrderById(item.orderId)?.process?.name || ''}`"
                   @click="selectScheduledTask(item.eventId)"
                 >
                   <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(item.eventId, $event)"></div>
@@ -368,7 +410,10 @@ function startSelectedOrder() {
                       <Icon icon="mdi:close" />
                     </button>
                   </div>
-                  <div class="scheduled-tag">{{ getOrderById(item.orderId)?.process?.name || 'HALT-HASS' }}</div>
+                  <div class="scheduled-meta">
+                    <span class="scheduled-status">{{ getScheduledItemStatus(item) }}</span>
+                    <span class="scheduled-time">{{ getScheduledItemTime(item) }}</span>
+                  </div>
                   <div class="resize-handle" @mousedown.stop.prevent="startResize(item.eventId, $event)"></div>
                 </div>
               </div>
@@ -400,12 +445,19 @@ function startSelectedOrder() {
             <span class="selected-divider">|</span>
             <span class="selected-device">{{ selectedInfo.boardGroup?.name || '-' }}</span>
             <span class="selected-process">{{ selectedInfo.process?.name || '-' }}</span>
+            <span class="status-pill selected-status" :class="getStatusClass(getOrderStatusText(selectedInfo))">
+              {{ getOrderStatusText(selectedInfo) }}
+            </span>
+            <span class="selected-schedule">
+              <Icon icon="mdi:clock-outline" />
+              排程：{{ getOrderScheduleText(selectedInfo) }}
+            </span>
           </template>
           <span v-else class="selected-placeholder">请在日历中选择一个已排程的工单</span>
         </div>
         <button class="primary-btn" :disabled="!canStartExperiment" @click.stop.prevent="startSelectedOrder">
           <Icon icon="mdi:play" class="start-icon" />
-          开始实验
+          开始测试
         </button>
       </div>
     </div>
@@ -432,6 +484,7 @@ function startSelectedOrder() {
             <div class="detail-field"><span>工艺版本</span><strong>{{ displayValue(detailOrder.process?.version) }}</strong></div>
             <div class="detail-field"><span>电路板数量</span><strong>{{ getBoardCount(detailOrder) }} 块</strong></div>
             <div class="detail-field"><span>当前状态</span><strong>{{ getOrderStatusText(detailOrder) }}</strong></div>
+            <div class="detail-field detail-schedule"><span>排程时间</span><strong>{{ getOrderScheduleText(detailOrder) }}</strong></div>
           </div>
         </section>
         <section class="detail-card">
@@ -540,6 +593,9 @@ function startSelectedOrder() {
 .scheduled-content { display:flex; align-items:flex-start; justify-content:space-between; gap:6px; min-width:0; }
 .device-name { min-width:0; overflow:hidden; word-break:break-all; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-size:11px; font-weight:700; color:#fff; line-height:1.2; padding-right:20px; }
 .scheduled-tag { overflow:hidden; word-break:break-all; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; color:rgba(255,255,255,.9); font-size:9px; font-weight:500; margin-top:2px; }
+.scheduled-meta { display:flex; align-items:center; gap:5px; min-width:0; color:rgba(255,255,255,.94); font-size:9px; line-height:1.2; white-space:nowrap; }
+.scheduled-status { padding:1px 4px; border-radius:999px; background:rgba(255,255,255,.2); font-weight:700; }
+.scheduled-time { overflow:hidden; text-overflow:ellipsis; }
 .remove-btn { width:18px; height:18px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; border:none; border-radius:4px; background:transparent; color:var(--color-text-tertiary); cursor:pointer; opacity:.6; transition:all .2s; }
 .scheduled-item:hover .remove-btn { opacity:1; pointer-events:auto; }
 .remove-btn:hover { color:#fff; background:rgba(255,255,255,.2); }
@@ -555,6 +611,8 @@ function startSelectedOrder() {
 .selected-label,.selected-device,.selected-process { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .selected-divider,.selected-device { color:var(--color-text-secondary); }
 .selected-process { color:#f97316; background:rgba(249,115,22,.1); padding:2px 8px; border-radius:6px; font-size:12px; }
+.selected-status { min-width:auto; height:24px; padding:0 7px; }
+.selected-schedule { display:inline-flex; align-items:center; gap:4px; min-width:0; color:var(--color-text-secondary); font-size:12px; white-space:nowrap; }
 .selected-placeholder { color:#94a3b8; font-style:italic; }
 .primary-btn { height:38px; display:flex; align-items:center; gap:8px; padding:0 22px; border:none; border-radius:10px; background:var(--color-primary,#3b82f6); color:#fff; font-size:14px; font-weight:700; cursor:pointer; transition:all .18s ease; }
 .primary-btn:hover:not(:disabled) { opacity:.9; transform:translateY(-1px); }
@@ -572,6 +630,7 @@ function startSelectedOrder() {
 .detail-field { min-width:0; display:flex; flex-direction:column; gap:5px; }
 .detail-field span { color:var(--color-text-secondary); font-size:12px; }
 .detail-field strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--color-text-primary); }
+.detail-schedule { grid-column:1 / -1; }
 .detail-note { padding:16px; color:var(--color-text-secondary); line-height:1.6; }
 @media (max-width: 1100px) {
   .schedule-wrap { flex-direction:column; }

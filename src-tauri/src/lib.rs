@@ -2,6 +2,7 @@
 mod cache;
 mod camera;
 mod flojoy;
+mod halt_hass_mqtt;
 mod high_temp_pressure_ocr;
 mod ocr;
 mod scanner;
@@ -108,6 +109,8 @@ pub fn run() {
         .manage(high_temp_pressure_ocr::HighTempPressureOcrState::default())
         // 注册振动台采集卡实时 OCR 状态管理
         .manage(vibration_ocr::VibrationOcrState::default())
+        // 注册 HALT-HASS 工作台 MQTT 状态管理
+        .manage(halt_hass_mqtt::HaltHassMqttState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -150,6 +153,10 @@ pub fn run() {
             flojoy::get_flojoy_backend_pid,
             flojoy::set_flojoy_backend_port,
             flojoy::init_flojoy_backend_dir,
+            // HALT-HASS 工作台 MQTT
+            halt_hass_mqtt::start_halt_hass_mqtt,
+            halt_hass_mqtt::stop_halt_hass_mqtt,
+            halt_hass_mqtt::publish_halt_hass_mqtt_command,
             // OCR 图像识别
             ocr::init_ocr,
             ocr::is_ocr_initialized,
@@ -202,6 +209,9 @@ pub fn run() {
             }
             if let Some(state) = app_handle.try_state::<vibration_ocr::VibrationOcrState>() {
                 cleanup_vibration_ocr(state.inner());
+            }
+            if let Some(state) = app_handle.try_state::<halt_hass_mqtt::HaltHassMqttState>() {
+                state.shutdown_now();
             }
         }
     });

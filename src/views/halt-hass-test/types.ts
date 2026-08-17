@@ -3,7 +3,11 @@
  */
 
 // 导入共享类型
-import type { BoardModelItem, HaltHassProcessJson } from '@/views/process-halt-hass/types'
+import type {
+  BoardModelItem,
+  HaltHassFlowType,
+  HaltHassProcessJson,
+} from '@/views/process-halt-hass/types'
 
 // ==================== 测试流程阶段 ====================
 
@@ -162,6 +166,7 @@ export const REVIEW_STATUS = {
  * 流程图节点运行结果
  */
 export interface NodeRunResult {
+  flowType: HaltHassFlowType
   nodeId: string
   nodeName: string
   status: 'success' | 'error' | 'skipped'
@@ -235,6 +240,9 @@ export interface HaltHassTempData {
 
   // 流程图运行状态
   flowchartState?: {
+    activeFlowType: HaltHassFlowType
+    testFlowPassed: boolean
+    testFlowResults: NodeRunResult[]
     currentNodeId?: string
     completedNodes: string[]
     nodeResults: NodeRunResult[]
@@ -282,6 +290,8 @@ export interface InstallGuideViewerProps {
  */
 export interface FlowchartRunnerProps {
   processJson: HaltHassProcessJson | null
+  activeFlowType: HaltHassFlowType
+  testFlowPassed: boolean
   isRunning: boolean
   nodeStatuses: Record<string, string>
 }

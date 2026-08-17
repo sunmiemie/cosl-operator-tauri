@@ -423,7 +423,10 @@ class Topology:
         node = cast(
             dict[str, Any], self.original_graph.nodes[job_id]
         )  # working graph is modified after each node run so it's safe to use original graph to retrieve the node
-        return bool(node and node["cmd"] == "LOOP")
+        return bool(
+            node
+            and node["cmd"] in {"LOOP", "HALT_HASS_DURATION_LOOP"}
+        )
 
     def cleanup(self):
         clear_flojoy_memory()

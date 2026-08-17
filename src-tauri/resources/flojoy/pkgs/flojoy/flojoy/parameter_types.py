@@ -28,12 +28,28 @@ class HardwareConnection(ABC):
     def __init__(self, handle: Any, cleanup: Callable[[Any], Any]) -> None:
         self._handle = handle
         self._cleanup = cleanup
+        self._closed = False
 
     def get_handle(self):
         return self._handle
 
-    def __del__(self):
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        """Close the underlying handle exactly once."""
+        if self._closed:
+            return
+
         self._cleanup(self._handle)
+        self._closed = True
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            # Destructors must not hide the original node or shutdown error.
+            pass
 
 
 class CameraDevice(HardwareDevice):

@@ -244,14 +244,29 @@ export interface HaltHassFlowchart {
   runSettings: RunSettings
 }
 
+export type HaltHassFlowType = 'test' | 'cycle'
+
+export function createEmptyHaltHassFlowchart(): HaltHassFlowchart {
+  return {
+    nodes: [],
+    edges: [],
+    observeBlocks: [],
+    runSettings: { ...defaultRunSettings },
+  }
+}
+
 // HALT-HASS 工艺完整 JSON 结构
 export interface HaltHassProcessJson {
+  // 双流程结构版本
+  schemaVersion: 2
   // 元信息
   metadata: HaltHassMetadata
   // 安装指导
   installGuide: InstallationGuide
-  // 流程图数据
-  flowchart: HaltHassFlowchart
+  // 测试流：验证设备通断和是否具备测试状态
+  testFlow: HaltHassFlowchart
+  // 循环流：按工单总时长持续采集设备状态和曲线
+  cycleFlow: HaltHassFlowchart
   // 审核反馈（可选）
   feedback?: string[]
 }
@@ -259,6 +274,7 @@ export interface HaltHassProcessJson {
 // 创建空的 HALT-HASS 工艺 JSON
 export function createEmptyHaltHassJson(): HaltHassProcessJson {
   return {
+    schemaVersion: 2,
     metadata: {
       name: '',
       version: '1.0.0',
@@ -268,12 +284,8 @@ export function createEmptyHaltHassJson(): HaltHassProcessJson {
     installGuide: {
       steps: [],
     },
-    flowchart: {
-      nodes: [],
-      edges: [],
-      observeBlocks: [],
-      runSettings: { ...defaultRunSettings },
-    },
+    testFlow: createEmptyHaltHassFlowchart(),
+    cycleFlow: createEmptyHaltHassFlowchart(),
   }
 }
 

@@ -26,10 +26,17 @@ import { useLayout } from '@/composables/useLayout'
 import { useFlojoyBackend } from '@/composables/useFlojoyBackend'
 import { useFlojoySocket } from '@/composables/useFlojoySocket'
 import { useAuth } from '@/composables/useAuth'
-import { runFlowchart, cancelFlowchartRun, configureApi } from '@/services/flojoy-api'
+import { runFlowchart, cancelFlowchartRun, configureApi, checkHealth } from '@/services/flojoy-api'
 
 // 导入类型和适配器
-import type { BlockData, HaltHassJob, CreateBoardGroupParams } from './types'
+import type {
+  BlockData,
+  HaltHassJob,
+  HaltHassFlowchart,
+  HaltHassFlowType,
+  HaltHassProcessJson,
+  CreateBoardGroupParams,
+} from './types'
 import {
   prepareRunFlowchartArgs,
   deserializeFromStudioFormat,
@@ -119,23 +126,40 @@ const currentJobId = ref<string | null>(null)
 const boardGroupsLoading = ref(false)
 const curveFileInputRef = ref<HTMLInputElement | null>(null)
 
-// 步骤配置（新流程：选择页 -> 安装指导 -> 流程图 -> 预览）
+// 步骤配置：安装指导、测试流、循环流分别独立编辑。
 const steps = [
   { key: 'select', label: '选择工艺' },
   { key: 'install', label: '安装指导' },
-  { key: 'flowchart', label: '流程图编辑' },
+  { key: 'test-flow', label: '测试流编辑' },
+  { key: 'cycle-flow', label: '循环流编辑' },
   { key: 'preview', label: '预览确认' },
 ]
 
 // 基于版本迭代
 const selectedBaseVersion = ref<number | null>(null)
 
-// 流程图数据
-const flowchartNodes = ref<Node[]>([])
-const flowchartEdges = ref<Edge[]>([])
+// 两套画布状态完全隔离，切换步骤时不复用节点或连线引用。
+const testFlowNodes = ref<Node[]>([])
+const testFlowEdges = ref<Edge[]>([])
+const cycleFlowNodes = ref<Node[]>([])
+const cycleFlowEdges = ref<Edge[]>([])
+const activeFlowType = computed<HaltHassFlowType>(() =>
+  currentStep.value === 3 ? 'cycle' : 'test'
+)
+const activeFlowLabel = computed(() =>
+  activeFlowType.value === 'test' ? '测试流' : '循环流'
+)
+const activeFlowNodes = computed(() =>
+  activeFlowType.value === 'test' ? testFlowNodes.value : cycleFlowNodes.value
+)
+const activeFlowEdges = computed(() =>
+  activeFlowType.value === 'test' ? testFlowEdges.value : cycleFlowEdges.value
+)
 
 // 计算属性
-const canRun = computed(() => backendRunning.value && socketConnected.value)
+// WebSocket 已建立即可确认 Flojoy 具备运行能力。
+// 后端也可能由外部进程启动，此时 Rust 进程状态不会标记为 running。
+const canRun = computed(() => socketConnected.value)
 const canStartEditing = computed(() => {
   return Boolean(
     selectedBoardGroup.value
@@ -161,11 +185,15 @@ const durationValidationError = computed(() => {
 const previewJson = computed(() => {
   return JSON.stringify({
     ...processJson.value,
-    flowchart: {
-      nodes: flowchartNodes.value,
-      edges: flowchartEdges.value,
-      observeBlocks: processJson.value.flowchart.observeBlocks,
-      runSettings: processJson.value.flowchart.runSettings,
+    testFlow: {
+      ...processJson.value.testFlow,
+      nodes: testFlowNodes.value,
+      edges: testFlowEdges.value,
+    },
+    cycleFlow: {
+      ...processJson.value.cycleFlow,
+      nodes: cycleFlowNodes.value,
+      edges: cycleFlowEdges.value,
     },
   }, null, 2)
 })
@@ -181,8 +209,10 @@ function handleExit() {
   }).then(() => {
     currentStep.value = 0
     resetProcess()
-    flowchartNodes.value = []
-    flowchartEdges.value = []
+    testFlowNodes.value = []
+    testFlowEdges.value = []
+    cycleFlowNodes.value = []
+    cycleFlowEdges.value = []
   }).catch(() => {})
 }
 
@@ -196,12 +226,7 @@ async function selectBaseVersion(row: { id: number; name: string; version: strin
   const success = await loadVersionForIteration(row.id)
   if (success) {
     // 恢复流程图数据（使用可选链确保安全访问）
-    const nodes = processJson.value.flowchart?.nodes || []
-    const edges = processJson.value.flowchart?.edges || []
-    if (nodes.length > 0) {
-      flowchartNodes.value = nodes
-      flowchartEdges.value = edges
-    }
+    syncFlowStatesFromProcess()
     ElMessage.success(`已加载基础版本: ${row.name} v${row.version}`)
   } else {
     ElMessage.error('加载版本数据失败')
@@ -235,13 +260,7 @@ function handleNew() {
     return
   }
 
-  // 注意：不调用 resetProcess()，因为用户已经在选择页填写了 metadata
-  // 如果已选择基础版本进行迭代，保留已加载的流程图数据
-  if (!selectedBaseVersion.value) {
-    // 只有新建时才重置流程图数据
-    flowchartNodes.value = []
-    flowchartEdges.value = []
-  }
+  // 选择页可能已导入完整双流程工艺；进入编辑时必须保留两套画布。
   currentStep.value = 1
 }
 
@@ -282,10 +301,69 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-// 加载/导入流程图文件（支持 Studio 原生格式）
+function isFlowchartData(value: unknown): value is HaltHassFlowchart {
+  if (!value || typeof value !== 'object') return false
+  const flow = value as Partial<HaltHassFlowchart>
+  return Array.isArray(flow.nodes)
+    && Array.isArray(flow.edges)
+    && Array.isArray(flow.observeBlocks)
+    && Boolean(flow.runSettings && typeof flow.runSettings === 'object')
+}
+
+function isDualFlowProcess(value: unknown): value is HaltHassProcessJson {
+  if (!value || typeof value !== 'object') return false
+  const process = value as Partial<HaltHassProcessJson>
+  return process.schemaVersion === 2
+    && Boolean(process.metadata && process.installGuide)
+    && isFlowchartData(process.testFlow)
+    && isFlowchartData(process.cycleFlow)
+}
+
+function setLocalFlowState(
+  flowType: HaltHassFlowType,
+  nodes: Node[],
+  edges: Edge[],
+) {
+  if (flowType === 'test') {
+    testFlowNodes.value = nodes
+    testFlowEdges.value = edges
+  } else {
+    cycleFlowNodes.value = nodes
+    cycleFlowEdges.value = edges
+  }
+}
+
+function syncFlowStatesFromProcess() {
+  testFlowNodes.value = processJson.value.testFlow.nodes
+  testFlowEdges.value = processJson.value.testFlow.edges
+  cycleFlowNodes.value = processJson.value.cycleFlow.nodes
+  cycleFlowEdges.value = processJson.value.cycleFlow.edges
+}
+
+function syncAllFlowcharts() {
+  updateFlowchart(
+    'test',
+    testFlowNodes.value as Node<BlockData>[],
+    testFlowEdges.value,
+    processJson.value.testFlow.observeBlocks,
+  )
+  updateFlowchart(
+    'cycle',
+    cycleFlowNodes.value as Node<BlockData>[],
+    cycleFlowEdges.value,
+    processJson.value.cycleFlow.observeBlocks,
+  )
+}
+
+function showActiveFlowInEditor() {
+  if (!editorRef.value) return
+  editorRef.value.setFlowchartData(activeFlowNodes.value, activeFlowEdges.value)
+  setTimeout(() => editorRef.value?.fitToView(), 100)
+}
+
+// 导入完整双流程工艺，或在流程编辑步骤导入当前流程的 Studio JSON。
 async function handleLoad() {
   try {
-    // 打开文件选择对话框
     const selected = await open({
       multiple: false,
       filters: [
@@ -294,111 +372,125 @@ async function handleLoad() {
       ],
     })
     
-    if (!selected) return // 用户取消
-    
-    // 读取文件内容
+    if (!selected) return
+
     const content = await readTextFile(selected as string)
     const data = JSON.parse(content)
-    
-    let loadedNodes: Node[] = []
+
+    if (isDualFlowProcess(data)) {
+      processJson.value = data
+      syncFlowStatesFromProcess()
+      restoreSelectedBoardGroupFromProcess()
+      showActiveFlowInEditor()
+      editForm.hasUnsavedChanges = true
+      ElMessage.success(
+        `双流程工艺导入成功：测试流 ${data.testFlow.nodes.length} 个节点，循环流 ${data.cycleFlow.nodes.length} 个节点`
+      )
+      return
+    }
+
+    if (currentStep.value !== 2 && currentStep.value !== 3) {
+      ElMessage.warning('选择页只能导入 schemaVersion=2 的 HALT-HASS 双流程工艺文件')
+      return
+    }
+
+    let loadedNodes: Node<BlockData>[] = []
     let loadedEdges: Edge[] = []
-    
-    // 检测格式并解析
+    let importedObserveBlocks: string[] | undefined
+
     if (isStudioFormat(data)) {
-      // Studio 原生格式（rfInstance 包装）
       const { nodes, edges } = deserializeFromStudioFormat(data)
       loadedNodes = nodes
       loadedEdges = edges
-      
-      // 更新流程图名称
-      if (data.name) {
-        processJson.value.metadata.name = data.name
-      }
-    } else if (data.flowchart) {
-      // 我们自己的格式（带 flowchart 字段）
-      loadedNodes = data.flowchart.nodes || []
-      loadedEdges = data.flowchart.edges || []
-
-      // 恢复元数据
-      if (data.metadata) {
-        processJson.value.metadata = data.metadata
-      }
-      // 恢复安装指导
-      if (data.installGuide) {
-        processJson.value.installGuide = data.installGuide
-      }
+    } else if (isFlowchartData(data)) {
+      loadedNodes = data.nodes
+      loadedEdges = data.edges
+      importedObserveBlocks = data.observeBlocks.filter(
+          (blockId): blockId is string => typeof blockId === 'string'
+      )
+      processJson.value[
+        activeFlowType.value === 'test' ? 'testFlow' : 'cycleFlow'
+      ].runSettings = { ...data.runSettings }
     } else if (data.nodes && data.edges) {
-      // 纯节点/边格式
       loadedNodes = data.nodes || []
       loadedEdges = data.edges || []
     } else {
-      ElMessage.warning('无法识别的文件格式')
+      ElMessage.warning('无法识别的流程文件格式')
       return
     }
-    
-    // 更新本地状态
-    flowchartNodes.value = loadedNodes
-    flowchartEdges.value = loadedEdges
-    
-    // 直接调用编辑器的 setFlowchartData 方法更新画布
-    if (editorRef.value) {
-      editorRef.value.setFlowchartData(loadedNodes, loadedEdges)
-      // 延迟适应视图
-      setTimeout(() => {
-        editorRef.value?.fitToView()
-      }, 100)
-    }
-    
-    ElMessage.success(`成功导入流程图，共 ${loadedNodes.length} 个节点`)
+
+    setLocalFlowState(activeFlowType.value, loadedNodes, loadedEdges)
+    updateFlowchart(
+      activeFlowType.value,
+      loadedNodes,
+      loadedEdges,
+      importedObserveBlocks,
+    )
+    showActiveFlowInEditor()
+    ElMessage.success(
+      `${activeFlowLabel.value}导入成功，共 ${loadedNodes.length} 个节点`
+    )
   } catch (e) {
     console.error('导入失败:', e)
     ElMessage.error('导入失败: ' + (e instanceof Error ? e.message : '未知错误'))
   }
 }
 
-// 导出工艺（支持 Studio 原生格式）
-async function handleExport() {
+// 导出当前正在编辑的单个流程，便于与 Flojoy Studio 交换。
+async function handleExportFlow() {
   try {
-    // 打开保存对话框
     const filePath = await save({
-      defaultPath: `${processJson.value.metadata.name || 'halt-hass-process'}.json`,
+      defaultPath: `${processJson.value.metadata.name || 'halt-hass'}-${activeFlowType.value}-flow.json`,
       filters: [
         { name: 'JSON 文件', extensions: ['json'] },
       ],
     })
     
-    if (!filePath) return // 用户取消
-    
-    // 序列化为 Studio 原生格式
+    if (!filePath) return
+
     const studioData = serializeToStudioFormat(
-      processJson.value.metadata.name || '',
-      flowchartNodes.value,
-      flowchartEdges.value
+      `${processJson.value.metadata.name || ''}-${activeFlowLabel.value}`,
+      activeFlowNodes.value,
+      activeFlowEdges.value
     )
-    
-    // 写入文件
+
     await writeTextFile(filePath, JSON.stringify(studioData, null, 2))
-    
-    ElMessage.success('导出成功')
+    ElMessage.success(`${activeFlowLabel.value}导出成功`)
   } catch (e) {
     console.error('导出失败:', e)
-    
-    // 如果 Tauri 保存失败，回退到浏览器下载
+
     const studioData = serializeToStudioFormat(
-      processJson.value.metadata.name || '',
-      flowchartNodes.value,
-      flowchartEdges.value
+      `${processJson.value.metadata.name || ''}-${activeFlowLabel.value}`,
+      activeFlowNodes.value,
+      activeFlowEdges.value
     )
-    
+
     const blob = new Blob([JSON.stringify(studioData, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${processJson.value.metadata.name || 'halt-hass-process'}.json`
+    a.download = `${processJson.value.metadata.name || 'halt-hass'}-${activeFlowType.value}-flow.json`
     a.click()
     URL.revokeObjectURL(url)
     
-    ElMessage.success('导出成功（使用浏览器下载）')
+    ElMessage.success(`${activeFlowLabel.value}导出成功（使用浏览器下载）`)
+  }
+}
+
+// 导出完整工艺时同时保存测试流和循环流。
+async function handleExportProcess() {
+  syncAllFlowcharts()
+  try {
+    const filePath = await save({
+      defaultPath: `${processJson.value.metadata.name || 'halt-hass-process'}.json`,
+      filters: [{ name: 'JSON 文件', extensions: ['json'] }],
+    })
+    if (!filePath) return
+    await writeTextFile(filePath, JSON.stringify(processJson.value, null, 2))
+    ElMessage.success('双流程工艺导出成功')
+  } catch (error) {
+    console.error('完整工艺导出失败:', error)
+    ElMessage.error('完整工艺导出失败')
   }
 }
 
@@ -413,8 +505,7 @@ async function handleSaveTemp() {
     return
   }
 
-  // 暂存前同步流程图数据到 processJson
-  updateFlowchart(flowchartNodes.value as Node<BlockData>[], flowchartEdges.value)
+  syncAllFlowcharts()
 
   const success = await saveToTemp()
   if (success) {
@@ -437,8 +528,7 @@ async function handleSave() {
     return
   }
 
-  // 保存前同步流程图数据到 processJson
-  updateFlowchart(flowchartNodes.value as Node<BlockData>[], flowchartEdges.value)
+  syncAllFlowcharts()
 
   // 传递当前用户 ID
   const success = await uploadProcess(userInfo.value?.id)
@@ -447,8 +537,10 @@ async function handleSave() {
     // 返回选择页
     currentStep.value = 0
     resetProcess()
-    flowchartNodes.value = []
-    flowchartEdges.value = []
+    testFlowNodes.value = []
+    testFlowEdges.value = []
+    cycleFlowNodes.value = []
+    cycleFlowEdges.value = []
     selectedBaseVersion.value = null
     // 刷新我的待处理列表
     fetchMyJobData()
@@ -486,10 +578,8 @@ async function handleSubmitCheck() {
 
 // 流程图变化处理
 function handleFlowchartChange(nodes: Node[], edges: Edge[]) {
-  flowchartNodes.value = nodes
-  flowchartEdges.value = edges
-  // 同步更新到 processJson（使用适配层）
-  updateFlowchart(nodes as Node<BlockData>[], edges)
+  setLocalFlowState(activeFlowType.value, nodes, edges)
+  updateFlowchart(activeFlowType.value, nodes as Node<BlockData>[], edges)
 }
 
 // 运行流程图（使用适配层对齐 Studio）
@@ -502,16 +592,16 @@ async function handleRun() {
   const jobId = socketId.value || uuidv4()
   currentJobId.value = jobId
   clearNodeStatuses()
-  resetNodeStatuses()
+  resetNodeStatuses(activeFlowType.value)
   
   try {
     // 使用适配层准备运行参数
     const runArgs = prepareRunFlowchartArgs(
-      flowchartNodes.value as Node<BlockData>[],
-      flowchartEdges.value,
+      activeFlowNodes.value as Node<BlockData>[],
+      activeFlowEdges.value,
       jobId,
-      getObserveBlocks(),
-      getRunSettings()
+      getObserveBlocks(activeFlowType.value),
+      getRunSettings(activeFlowType.value)
     )
     
     await runFlowchart({
@@ -521,9 +611,10 @@ async function handleRun() {
       observeBlocks: runArgs.observeBlocks,
       settings: runArgs.settings,
     })
-    ElMessage.success('流程图开始运行')
+    ElMessage.success(`${activeFlowLabel.value}开始运行`)
   } catch (e) {
-    ElMessage.error('运行失败')
+    const message = e instanceof Error ? e.message : '未知错误'
+    ElMessage.error(`运行失败：${message}`)
     console.error(e)
   }
 }
@@ -548,8 +639,8 @@ function handleClear() {
     type: 'warning',
   }).then(() => {
     editorRef.value?.clearCanvas()
-    flowchartNodes.value = []
-    flowchartEdges.value = []
+    setLocalFlowState(activeFlowType.value, [], [])
+    updateFlowchart(activeFlowType.value, [], [])
   }).catch(() => {})
 }
 
@@ -640,13 +731,7 @@ async function handleSubmitFromJob(processId: number) {
 async function handleEditFromJob(row: HaltHassJob) {
   const success = await fetchProcess(row.id)
   if (success) {
-    // 恢复流程图数据（使用可选链确保安全访问）
-    const nodes = processJson.value.flowchart?.nodes || []
-    const edges = processJson.value.flowchart?.edges || []
-    if (nodes.length > 0) {
-      flowchartNodes.value = nodes
-      flowchartEdges.value = edges
-    }
+    syncFlowStatesFromProcess()
     restoreSelectedBoardGroupFromProcess()
     showJobDrawer.value = false
     const runtimeError = getRuntimeConfigError()
@@ -688,13 +773,7 @@ async function handleDeleteFromJob(processId: number) {
 async function handleContinueEdit(item: { fileName: string; name: string }) {
   const success = await loadFromTemp(item.fileName)
   if (success) {
-    // 恢复流程图数据（使用可选链确保安全访问）
-    const nodes = processJson.value.flowchart?.nodes || []
-    const edges = processJson.value.flowchart?.edges || []
-    if (nodes.length > 0) {
-      flowchartNodes.value = nodes
-      flowchartEdges.value = edges
-    }
+    syncFlowStatesFromProcess()
     restoreSelectedBoardGroupFromProcess()
     showJobDrawer.value = false
     const runtimeError = getRuntimeConfigError()
@@ -779,8 +858,9 @@ onMounted(async () => {
   // 配置 API
   configureApi('127.0.0.1', backendPort.value)
 
-  // 启动后端
-  if (!backendRunning.value) {
+  // 优先检查实际服务，兼容由外部进程启动的 Flojoy。
+  const backendHealthy = await checkHealth()
+  if (!backendHealthy && !backendRunning.value) {
     await startBackend()
   }
 
@@ -1146,14 +1226,29 @@ watch(currentStep, (step) => {
             />
           </div>
 
-          <!-- 步骤 2: 流程图编辑 -->
-          <div v-if="currentStep === 2" class="step-content step-2">
+          <!-- 步骤 2/3: 测试流与循环流使用相互隔离的画布 -->
+          <div v-if="currentStep === 2 || currentStep === 3" class="step-content step-2">
             <div class="flowchart-layout">
               <!-- 左侧 Block 侧边栏 -->
               <BlockSidebar :visible="showSidebar" />
               
               <!-- 右侧流程图区域 -->
               <div class="flowchart-main">
+                <div class="flow-editor-banner" :class="activeFlowType">
+                  <div>
+                    <strong>{{ activeFlowLabel }}编辑</strong>
+                    <span v-if="activeFlowType === 'test'">
+                      验证设备通断、通信状态和是否具备测试条件
+                    </span>
+                    <span v-else>
+                      按工单剩余总时长持续采集设备状态和实时曲线
+                    </span>
+                  </div>
+                  <span class="flow-node-count">
+                    {{ activeFlowNodes.length }} 个节点
+                  </span>
+                </div>
+
                 <!-- 控制栏 -->
                 <ControlBar
                   :is-running="flowchartRunning"
@@ -1166,14 +1261,15 @@ watch(currentStep, (step) => {
                   @load="handleLoad"
                   @clear="handleClear"
                   @fit-view="handleFitView"
-                  @export="handleExport"
+                  @export="handleExportFlow"
                 />
                 
                 <!-- 流程图编辑器 -->
                 <FlowchartEditor
+                  :key="activeFlowType"
                   ref="editorRef"
-                  :initial-nodes="flowchartNodes"
-                  :initial-edges="flowchartEdges"
+                  :initial-nodes="activeFlowNodes"
+                  :initial-edges="activeFlowEdges"
                   height="calc(100vh - 220px)"
                   @change="handleFlowchartChange"
                 />
@@ -1181,8 +1277,8 @@ watch(currentStep, (step) => {
             </div>
           </div>
 
-          <!-- 步骤 3: 预览确认 -->
-          <div v-if="currentStep === 3" class="step-content step-3">
+          <!-- 步骤 4: 预览确认 -->
+          <div v-if="currentStep === 4" class="step-content step-3">
             <div class="section">
               <h3 class="section-title">
                 <Icon icon="mdi:code-json" />
@@ -1216,7 +1312,7 @@ watch(currentStep, (step) => {
             <Icon icon="mdi:arrow-right" />
           </button>
           <template v-else>
-            <button class="btn-secondary" @click="handleExport" :disabled="isSaving">
+            <button class="btn-secondary" @click="handleExportProcess" :disabled="isSaving">
               <Icon icon="mdi:download" />
               导出文件
             </button>
@@ -2207,6 +2303,39 @@ watch(currentStep, (step) => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.flow-editor-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  background: rgba(59, 130, 246, 0.07);
+}
+
+.flow-editor-banner.cycle {
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.flow-editor-banner > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.flow-editor-banner strong {
+  color: var(--color-text-1, #1e293b);
+}
+
+.flow-editor-banner span {
+  font-size: 0.8125rem;
+  color: var(--color-text-2, #64748b);
+}
+
+.flow-node-count {
+  white-space: nowrap;
 }
 
 /* 预览 */

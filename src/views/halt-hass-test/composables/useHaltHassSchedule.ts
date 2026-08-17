@@ -72,7 +72,9 @@ export function useHaltHassSchedule() {
   const calBase = ref(getMonday(new Date()))
   const slotHeightPx = 44
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
-  const visibleOrderStatuses = [1, 4, 7]
+  // 报告提交前的工单都应留在客户端工作台：
+  // 待领取、测试中、待重做、暂存。
+  const visibleOrderStatuses = [1, 2, 4, 7]
 
   const currentWeekDays = computed<HaltHassWeekDay[]>(() => {
     const days: HaltHassWeekDay[] = []

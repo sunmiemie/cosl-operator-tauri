@@ -23,10 +23,28 @@ import { useMultiBoardScan } from './composables/useMultiBoardScan'
 import { useHaltHassReport } from './composables/useHaltHassReport'
 import { useScanner } from '@/composables/useScanner'
 import { useFlojoyBackend } from '@/composables/useFlojoyBackend'
-import { useFlojoySocket } from '@/composables/useFlojoySocket'
+import {
+  ServerStatus,
+  useFlojoySocket,
+} from '@/composables/useFlojoySocket'
 import { useLayout } from '@/composables/useLayout'
-import { runFlowchart, cancelFlowchartRun, configureApi } from '@/services/flojoy-api'
+import {
+  runFlowchart,
+  cancelFlowchartRun,
+  cancelCurrentFlowchartRun,
+  configureApi,
+  checkHealth,
+  runHassHardwarePreflight,
+  runHassHardwareShutdown,
+  type HassHardwarePreflightResponse,
+} from '@/services/flojoy-api'
+import {
+  buildHassCycleRunSettings,
+  hasHassDurationLoop,
+  resolveRemainingRuntimeSeconds,
+} from '@/services/hass-cycle-runtime'
 import { prepareRunFlowchartArgs } from '@/services/flojoy-adapter'
+import { getOrderDetail, resetRunningOrderExecution } from '@/services/halt-hass-order'
 import { v4 as uuidv4 } from 'uuid'
 import {
   getMockScannedBoards,
@@ -54,6 +72,9 @@ const {
   nodeResults,
   completedNodes,
   currentNodeId,
+  activeFlowType,
+  testFlowPassed,
+  testFlowResults,
   errorMessage,
   isDeviceReady,
   setPhase,
@@ -67,10 +88,12 @@ const {
   goToInstallStep,
   startFlowchartTest,
   beginFlowchartRun,
+  activateCycleRuntime,
+  pauseCycleRuntime,
   updateNodeResult,
+  advanceToCycleFlow,
   onFlowchartComplete,
   stopFlowchart,
-  saveTemp,
   restoreTemp,
   loadFeedback,
   reset: resetTest,
@@ -119,7 +142,6 @@ const {
 // Flojoy 后端
 const {
   start: startBackend,
-  isRunning: backendRunning,
   port: backendPort,
 } = useFlojoyBackend()
 
@@ -129,8 +151,10 @@ const {
   disconnect: disconnectSocket,
   isConnected: socketConnected,
   serverStatus,
+  blockResults,
   runningBlock,
   failedBlocks,
+  lastMessage,
   clearNodeStatuses,
 } = useFlojoySocket()
 
@@ -141,6 +165,27 @@ const deviceCheckError = ref('')
 // 当前运行的 Job ID
 const currentJobId = ref<string>('')
 let mockFlowchartRunToken = 0
+
+type CycleFinishState = 'idle' | 'running' | 'finishing' | 'recovering'
+
+// 循环流由软件总时长统一收口。倒计时归零后立即取消当前拓扑并执行
+// 独立关闭流程，不等待工艺 end 分支自行结束。
+const cycleRemainingSeconds = ref<number | null>(null)
+const cycleFinishState = ref<CycleFinishState>('idle')
+let cycleDeadlineMs: number | null = null
+let cycleCountdownTimer: ReturnType<typeof setInterval> | null = null
+let cycleRecoveryActive = false
+let flowchartCompletionActive = false
+
+// 正式测试流之前的设备通信门禁
+const hardwarePreflightResult = ref<HassHardwarePreflightResponse | null>(null)
+const isHardwarePreflightChecking = ref(false)
+const isHardwarePreflightReady = computed(() => {
+  if (isMockHaltHassOrder(currentOrder.value)) {
+    return hardwarePreflightResult.value?.ready === true
+  }
+  return hardwarePreflightResult.value?.ready === true && socketConnected.value
+})
 
 // 阶段标签配置
 const phaseLabels: Record<PagePhase, { label: string; icon: string }> = {
@@ -160,41 +205,194 @@ const flowchartStatusText = computed(() => {
   if (!isMockHaltHassOrder(currentOrder.value)) return serverStatus.value
   return isFlowchartRunning.value ? '本地演示运行中' : '演示流程就绪'
 })
+const activeFlowchart = computed(() => {
+  if (!processJson.value) return null
+  return activeFlowType.value === 'test'
+    ? processJson.value.testFlow
+    : processJson.value.cycleFlow
+})
+const cycleTotalSeconds = computed(() => {
+  const requiredSeconds = Number(currentOrder.value?.requiredRuntimeSeconds)
+  if (Number.isFinite(requiredSeconds) && requiredSeconds > 0) {
+    return Math.ceil(requiredSeconds)
+  }
+
+  const totalHours = Number(currentOrder.value?.totalCycleDurationHours)
+  return Number.isFinite(totalHours) && totalHours > 0
+    ? Math.ceil(totalHours * 3600)
+    : null
+})
 
 // ==================== 设备检测 ====================
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+async function ensureFlojoyConnected(): Promise<boolean> {
+  configureApi('127.0.0.1', backendPort.value)
+
+  let backendHealthy = await checkHealth()
+  if (!backendHealthy) {
+    await startBackend()
+    for (let attempt = 0; attempt < 12 && !backendHealthy; attempt++) {
+      await wait(500)
+      backendHealthy = await checkHealth()
+    }
+  }
+
+  if (!backendHealthy) {
+    return false
+  }
+
+  if (!socketConnected.value) {
+    connectSocket()
+  }
+
+  for (let attempt = 0; attempt < 20 && !socketConnected.value; attempt++) {
+    await wait(250)
+  }
+
+  return socketConnected.value
+}
+
+function clearCycleRuntimeTimers(resetDisplay = true) {
+  if (cycleCountdownTimer) {
+    clearInterval(cycleCountdownTimer)
+    cycleCountdownTimer = null
+  }
+  cycleDeadlineMs = null
+  if (resetDisplay) {
+    cycleRemainingSeconds.value = null
+    cycleFinishState.value = 'idle'
+  }
+}
+
+function updateCycleRuntimeCountdown() {
+  if (
+    !isFlowchartRunning.value
+    || activeFlowType.value !== 'cycle'
+    || cycleDeadlineMs === null
+  ) {
+    return
+  }
+
+  const remaining = Math.max(
+    0,
+    Math.ceil((cycleDeadlineMs - Date.now()) / 1000)
+  )
+  cycleRemainingSeconds.value = remaining
+  if (remaining > 0 || cycleFinishState.value !== 'running') return
+
+  cycleFinishState.value = 'finishing'
+  if (cycleCountdownTimer) {
+    clearInterval(cycleCountdownTimer)
+    cycleCountdownTimer = null
+  }
+  ElMessage.info('循环时长已到，正在执行停止、下电和连接释放流程')
+  void recoverTimedOutCycleFlow()
+}
+
+function startCycleRuntimeCountdown(durationSeconds: number) {
+  clearCycleRuntimeTimers(false)
+  const duration = Math.max(0, Math.ceil(durationSeconds))
+  cycleRemainingSeconds.value = duration
+  cycleFinishState.value = duration > 0 ? 'running' : 'finishing'
+  cycleDeadlineMs = Date.now() + duration * 1000
+
+  if (duration === 0) {
+    void recoverTimedOutCycleFlow()
+    return
+  }
+
+  cycleCountdownTimer = setInterval(updateCycleRuntimeCountdown, 250)
+}
+
+async function recoverTimedOutCycleFlow() {
+  if (
+    cycleRecoveryActive
+    || !isFlowchartRunning.value
+    || activeFlowType.value !== 'cycle'
+  ) {
+    return
+  }
+
+  cycleRecoveryActive = true
+  cycleFinishState.value = 'recovering'
+  const cycleNodeErrors = Object.entries(failedBlocks.value).map(
+    ([nodeId, error]) => ({ nodeId, error })
+  )
+  ElMessage.info('循环测试已完成，软件正在停止流程并执行下电')
+
+  try {
+    const flojoyReady = await ensureFlojoyConnected()
+    if (!flojoyReady) {
+      throw new Error('Flojoy 后端无法恢复，不能确认设备已安全下电')
+    }
+
+    // jobId 为 null 时只取消当前拓扑，不提前广播 STANDBY。取消动作可能
+    // 写入节点失败状态，因此测试结论已在取消前冻结到 cycleNodeErrors。
+    await cancelCurrentFlowchartRun()
+    currentJobId.value = ''
+    // cancel_fc 返回后拓扑清理是异步的，给 DeviceManager 一个很短的释放窗口，
+    // 随后立即由独立关闭接口重新枚举设备并下电。
+    await wait(600)
+
+    const cycleNodes = processJson.value?.cycleFlow.nodes || []
+    const shutdown = await runHassHardwareShutdown(cycleNodes as any)
+    if (!shutdown.success) {
+      const failedMessages = shutdown.results
+        .filter(item => !item.success)
+        .map(item => `${item.displayName}：${item.message}`)
+        .join('；')
+      throw new Error(failedMessages || shutdown.message)
+    }
+
+    await completeActiveFlowchartRun({
+      completionMode: 'software-runtime-complete',
+      cycleNodeErrors,
+      shutdownResults: shutdown.results,
+    }, {
+      completionSuccess: true,
+      allowRuntimePauseFailure: true,
+    })
+    ElMessage.success('下电完成，已进入报告保存阶段')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    try {
+      await pauseCycleRuntime()
+    } catch (pauseError) {
+      console.error('[HALT-HASS] 安全收尾失败后冻结计时失败:', pauseError)
+    }
+    stopFlowchart()
+    clearCycleRuntimeTimers()
+    ElMessage.error(`循环流关闭失败：${message}`)
+    console.error('[HALT-HASS] 循环流关闭失败:', error)
+  } finally {
+    cycleRecoveryActive = false
+  }
+}
 
 async function checkDevices() {
   deviceCheckStatus.value = 'checking'
   deviceCheckError.value = ''
 
-  // 检查 Flojoy 后端
-  if (!backendRunning.value) {
-    await startBackend()
-  }
-
-  // 配置 API
-  configureApi('127.0.0.1', backendPort.value)
-
-  // 连接 WebSocket
-  connectSocket()
-
-  // 等待连接建立
-  await new Promise(resolve => setTimeout(resolve, 1500))
+  const flojoyOk = await ensureFlojoyConnected()
 
   // 检查扫码枪
   const scannerOk = await checkScanner()
 
   // 更新状态
   updateDeviceStatus({
-    flojoyBackend: socketConnected.value,
+    flojoyBackend: flojoyOk,
     scanner: scannerOk,
   })
 
-  if (socketConnected.value && scannerOk) {
+  if (flojoyOk && scannerOk) {
     deviceCheckStatus.value = 'success'
   } else {
     deviceCheckStatus.value = 'error'
-    deviceCheckError.value = !socketConnected.value
+    deviceCheckError.value = !flojoyOk
       ? 'Flojoy 后端连接失败'
       : '扫码枪未连接'
   }
@@ -235,14 +433,44 @@ async function onScanData(data: string) {
 }
 
 async function handleStartScheduledTest(order: HaltHassOrder) {
+  let targetOrder = order
+  if (!isMockHaltHassOrder(order)) {
+    try {
+      const detailResult = await getOrderDetail(order.id)
+      if (detailResult.success && detailResult.data) {
+        targetOrder = detailResult.data
+        if (targetOrder.status !== order.status) {
+          void schedule.refreshWorkOrders()
+        }
+      }
+    } catch (error) {
+      console.warn('刷新 HALT-HASS 工单详情失败，继续使用当前排程数据:', error)
+    }
+  }
+
+  if (targetOrder.status === 2) {
+    const confirmed = await ElMessageBox.confirm(
+      '将停止当前 Flojoy 任务并清空上一轮执行和扫码记录，原有排程保持不变。随后从设备检测和 5 块电路板扫码重新开始。',
+      '确认从头开始',
+      {
+        confirmButtonText: '开始测试',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    ).catch(() => false)
+    if (!confirmed) return
+  }
+
+  resetHardwarePreflight()
+  clearCycleRuntimeTimers()
   stopScanning()
   resetTest()
   resetScan()
   resetReport()
 
-  if (isMockHaltHassOrder(order)) {
-    const boards = getMockScannedBoards(order)
-    const hydratedOrder = { ...order, scannedBoards: boards }
+  if (isMockHaltHassOrder(targetOrder)) {
+    const boards = getMockScannedBoards(targetOrder)
+    const hydratedOrder = { ...targetOrder, scannedBoards: boards }
     setOrder(hydratedOrder)
     setScanOrder(hydratedOrder, boards)
     setPhase('scan')
@@ -250,9 +478,9 @@ async function handleStartScheduledTest(order: HaltHassOrder) {
     return
   }
 
-  if (order.status === 7) {
-    setScanOrder(order, order.scannedBoards || [])
-    const restored = await restoreTemp(order)
+  if (targetOrder.status === 7) {
+    setScanOrder(targetOrder, targetOrder.scannedBoards || [])
+    const restored = await restoreTemp(targetOrder)
     if (restored) {
       ElMessage.success('已恢复 HALT-HASS 暂存测试')
     } else {
@@ -262,9 +490,9 @@ async function handleStartScheduledTest(order: HaltHassOrder) {
     return
   }
 
-  if (order.status === 4) {
-    setScanOrder(order, order.scannedBoards || [])
-    const loaded = await loadFeedback(order)
+  if (targetOrder.status === 4) {
+    setScanOrder(targetOrder, targetOrder.scannedBoards || [])
+    const loaded = await loadFeedback(targetOrder)
     if (loaded) {
       ElMessage.success('已加载 HALT-HASS 打回反馈')
     } else {
@@ -274,8 +502,57 @@ async function handleStartScheduledTest(order: HaltHassOrder) {
     return
   }
 
-  setOrder(order)
-  setScanOrder(order)
+  if (targetOrder.status === 2) {
+    // 原排程不变，只清空上一轮执行状态；随后按普通待领取工单重新检测和扫码。
+    const flojoyReady = await ensureFlojoyConnected()
+    updateDeviceStatus({ flojoyBackend: flojoyReady })
+    if (!flojoyReady) {
+      ElMessage.error('Flojoy 后端连接失败，工单尚未清空')
+      setPhase('schedule')
+      return
+    }
+
+    try {
+      await cancelCurrentFlowchartRun()
+    } catch (error) {
+      console.error('停止 Flojoy 当前任务失败:', error)
+      ElMessage.error('无法停止 Flojoy 当前任务，工单尚未清空')
+      setPhase('schedule')
+      return
+    }
+
+    const resetResult = await resetRunningOrderExecution(targetOrder.id)
+    if (!resetResult.success) {
+      ElMessage.error(resetResult.error || '清空上一轮执行状态失败')
+      setPhase('schedule')
+      return
+    }
+
+    const freshOrder: HaltHassOrder = {
+      ...targetOrder,
+      status: 1,
+      scannedBoards: [],
+      startedAt: undefined,
+      completedAt: undefined,
+      elapsedRuntimeSeconds: 0,
+      remainingRuntimeSeconds: targetOrder.requiredRuntimeSeconds,
+      runtimeProgress: 0,
+      runtimeCompleted: false,
+      currentRunStartedAt: null,
+    }
+    setOrder(freshOrder)
+    setScanOrder(freshOrder, [])
+    currentJobId.value = ''
+    clearNodeStatuses()
+    resetHardwarePreflight()
+    setPhase('detect')
+    void checkDevices()
+    ElMessage.success('原排程已保留，请完成设备检测并重新扫描 5 块电路板')
+    return
+  }
+
+  setOrder(targetOrder)
+  setScanOrder(targetOrder)
   setPhase('detect')
   void checkDevices()
 }
@@ -317,6 +594,74 @@ function handleStartFlowchartTest() {
 
 // ==================== 流程图运行 ====================
 
+function resetHardwarePreflight() {
+  hardwarePreflightResult.value = null
+  isHardwarePreflightChecking.value = false
+}
+
+async function handleHardwarePreflight() {
+  if (!processJson.value) {
+    ElMessage.warning('工艺数据不存在，无法执行设备通信检测')
+    return
+  }
+  if (!socketConnected.value && !isMockHaltHassOrder(currentOrder.value)) {
+    ElMessage.warning('Flojoy 后端未连接，请先恢复后端连接')
+    return
+  }
+
+  isHardwarePreflightChecking.value = true
+  hardwarePreflightResult.value = null
+
+  try {
+    if (isMockHaltHassOrder(currentOrder.value)) {
+      hardwarePreflightResult.value = {
+        ready: true,
+        powerMaintained: false,
+        powerResource: '',
+        message: '演示设备通信正常',
+        results: [
+          {
+            role: 'itech6723',
+            displayName: 'ITECH 6723G',
+            success: true,
+            message: '演示模式：48 V / 1 A 输出正常',
+            details: {},
+          },
+          {
+            role: 'ifbox',
+            displayName: 'IFBOX',
+            success: true,
+            message: '演示模式：设备在线，串口可用',
+            details: {},
+          },
+        ],
+      }
+      ElMessage.success('演示设备通信检测通过')
+      return
+    }
+
+    const result = await runHassHardwarePreflight(
+      [
+        ...processJson.value.testFlow.nodes,
+        ...processJson.value.cycleFlow.nodes,
+      ] as any
+    )
+    hardwarePreflightResult.value = result
+
+    if (result.ready) {
+      ElMessage.success('全部设备在线且端口可用，可以运行测试流')
+    } else {
+      ElMessage.error(result.message || '存在未枚举或端口无法打开的设备')
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '设备通信检测失败'
+    ElMessage.error(message)
+    console.error('[HALT-HASS] 设备通信检测失败:', error)
+  } finally {
+    isHardwarePreflightChecking.value = false
+  }
+}
+
 async function simulateMockFlowchartRun() {
   if (!processJson.value || !currentOrder.value || !flowchartStartTime.value) {
     ElMessage.warning('演示工单数据不存在')
@@ -325,7 +670,7 @@ async function simulateMockFlowchartRun() {
 
   const runToken = ++mockFlowchartRunToken
   clearNodeStatuses()
-  const nodes = processJson.value.flowchart.nodes
+  const nodes = activeFlowchart.value?.nodes || []
 
   for (const node of nodes) {
     const startTime = new Date()
@@ -337,6 +682,7 @@ async function simulateMockFlowchartRun() {
     const nodeName = typeof nodeData?.label === 'string' ? nodeData.label : node.id
 
     updateNodeResult({
+      flowType: activeFlowType.value,
       nodeId: node.id,
       nodeName,
       status: 'success',
@@ -347,19 +693,10 @@ async function simulateMockFlowchartRun() {
     })
   }
 
-  onFlowchartComplete(true)
-  generateReport({
-    order: currentOrder.value,
-    boards: [...scannedBoards.value],
-    startTime: flowchartStartTime.value,
-    endTime: new Date(),
-    nodeResults: [...nodeResults.value],
-    testData: {
-      mode: 'mock',
-      note: 'HALT-HASS 演示工单模拟完成',
-    },
+  await completeActiveFlowchartRun({
+    mode: 'mock',
+    note: 'HALT-HASS 演示工单模拟完成',
   })
-  ElMessage.success('演示流程图运行完成')
 }
 
 async function handleRunFlowchart() {
@@ -368,6 +705,52 @@ async function handleRunFlowchart() {
     return
   }
 
+  if (!isHardwarePreflightReady.value) {
+    ElMessage.warning('请先完成设备通信检测，确认全部设备可以通信')
+    return
+  }
+
+  const flowchartData = activeFlowchart.value
+  if (!flowchartData || flowchartData.nodes.length === 0) {
+    ElMessage.warning(
+      activeFlowType.value === 'test' ? '测试流没有节点' : '循环流没有节点'
+    )
+    return
+  }
+
+  const isCycleFlow = activeFlowType.value === 'cycle'
+  let remainingDurationSeconds: number | undefined
+  let runSettings = flowchartData.runSettings
+
+  if (isCycleFlow) {
+    if (!testFlowPassed.value) {
+      ElMessage.warning('测试流尚未通过，不能运行循环流')
+      return
+    }
+    if (!hasHassDurationLoop(flowchartData.nodes as any)) {
+      ElMessage.warning('循环流缺少 HALT_HASS_DURATION_LOOP 时长控制节点')
+      return
+    }
+    if (!currentOrder.value?.runtimeConfigured) {
+      ElMessage.warning('当前工单没有配置 HALT-HASS 循环总时长')
+      return
+    }
+
+    remainingDurationSeconds = resolveRemainingRuntimeSeconds(currentOrder.value)
+    if (remainingDurationSeconds <= 0) {
+      beginFlowchartRun()
+      startCycleRuntimeCountdown(0)
+      return
+    }
+    runSettings = buildHassCycleRunSettings(
+      flowchartData.runSettings,
+      remainingDurationSeconds
+    )
+  }
+
+  if (!isCycleFlow) {
+    clearCycleRuntimeTimers()
+  }
   beginFlowchartRun()
 
   if (isMockHaltHassOrder(currentOrder.value)) {
@@ -380,13 +763,12 @@ async function handleRunFlowchart() {
   clearNodeStatuses()
 
   try {
-    const flowchartData = processJson.value.flowchart
     const runArgs = prepareRunFlowchartArgs(
       flowchartData.nodes as Node<BlockData>[],
       flowchartData.edges,
       jobId,
       flowchartData.observeBlocks,
-      flowchartData.runSettings
+      runSettings
     )
 
     await runFlowchart({
@@ -395,12 +777,38 @@ async function handleRunFlowchart() {
       jobId: runArgs.jobId,
       observeBlocks: runArgs.observeBlocks,
       settings: runArgs.settings,
+      haltHassRemainingDurationSeconds: remainingDurationSeconds,
     })
 
-    ElMessage.success('流程图开始运行')
+    if (isCycleFlow) {
+      const runtimeActivated = await activateCycleRuntime()
+      if (!runtimeActivated) {
+        try {
+          await cancelFlowchartRun(jobId)
+        } catch (cancelError) {
+          console.error('[HALT-HASS] 循环计时启动失败后停止 Flojoy 失败:', cancelError)
+        }
+        throw new Error(errorMessage.value || '启动循环流计时失败')
+      }
+
+      const runtimeRemaining = currentOrder.value
+        ? resolveRemainingRuntimeSeconds(currentOrder.value)
+        : remainingDurationSeconds || 0
+      startCycleRuntimeCountdown(runtimeRemaining)
+    }
+
+    ElMessage.success(
+      activeFlowType.value === 'test'
+        ? '测试流开始运行'
+        : `循环流开始运行，剩余 ${remainingDurationSeconds} 秒`
+    )
   } catch (e) {
     stopFlowchart()
-    ElMessage.error('运行失败')
+    if (isCycleFlow) {
+      clearCycleRuntimeTimers()
+    }
+    const message = e instanceof Error ? e.message : '未知错误'
+    ElMessage.error(`运行失败：${message}`)
     console.error(e)
   }
 }
@@ -418,6 +826,14 @@ async function handleStopFlowchart() {
       await cancelFlowchartRun(currentJobId.value)
       stopFlowchart()
       currentJobId.value = ''
+      if (activeFlowType.value === 'cycle') {
+        const paused = await pauseCycleRuntime()
+        clearCycleRuntimeTimers()
+        if (!paused) {
+          ElMessage.error(errorMessage.value || '循环流已停止，但累计时长冻结失败')
+          return
+        }
+      }
       ElMessage.info('已停止运行')
     } catch (e) {
       ElMessage.error('停止失败')
@@ -429,29 +845,44 @@ async function handleStopFlowchart() {
   ElMessage.info('已停止运行')
 }
 
-async function handleSaveTemp() {
-  const success = await saveTemp()
-  if (success) {
-    ElMessage.success('已暂存测试数据')
-  } else {
-    ElMessage.error(errorMessage.value || '暂存失败')
-  }
-}
-
-// 监听 WebSocket 状态变化
-watch(runningBlock, (nodeId) => {
-  if (nodeId) {
+// Flojoy 将 RUNNING_NODE 清空或切换到下一节点时，上一节点才算执行结束。
+watch(runningBlock, (nodeId, previousNodeId) => {
+  if (
+    previousNodeId
+    && previousNodeId !== nodeId
+    && !(previousNodeId in failedBlocks.value)
+  ) {
     updateNodeResult({
-      nodeId,
-      nodeName: nodeId,
+      flowType: activeFlowType.value,
+      nodeId: previousNodeId,
+      nodeName: previousNodeId,
       status: 'success',
     })
   }
 })
 
+// NODE_RESULTS 是节点成功完成的权威消息，同时保留实际输出供报告使用。
+watch(
+  blockResults,
+  (results, previousResults = {}) => {
+    for (const [nodeId, output] of Object.entries(results)) {
+      if (previousResults[nodeId] === output) continue
+      updateNodeResult({
+        flowType: activeFlowType.value,
+        nodeId,
+        nodeName: nodeId,
+        status: 'success',
+        output,
+      })
+    }
+  },
+  { immediate: true }
+)
+
 watch(failedBlocks, (failed) => {
   for (const [nodeId, error] of Object.entries(failed)) {
     updateNodeResult({
+      flowType: activeFlowType.value,
       nodeId,
       nodeName: nodeId,
       status: 'error',
@@ -460,25 +891,124 @@ watch(failedBlocks, (failed) => {
   }
 })
 
-// 检查流程图是否运行完成
-watch([completedNodes, () => processJson.value?.flowchart?.nodes?.length], ([completed, total]) => {
-  if (total && completed.length >= total && isFlowchartRunning.value) {
-    // 运行完成
-    const hasError = Object.keys(failedBlocks.value).length > 0
-    onFlowchartComplete(!hasError)
+interface FlowchartCompletionOptions {
+  completionSuccess?: boolean
+  allowRuntimePauseFailure?: boolean
+}
 
-    // 生成报告
+async function completeActiveFlowchartRun(
+  testData?: Record<string, unknown>,
+  options: FlowchartCompletionOptions = {},
+) {
+  if (!isFlowchartRunning.value || flowchartCompletionActive) return
+
+  flowchartCompletionActive = true
+  try {
+    const hasError = options.completionSuccess === undefined
+      ? Object.keys(failedBlocks.value).length > 0
+      : !options.completionSuccess
+    if (activeFlowType.value === 'test') {
+      stopFlowchart()
+      if (hasError) {
+        ElMessage.error('测试流执行失败，请排除设备或通信问题后重新运行')
+        return
+      }
+      advanceToCycleFlow()
+      clearNodeStatuses()
+      ElMessage.success('测试流通过，已进入循环流')
+      return
+    }
+
+    clearCycleRuntimeTimers(false)
+    const paused = await pauseCycleRuntime()
+    if (!paused && !options.allowRuntimePauseFailure) {
+      stopFlowchart()
+      clearCycleRuntimeTimers()
+      ElMessage.error(errorMessage.value || '循环流完成，但累计时长冻结失败')
+      return
+    }
+    if (!paused) {
+      console.warn(
+        '[HALT-HASS] 循环测试已经到时并完成下电，但累计时长冻结接口失败，继续进入报告阶段',
+        errorMessage.value,
+      )
+    }
+
+    onFlowchartComplete(!hasError)
+    clearCycleRuntimeTimers()
+
     if (currentOrder.value && flowchartStartTime.value) {
       generateReport({
         order: currentOrder.value,
         boards: [...scannedBoards.value],
         startTime: flowchartStartTime.value,
         endTime: new Date(),
-        nodeResults: [...nodeResults.value],
+        nodeResults: [...testFlowResults.value, ...nodeResults.value],
+        testData,
       })
     }
+  } finally {
+    flowchartCompletionActive = false
   }
-})
+}
+
+// 检查流程图是否运行完成
+watch(
+  [
+    () => completedNodes.value.length,
+    () => activeFlowchart.value?.nodes.length,
+  ],
+  ([completedCount, total]) => {
+    if (activeFlowType.value === 'cycle') {
+      // 循环流会重复执行同一批节点，不能用节点去重数量判断完成。
+      return
+    }
+
+    if (total && completedCount >= total && isFlowchartRunning.value) {
+      void completeActiveFlowchartRun()
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  serverStatus,
+  (status, previousStatus) => {
+    if (
+      isFlowchartRunning.value
+      && activeFlowType.value === 'cycle'
+      && status === ServerStatus.MAXIMUM_RUNTIME_EXCEEDED
+    ) {
+      cycleRemainingSeconds.value = 0
+      cycleFinishState.value = 'finishing'
+      void recoverTimedOutCycleFlow()
+      return
+    }
+
+    if (
+      isFlowchartRunning.value
+      && !cycleRecoveryActive
+      && status === ServerStatus.STANDBY
+      && previousStatus !== ServerStatus.STANDBY
+    ) {
+      // STANDBY 是 Flojoy 整个拓扑完成的最终信号。
+      // 测试流用它兜底快速节点的结果同步，循环流等待 end 清理分支结束。
+      if (
+        activeFlowType.value === 'cycle'
+        && (cycleRemainingSeconds.value ?? 0) > 0
+        && Object.keys(failedBlocks.value).length === 0
+      ) {
+        clearCycleRuntimeTimers()
+        stopFlowchart()
+        void pauseCycleRuntime()
+        ElMessage.error('循环流在倒计时结束前提前退出，未判定为测试完成')
+        return
+      }
+      void completeActiveFlowchartRun()
+    }
+  },
+  { immediate: true }
+)
 
 // ==================== 报告上传 ====================
 
@@ -502,21 +1032,28 @@ function handleComplete() {
 // ==================== 退出和重置 ====================
 
 async function handleExit() {
-  const confirmed = await ElMessageBox.confirm(
-    '确定要退出测试吗？未保存的数据将丢失。',
-    '退出确认',
-    {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
-    }
-  ).catch(() => false)
+  const isCompletedReturn = phase.value === 'complete'
+  if (!isCompletedReturn) {
+    const confirmed = await ElMessageBox.confirm(
+      '确定要退出测试吗？未保存的数据将丢失。',
+      '退出确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    ).catch(() => false)
 
-  if (!confirmed) return
+    if (!confirmed) return
+  }
 
   // 停止所有操作
+  clearCycleRuntimeTimers()
   stopScanning()
   disconnectSocket()
+
+  // 返回排程页前重新读取后端状态，避免已上传报告的工单仍残留在客户端缓存中。
+  await schedule.refreshWorkOrders()
 
   // 重置状态
   resetTest()
@@ -527,7 +1064,9 @@ async function handleExit() {
   exitEditMode()
 }
 
-function handleNewTest() {
+async function handleNewTest() {
+  resetHardwarePreflight()
+  clearCycleRuntimeTimers()
   resetTest()
   resetScan()
   resetReport()
@@ -554,6 +1093,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  clearCycleRuntimeTimers()
   stopScanning()
   disconnectSocket()
   exitEditMode()
@@ -735,7 +1275,10 @@ onUnmounted(() => {
     <!-- 测试阶段：安装、测试、上传、完成 - 隐藏侧边栏 -->
     <template v-else>
       <!-- 顶部状态栏 -->
-      <div class="top-bar">
+      <div
+        class="top-bar"
+        :class="{ 'cycle-mode': phase === 'test' && activeFlowType === 'cycle' }"
+      >
         <div class="top-left">
           <button class="exit-btn" @click="handleExit">
             <Icon icon="mdi:arrow-left" />
@@ -782,14 +1325,23 @@ onUnmounted(() => {
       <div v-if="phase === 'test'" class="phase-content test-phase">
         <FlowchartRunner
           :process-json="processJson"
+          :active-flow-type="activeFlowType"
+          :test-flow-passed="testFlowPassed"
           :is-running="isFlowchartRunning"
+          :cycle-total-seconds="cycleTotalSeconds"
+          :cycle-remaining-seconds="cycleRemainingSeconds"
+          :cycle-finish-state="cycleFinishState"
           :current-node-id="currentNodeId"
           :completed-nodes="completedNodes"
           :node-results="nodeResults"
           :server-status="flowchartStatusText"
+          :preflight-result="hardwarePreflightResult"
+          :is-preflight-checking="isHardwarePreflightChecking"
+          :preflight-ready="isHardwarePreflightReady"
+          :last-socket-message="lastMessage"
+          @preflight="handleHardwarePreflight"
           @run="handleRunFlowchart"
           @stop="handleStopFlowchart"
-          @save="handleSaveTemp"
         />
       </div>
 
@@ -1089,6 +1641,12 @@ onUnmounted(() => {
   background: var(--color-bg-secondary, #1e293b);
   border-bottom: 1px solid var(--color-border, #334155);
   margin: -24px -24px 20px -24px;
+}
+
+.top-bar.cycle-mode {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .top-left {

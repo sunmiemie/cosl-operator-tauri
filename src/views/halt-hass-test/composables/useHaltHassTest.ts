@@ -11,9 +11,14 @@ import type {
   DeviceStatus,
   NodeRunResult,
 } from '@/views/halt-hass-test/types'
-import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
+import type {
+  HaltHassFlowType,
+  HaltHassProcessJson,
+} from '@/views/process-halt-hass/types'
 import {
   startOrder,
+  startOrderCycleRuntime,
+  pauseOrderCycleRuntime,
   uploadTempData,
   downloadTempData,
   downloadFeedbackData,
@@ -60,6 +65,9 @@ export function useHaltHassTest() {
   const nodeResults = ref<NodeRunResult[]>([])
   const completedNodes = ref<string[]>([])
   const currentNodeId = ref<string>('')
+  const activeFlowType = ref<HaltHassFlowType>('test')
+  const testFlowPassed = ref(false)
+  const testFlowResults = ref<NodeRunResult[]>([])
 
   // ==================== 错误和加载状态 ====================
 
@@ -84,7 +92,10 @@ export function useHaltHassTest() {
   })
 
   const flowchartProgress = computed(() => {
-    const totalNodes = processJson.value?.flowchart?.nodes?.length ?? 0
+    const flow = activeFlowType.value === 'test'
+      ? processJson.value?.testFlow
+      : processJson.value?.cycleFlow
+    const totalNodes = flow?.nodes.length ?? 0
     if (totalNodes === 0) return 0
     return Math.round((completedNodes.value.length / totalNodes) * 100)
   })
@@ -172,10 +183,15 @@ export function useHaltHassTest() {
     order.runtimeProgress = runtime.runtimeProgress ?? order.runtimeProgress
     order.runtimeConfigured = runtime.runtimeConfigured ?? order.runtimeConfigured
     order.runtimeCompleted = runtime.runtimeCompleted ?? order.runtimeCompleted
-    order.currentRunStartedAt = runtime.currentRunStartedAt ?? order.currentRunStartedAt
+    if (runtime.currentRunStartedAt !== undefined) {
+      order.currentRunStartedAt = runtime.currentRunStartedAt
+    }
   }
 
-  async function activateOrderRuntime(order: HaltHassOrder, serials = getOrderSerials(order)): Promise<boolean> {
+  async function activateOrderRuntime(
+    order: HaltHassOrder,
+    serials = getOrderSerials(order),
+  ): Promise<boolean> {
     if (isMockHaltHassOrder(order)) return true
     if (!userInfo.value) {
       errorMessage.value = '用户信息不存在'
@@ -196,6 +212,49 @@ export function useHaltHassTest() {
     }
     applyRuntimeState(order, result.data)
     return true
+  }
+
+  async function activateCycleRuntime(): Promise<boolean> {
+    if (!currentOrder.value) {
+      errorMessage.value = '工单不存在'
+      return false
+    }
+    if (isMockHaltHassOrder(currentOrder.value)) return true
+
+    const result = await startOrderCycleRuntime(currentOrder.value.id)
+    if (!result.success) {
+      errorMessage.value = result.error || '启动循环流计时失败'
+      return false
+    }
+    applyRuntimeState(currentOrder.value, result.data)
+    return true
+  }
+
+  async function pauseCycleRuntime(): Promise<boolean> {
+    if (!currentOrder.value || isMockHaltHassOrder(currentOrder.value)) {
+      return true
+    }
+
+    const result = await pauseOrderCycleRuntime(currentOrder.value.id)
+    if (!result.success) {
+      errorMessage.value = result.error || '暂停循环流计时失败'
+      return false
+    }
+    applyRuntimeState(currentOrder.value, result.data)
+    return true
+  }
+
+  function resetExecutionState(): void {
+    installStep.value = 0
+    isFlowchartRunning.value = false
+    flowchartStartTime.value = null
+    flowchartEndTime.value = null
+    nodeResults.value = []
+    completedNodes.value = []
+    currentNodeId.value = ''
+    activeFlowType.value = 'test'
+    testFlowPassed.value = false
+    testFlowResults.value = []
   }
 
   /**
@@ -313,21 +372,26 @@ export function useHaltHassTest() {
     nodeResults.value = []
     completedNodes.value = []
     currentNodeId.value = ''
+    activeFlowType.value = 'test'
+    testFlowPassed.value = false
+    testFlowResults.value = []
   }
 
-  // ==================== 流程图运行方法 ====================
-
   /**
-   * 用户确认运行后再开始计时和切换控制按钮。
+   * 设备通信预检通过后，正式标记流程图开始运行。
    */
   function beginFlowchartRun(): void {
     isFlowchartRunning.value = true
-    flowchartStartTime.value = new Date()
+    if (activeFlowType.value === 'test' || !flowchartStartTime.value) {
+      flowchartStartTime.value = new Date()
+    }
     flowchartEndTime.value = null
     nodeResults.value = []
     completedNodes.value = []
     currentNodeId.value = ''
   }
+
+  // ==================== 流程图运行方法 ====================
 
   /**
    * 更新节点运行结果
@@ -347,6 +411,19 @@ export function useHaltHassTest() {
     }
 
     currentNodeId.value = result.nodeId
+  }
+
+  /**
+   * 测试流成功后进入循环流。测试流结果单独保留，供最终报告合并。
+   */
+  function advanceToCycleFlow(): void {
+    testFlowResults.value = nodeResults.value.map(result => ({ ...result }))
+    testFlowPassed.value = true
+    activeFlowType.value = 'cycle'
+    isFlowchartRunning.value = false
+    nodeResults.value = []
+    completedNodes.value = []
+    currentNodeId.value = ''
   }
 
   /**
@@ -388,6 +465,9 @@ export function useHaltHassTest() {
         phase: phase.value,
         installStep: installStep.value,
         flowchartState: {
+          activeFlowType: activeFlowType.value,
+          testFlowPassed: testFlowPassed.value,
+          testFlowResults: testFlowResults.value,
           currentNodeId: currentNodeId.value,
           completedNodes: completedNodes.value,
           nodeResults: nodeResults.value,
@@ -438,6 +518,9 @@ export function useHaltHassTest() {
       installStep.value = tempData.installStep
 
       if (tempData.flowchartState) {
+        activeFlowType.value = tempData.flowchartState.activeFlowType
+        testFlowPassed.value = tempData.flowchartState.testFlowPassed
+        testFlowResults.value = tempData.flowchartState.testFlowResults
         currentNodeId.value = tempData.flowchartState.currentNodeId || ''
         completedNodes.value = tempData.flowchartState.completedNodes || []
         nodeResults.value = tempData.flowchartState.nodeResults || []
@@ -505,13 +588,7 @@ export function useHaltHassTest() {
     currentOrder.value = null
     processJson.value = null
     deviceStatus.value = { flojoyBackend: false, scanner: false, camera: false }
-    installStep.value = 0
-    isFlowchartRunning.value = false
-    flowchartStartTime.value = null
-    flowchartEndTime.value = null
-    nodeResults.value = []
-    completedNodes.value = []
-    currentNodeId.value = ''
+    resetExecutionState()
     isLoading.value = false
     errorMessage.value = ''
   }
@@ -530,6 +607,9 @@ export function useHaltHassTest() {
     nodeResults,
     completedNodes,
     currentNodeId,
+    activeFlowType,
+    testFlowPassed,
+    testFlowResults,
     isLoading,
     errorMessage,
 
@@ -562,7 +642,10 @@ export function useHaltHassTest() {
 
     // 流程图运行
     beginFlowchartRun,
+    activateCycleRuntime,
+    pauseCycleRuntime,
     updateNodeResult,
+    advanceToCycleFlow,
     onFlowchartComplete,
     stopFlowchart,
 

@@ -23,16 +23,21 @@ def OPEN_SERIAL(
     String
     """
 
-    ser = serial.Serial(
-        port=device.get_port(),
-        baudrate=baudrate,
-        bytesize=serial.EIGHTBITS,
-        parity=serial.PARITY_NONE,
-        stopbits=serial.STOPBITS_ONE,
-        timeout=1,
-    )
-
-    DeviceConnectionManager.register_connection(device, ser)
+    ser = None
+    try:
+        ser = serial.Serial(
+            port=device.get_port(),
+            baudrate=baudrate,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=1,
+        )
+        DeviceConnectionManager.register_connection(device, ser)
+    except Exception:
+        if ser is not None and ser.is_open:
+            ser.close()
+        raise
 
     if connection_time > 0:
         sleep(connection_time)

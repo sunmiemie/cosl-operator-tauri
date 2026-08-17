@@ -24,6 +24,7 @@ import {
 } from '@/services/halt-hass-api'
 import {
   HaltHassProcessJson,
+  HaltHassFlowType,
   HaltHassMetadata,
   HaltHassEditForm,
   BlockData,
@@ -112,7 +113,8 @@ export function useHaltHassProcess() {
   const installGuide = computed(() => processJson.value.installGuide)
 
   // 流程图数据快捷访问
-  const flowchart = computed(() => processJson.value.flowchart)
+  const testFlow = computed(() => processJson.value.testFlow)
+  const cycleFlow = computed(() => processJson.value.cycleFlow)
   
   function hasAtMostTwoDecimalPlaces(value: number): boolean {
     return Math.abs(value * 100 - Math.round(value * 100)) < 1e-8
@@ -248,54 +250,65 @@ export function useHaltHassProcess() {
 
   // 更新流程图数据（使用适配层序列化）
   function updateFlowchart(
+    flowType: HaltHassFlowType,
     nodes: Node<BlockData>[],
     edges: Edge[],
     observeBlocks?: string[]
   ) {
+    const currentFlow = getFlowchart(flowType)
     const serialized = serializeFlowchart(
       nodes,
       edges,
       observeBlocks,
-      processJson.value.flowchart.runSettings
+      currentFlow.runSettings
     )
-    processJson.value.flowchart = serialized
+    processJson.value[flowType === 'test' ? 'testFlow' : 'cycleFlow'] = serialized
     editForm.hasUnsavedChanges = true
   }
 
+  function getFlowchart(flowType: HaltHassFlowType) {
+    return flowType === 'test'
+      ? processJson.value.testFlow
+      : processJson.value.cycleFlow
+  }
+
   // 更新运行设置
-  function updateRunSettings(settings: Partial<RunSettings>) {
-    processJson.value.flowchart.runSettings = {
-      ...processJson.value.flowchart.runSettings,
+  function updateRunSettings(flowType: HaltHassFlowType, settings: Partial<RunSettings>) {
+    const flowchart = getFlowchart(flowType)
+    flowchart.runSettings = {
+      ...flowchart.runSettings,
       ...settings,
     }
     editForm.hasUnsavedChanges = true
   }
 
   // 更新观察块列表
-  function updateObserveBlocks(blockIds: string[]) {
-    processJson.value.flowchart.observeBlocks = blockIds
+  function updateObserveBlocks(flowType: HaltHassFlowType, blockIds: string[]) {
+    getFlowchart(flowType).observeBlocks = blockIds
     editForm.hasUnsavedChanges = true
   }
 
   // 重置所有节点状态（运行前调用）
-  function resetNodeStatuses() {
-    if (processJson.value.flowchart.nodes.length > 0) {
-      processJson.value.flowchart.nodes = resetAllNodeStatus(
-        processJson.value.flowchart.nodes
+  function resetNodeStatuses(flowType: HaltHassFlowType) {
+    const flowchart = getFlowchart(flowType)
+    if (flowchart.nodes.length > 0) {
+      flowchart.nodes = resetAllNodeStatus(
+        flowchart.nodes
       )
     }
   }
 
   // 获取运行设置
-  function getRunSettings(): RunSettings {
-    return processJson.value.flowchart.runSettings || { ...defaultRunSettings }
+  function getRunSettings(flowType: HaltHassFlowType): RunSettings {
+    return getFlowchart(flowType).runSettings || { ...defaultRunSettings }
   }
 
   // 获取观察块列表
-  function getObserveBlocks(): string[] {
+  function getObserveBlocks(flowType: HaltHassFlowType): string[] {
+    const flowchart = getFlowchart(flowType)
     return (
-      processJson.value.flowchart.observeBlocks ||
-      processJson.value.flowchart.nodes.map((n) => n.id)
+      flowchart.observeBlocks ||
+      flowchart.nodes.map((n) => n.id)
     )
   }
 
@@ -309,13 +322,14 @@ export function useHaltHassProcess() {
       const data = JSON.parse(text) as HaltHassProcessJson
 
       // 验证基本结构
-      if (!data.metadata || !data.flowchart) {
-        throw new Error('无效的工艺文件格式')
-      }
-
-      // 确保 installGuide 存在（兼容旧格式）
-      if (!data.installGuide) {
-        data.installGuide = { steps: [] }
+      if (
+        data.schemaVersion !== 2
+        || !data.metadata
+        || !data.installGuide
+        || !data.testFlow
+        || !data.cycleFlow
+      ) {
+        throw new Error('无效的 HALT-HASS 双流程工艺文件')
       }
 
       processJson.value = data
@@ -551,15 +565,18 @@ export function useHaltHassProcess() {
       }
 
       // 处理暂存数据格式
-      if (data.json) {
-        // 新格式：包含 json 字段
-        processJson.value = data.json as HaltHassProcessJson
-      } else if ((data as any).metadata) {
-        // 旧格式：直接是工艺数据
-        processJson.value = data as unknown as HaltHassProcessJson
-      } else {
+      if (!data.json) {
         throw new Error('无效的暂存文件格式')
       }
+      const savedProcess = data.json as HaltHassProcessJson
+      if (
+        savedProcess.schemaVersion !== 2
+        || !savedProcess.testFlow
+        || !savedProcess.cycleFlow
+      ) {
+        throw new Error('暂存文件不是 HALT-HASS 双流程工艺')
+      }
+      processJson.value = savedProcess
       
       // 解析文件名获取编辑信息
       const info = fileSystem.parseTempFileName(fileName)
@@ -778,7 +795,8 @@ export function useHaltHassProcess() {
     // 计算属性
     metadata,
     installGuide,
-    flowchart,
+    testFlow,
+    cycleFlow,
     canSave,
     isRuntimeConfigComplete,
 
@@ -798,6 +816,7 @@ export function useHaltHassProcess() {
 
     // 流程图方法
     updateFlowchart,
+    getFlowchart,
     updateRunSettings,
     updateObserveBlocks,
     resetNodeStatuses,

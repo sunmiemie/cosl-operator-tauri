@@ -9,11 +9,22 @@ import { Icon } from '@iconify/vue'
 import type { Node } from '@vue-flow/core'
 import type { BlockData, CtrlData, BlockParameterValue } from '@/views/process-halt-hass/types'
 import { useBlockManifest } from '@/composables/useBlockManifest'
+import { useHardware } from '@/composables/useHardware'
 import type { BlockResult } from '@/types'
 import ResultPanel from './ResultPanel.vue'
 
 // 使用 Block Manifest composable 获取最新的参数定义
 const { loadManifest, getParamOptions } = useBlockManifest()
+
+// 硬件设备列表由 Flojoy /devices 接口提供
+const {
+  devices,
+  isLoading: hardwareLoading,
+  error: hardwareError,
+  hasDevices,
+  needsRefresh,
+  refreshDevices,
+} = useHardware()
 
 // Props
 interface Props {
@@ -133,6 +144,80 @@ const DEVICE_TYPES = [
   'NIDAQmxDevice', 'NIDMMDevice', 'NIConnection',
 ]
 
+interface DeviceOption {
+  label: string
+  value: string
+}
+
+// 根据参数类型返回 Flojoy 可识别的设备 ID。
+function getDeviceOptions(type: string): DeviceOption[] {
+  const typeLower = type.toLowerCase()
+
+  if (typeLower.includes('camera')) {
+    return devices.value.cameras.map(device => ({
+      label: device.name,
+      value: String(device.id),
+    }))
+  }
+
+  if (typeLower.includes('serial')) {
+    return devices.value.serialDevices.map(device => ({
+      label: device.description && device.description !== device.port
+        ? `${device.port} — ${device.description}`
+        : device.port,
+      value: device.port,
+    }))
+  }
+
+  if (typeLower.includes('visa')) {
+    const options = devices.value.visaDevices.map(device => ({
+      label: device.description.trim()
+        ? `${device.address} — ${device.description.trim()}`
+        : device.address,
+      value: device.address,
+    }))
+
+    // pyvisa 只会把可成功打开/查询的串口放进 visaDevices。USB 串口刚热插拔时
+    // 仍应允许用户选择，因此把系统串口同时转换成 VISA 的 ASRL 地址。
+    const knownAddresses = new Set(options.map(option => option.value.toUpperCase()))
+    for (const device of devices.value.serialDevices) {
+      const comMatch = /^COM(\d+)$/i.exec(device.port)
+      if (!comMatch) continue
+
+      const address = `ASRL${comMatch[1]}::INSTR`
+      if (knownAddresses.has(address.toUpperCase())) continue
+
+      options.push({
+        label: `${address} — ${device.description || device.port}`,
+        value: address,
+      })
+      knownAddresses.add(address.toUpperCase())
+    }
+
+    return options
+  }
+
+  if (typeLower.includes('nidaq')) {
+    return devices.value.nidaqmxDevices.map(device => ({
+      label: device.description ? `${device.address} — ${device.description}` : device.address,
+      value: device.address,
+    }))
+  }
+
+  if (typeLower.includes('nidmm') || typeLower.includes('niconnection')) {
+    return devices.value.nidmmDevices.map(device => ({
+      label: device.description ? `${device.address} — ${device.description}` : device.address,
+      value: device.address,
+    }))
+  }
+
+  return []
+}
+
+function hasDeviceOption(type: string, value: BlockParameterValue): boolean {
+  return getDeviceOptions(type).some(option => option.value === String(value ?? ''))
+}
+
 // 获取参数输入类型（考虑从 manifest 获取的最新 options）
 function getParamInputType(ctrl: CtrlData[string], paramName?: string, isInit = false): string {
   const type = ctrl.type || 'str'
@@ -187,13 +272,22 @@ function getParamInputType(ctrl: CtrlData[string], paramName?: string, isInit = 
 
 // 获取设备类型的占位符
 function getDevicePlaceholder(type: string): string {
+  if (hardwareLoading.value) return '正在发现设备...'
+  if (hardwareError.value) return '设备发现失败，请点击刷新'
+
   const typeLower = type.toLowerCase()
-  if (typeLower.includes('camera')) return '选择摄像头...'
-  if (typeLower.includes('serial')) return '选择串口设备...'
-  if (typeLower.includes('visa')) return '选择 VISA 设备...'
-  if (typeLower.includes('nidaq')) return '选择 NI DAQmx 设备...'
-  if (typeLower.includes('nidmm') || typeLower.includes('niconnection')) return '选择 NI 设备...'
+  const hasOptions = getDeviceOptions(type).length > 0
+  if (typeLower.includes('camera')) return hasOptions ? '选择摄像头...' : '未发现摄像头'
+  if (typeLower.includes('serial')) return hasOptions ? '选择串口设备...' : '未发现串口设备'
+  if (typeLower.includes('visa')) return hasOptions ? '选择 VISA 设备...' : '未发现 VISA 设备'
+  if (typeLower.includes('nidaq')) return hasOptions ? '选择 NI DAQmx 设备...' : '未发现 NI DAQmx 设备'
+  if (typeLower.includes('nidmm') || typeLower.includes('niconnection')) return hasOptions ? '选择 NI 设备...' : '未发现 NI 设备'
   return '选择设备...'
+}
+
+// USB 设备热插拔后允许用户立即重新扫描，不受自动刷新间隔限制。
+async function handleRefreshDevices(): Promise<void> {
+  await refreshDevices()
 }
 
 // 获取参数描述
@@ -209,8 +303,18 @@ function getFreshOptions(paramName: string, ctrl: CtrlData[string], isInit = fal
 }
 
 // 初始化时加载 manifest
-onMounted(() => {
+onMounted(async () => {
   loadManifest()
+  if (!hasDevices.value || needsRefresh.value) {
+    await refreshDevices()
+  }
+})
+
+// 编辑面板重新打开时刷新过期的硬件列表，支持热插拔串口设备。
+watch(() => props.visible, async (visible) => {
+  if (visible && (!hasDevices.value || needsRefresh.value)) {
+    await refreshDevices()
+  }
 })
 </script>
 
@@ -324,15 +428,41 @@ onMounted(() => {
                   </select>
                   
                   <!-- 设备选择 -->
-                  <select
+                  <div
                     v-else-if="getParamInputType(ctrl, paramName as string, true) === 'device-select'"
-                    :value="ctrl.value"
-                    class="form-select"
-                    @change="(e) => handleParamChange(paramName as string, (e.target as HTMLSelectElement).value, true)"
+                    class="device-select-row"
                   >
-                    <option value="" disabled>{{ getDevicePlaceholder(ctrl.type || '') }}</option>
-                    <option v-if="ctrl.value" :value="ctrl.value">{{ ctrl.value }}</option>
-                  </select>
+                    <select
+                      :value="ctrl.value"
+                      class="form-select"
+                      @change="(e) => handleParamChange(paramName as string, (e.target as HTMLSelectElement).value, true)"
+                    >
+                      <option value="" disabled>{{ getDevicePlaceholder(ctrl.type || '') }}</option>
+                      <option
+                        v-if="ctrl.value && !hasDeviceOption(ctrl.type || '', ctrl.value)"
+                        :value="ctrl.value"
+                      >
+                        {{ ctrl.value }}
+                      </option>
+                      <option
+                        v-for="device in getDeviceOptions(ctrl.type || '')"
+                        :key="device.value"
+                        :value="device.value"
+                      >
+                        {{ device.label }}
+                      </option>
+                    </select>
+                    <button
+                      type="button"
+                      class="device-refresh-btn"
+                      :disabled="hardwareLoading"
+                      :title="hardwareLoading ? '正在刷新设备列表' : '刷新设备列表'"
+                      aria-label="刷新设备列表"
+                      @click="handleRefreshDevices"
+                    >
+                      <Icon icon="mdi:refresh" :class="{ spinning: hardwareLoading }" />
+                    </button>
+                  </div>
                   
                   <!-- 节点引用 -->
                   <select
@@ -440,15 +570,41 @@ onMounted(() => {
                   </select>
                   
                   <!-- 设备选择 -->
-                  <select
+                  <div
                     v-else-if="getParamInputType(ctrl, paramName as string, false) === 'device-select'"
-                    :value="ctrl.value"
-                    class="form-select"
-                    @change="(e) => handleParamChange(paramName as string, (e.target as HTMLSelectElement).value)"
+                    class="device-select-row"
                   >
-                    <option value="" disabled>{{ getDevicePlaceholder(ctrl.type || '') }}</option>
-                    <option v-if="ctrl.value" :value="ctrl.value">{{ ctrl.value }}</option>
-                  </select>
+                    <select
+                      :value="ctrl.value"
+                      class="form-select"
+                      @change="(e) => handleParamChange(paramName as string, (e.target as HTMLSelectElement).value)"
+                    >
+                      <option value="" disabled>{{ getDevicePlaceholder(ctrl.type || '') }}</option>
+                      <option
+                        v-if="ctrl.value && !hasDeviceOption(ctrl.type || '', ctrl.value)"
+                        :value="ctrl.value"
+                      >
+                        {{ ctrl.value }}
+                      </option>
+                      <option
+                        v-for="device in getDeviceOptions(ctrl.type || '')"
+                        :key="device.value"
+                        :value="device.value"
+                      >
+                        {{ device.label }}
+                      </option>
+                    </select>
+                    <button
+                      type="button"
+                      class="device-refresh-btn"
+                      :disabled="hardwareLoading"
+                      :title="hardwareLoading ? '正在刷新设备列表' : '刷新设备列表'"
+                      aria-label="刷新设备列表"
+                      @click="handleRefreshDevices"
+                    >
+                      <Icon icon="mdi:refresh" :class="{ spinning: hardwareLoading }" />
+                    </button>
+                  </div>
                   
                   <!-- 节点引用 -->
                   <select
@@ -756,6 +912,52 @@ onMounted(() => {
 
 .param-input {
   width: 100%;
+}
+
+.device-select-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.device-select-row .form-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-refresh-btn {
+  display: inline-flex;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.device-refresh-btn:hover:not(:disabled) {
+  color: var(--color-accent-blue);
+  border-color: var(--color-accent-blue);
+}
+
+.device-refresh-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.device-refresh-btn .spinning {
+  animation: device-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes device-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 表单输入样式 */
