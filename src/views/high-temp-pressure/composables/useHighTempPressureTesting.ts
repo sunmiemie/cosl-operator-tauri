@@ -2,34 +2,51 @@ import { nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import * as echarts from 'echarts'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { open } from '@tauri-apps/plugin-dialog'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
 import type { HighTempPressureModal, HighTempPressurePanel } from '../types'
 import { formatRuntimeTimer, getElapsedRuntimeSeconds } from '../utils/runtime'
 
-export type HighTempPressureVideoChannel = {
+export type HighTempPressureOcrChannel = {
   id: string
   name: string
   unit: string
   color: string
 }
 
-export type HighTempPressureVideoMeasurement = HighTempPressureVideoChannel & {
+export type HighTempPressureOcrMeasurement = HighTempPressureOcrChannel & {
   raw: string
   value: number | null
   confidence: number | null
 }
 
 export type HighTempPressureCurveData = {
+  timestampMs: number[]
   timeSec: number[]
   upperTemp: number[]
   lowerTemp: number[]
   pressure: number[]
 }
 
-type VideoMeasurementPayload = {
+export type HighTempPressureChartSummary = {
+  latestUpperTemp: number | null
+  latestLowerTemp: number | null
+  latestPressure: number | null
+  maxTemp: number | null
+  minTemp: number | null
+  avgTemp: number | null
+  maxPressure: number | null
+  minPressure: number | null
+  count: number
+  updatedAtMs: number | null
+}
+
+export type HighTempPressureChartSeriesKey = 'upperTemp' | 'lowerTemp' | 'pressure'
+
+export type HighTempPressureChartSeriesVisibility = Record<HighTempPressureChartSeriesKey, boolean>
+
+type OcrMeasurementPayload = {
   id?: unknown
   part?: unknown
   data?: unknown
@@ -64,17 +81,6 @@ const MEASUREMENT_COLORS = [
   '#60a5fa',
 ]
 
-const LEGACY_MEASUREMENT_MARKERS = new Set([
-  'vessel_250_unlabeled_yellow_value',
-  'vessel_480_stacked_value_25',
-])
-
-const LEGACY_MEASUREMENT_ALIASES: Record<string, string> = {
-  vessel_250_unlabeled_yellow_value: 'vessel_250_pressure',
-  vessel_480_upper_water_temp: 'vessel_250_lower_water_temp',
-  vessel_480_stacked_value_25: 'vessel_480_upper_water_temp',
-}
-
 const MEASUREMENT_METADATA: Record<string, { part: string; data: string }> = {
   vessel_250_upper_water_temp: { part: '250试验容器', data: '上部水温' },
   vessel_250_lower_water_temp: { part: '250试验容器', data: '下部水温' },
@@ -86,6 +92,7 @@ const MEASUREMENT_METADATA: Record<string, { part: string; data: string }> = {
 
 const SAMPLE_INTERVAL_SECONDS = 0.5
 const MAX_POINTS = 120
+const MAX_RENDERED_CHART_POINTS = 6000
 
 export function useHighTempPressureTesting() {
   const { initConfig, getConfigItem } = useConfig()
@@ -96,25 +103,44 @@ export function useHighTempPressureTesting() {
   const csvCount = ref(0)
   const onlineSeconds = ref(0)
   const onlineTimerStr = ref(formatRuntimeTimer(0))
-  const videoPath = ref('')
-  const videoFileName = ref('')
-  const videoUrl = ref('')
+  const ocrDeviceIndex = ref<number | null>(null)
+  const ocrDeviceName = ref('')
   const captureOutputDir = ref('')
-  const captureProgressPct = ref(0)
+  const ocrReadyPct = ref(0)
   const captureRecordCount = ref(0)
-  const captureStatusText = ref('等待选择试验视频')
+  const captureStatusText = ref('等待连接采集卡')
   const captureCompleted = ref(false)
   const latestFrameUrl = ref('')
   const exportedCaptureDir = ref('')
   const curveChartImagePath = ref('')
-  const videoMeasurements = ref<HighTempPressureVideoMeasurement[]>([])
-  const videoReadings = reactive<Record<string, number>>({})
-  const videoConfidence = reactive<Record<string, number>>({})
+  const ocrMeasurements = ref<HighTempPressureOcrMeasurement[]>([])
+  const ocrReadings = reactive<Record<string, number>>({})
+  const ocrConfidence = reactive<Record<string, number>>({})
+  const chartWindowMinutes = ref<number | null>(null)
+  const chartRangeLocked = ref(false)
+  const chartSeriesVisibility = reactive<HighTempPressureChartSeriesVisibility>({
+    upperTemp: true,
+    lowerTemp: true,
+    pressure: true,
+  })
   const curveData = reactive<HighTempPressureCurveData>({
+    timestampMs: [],
     timeSec: [],
     upperTemp: [],
     lowerTemp: [],
     pressure: [],
+  })
+  const chartSummary = reactive<HighTempPressureChartSummary>({
+    latestUpperTemp: null,
+    latestLowerTemp: null,
+    latestPressure: null,
+    maxTemp: null,
+    minTemp: null,
+    avgTemp: null,
+    maxPressure: null,
+    minPressure: null,
+    count: 0,
+    updatedAtMs: null,
   })
 
   const state = reactive({
@@ -130,7 +156,96 @@ export function useHighTempPressureTesting() {
   let unlistenStream: UnlistenFn | null = null
   let latestFrameObjectUrl = ''
   let lastSyncedRecordCount = 0
+  let captureGeneration = 0
+  let recordSyncPromise: Promise<void> | null = null
+  const pendingOcrRecords = new Map<number, any>()
+  let chartRenderTimer: number | null = null
   let chartInst: echarts.ECharts | null = null
+  let applyingChartOption = false
+  let manualChartRange: { start: number; end: number } | null = null
+
+  function adaptiveChartDuration(spanMs: number) {
+    const steps = [
+      30 * 1000,
+      60 * 1000,
+      2 * 60 * 1000,
+      5 * 60 * 1000,
+      10 * 60 * 1000,
+      30 * 60 * 1000,
+      60 * 60 * 1000,
+      3 * 60 * 60 * 1000,
+      6 * 60 * 60 * 1000,
+      12 * 60 * 60 * 1000,
+      24 * 60 * 60 * 1000,
+    ]
+    return steps.find((step) => spanMs <= step) ?? steps[steps.length - 1]
+  }
+
+  function getChartRange() {
+    const now = Date.now()
+    const first = curveData.timestampMs[0]
+    const last = curveData.timestampMs[curveData.timestampMs.length - 1]
+    if (!Number.isFinite(first) || !Number.isFinite(last)) {
+      return {
+        fullStart: now,
+        fullEnd: now + 30 * 1000,
+        displayStart: now,
+        displayEnd: now + 30 * 1000,
+      }
+    }
+
+    const selectedWindow = chartWindowMinutes.value && chartWindowMinutes.value > 0
+      ? chartWindowMinutes.value * 60 * 1000
+      : null
+    const windowSize = selectedWindow ?? adaptiveChartDuration(Math.max(0, last - first))
+    const padding = Math.max(5000, Math.min(windowSize / 20, 5 * 60 * 1000))
+    const fullEnd = Math.max(first + windowSize, last + padding)
+    if (chartRangeLocked.value && manualChartRange) {
+      const displayStart = Math.max(first, Math.min(manualChartRange.start, fullEnd))
+      const displayEnd = Math.max(displayStart, Math.min(manualChartRange.end, fullEnd))
+      return { fullStart: first, fullEnd, displayStart, displayEnd }
+    }
+    if (chartWindowMinutes.value === 0) {
+      return { fullStart: first, fullEnd, displayStart: first, displayEnd: fullEnd }
+    }
+    const displayEnd = fullEnd
+    return {
+      fullStart: first,
+      fullEnd,
+      displayStart: Math.max(first, displayEnd - windowSize),
+      displayEnd,
+    }
+  }
+
+  function updateChartSummary() {
+    const temperatureValues = [...curveData.upperTemp, ...curveData.lowerTemp]
+      .filter((value) => Number.isFinite(value))
+    const lastIndex = curveData.timestampMs.length - 1
+    chartSummary.latestUpperTemp = lastIndex >= 0 ? curveData.upperTemp[lastIndex] ?? null : null
+    chartSummary.latestLowerTemp = lastIndex >= 0 ? curveData.lowerTemp[lastIndex] ?? null : null
+    chartSummary.latestPressure = lastIndex >= 0 ? curveData.pressure[lastIndex] ?? null : null
+    chartSummary.maxTemp = temperatureValues.length ? Math.max(...temperatureValues) : null
+    chartSummary.minTemp = temperatureValues.length ? Math.min(...temperatureValues) : null
+    chartSummary.avgTemp = temperatureValues.length
+      ? temperatureValues.reduce((sum, value) => sum + value, 0) / temperatureValues.length
+      : null
+    const pressureValues = curveData.pressure.filter((value) => Number.isFinite(value))
+    chartSummary.maxPressure = pressureValues.length ? Math.max(...pressureValues) : null
+    chartSummary.minPressure = pressureValues.length ? Math.min(...pressureValues) : null
+    chartSummary.count = curveData.timestampMs.length
+    chartSummary.updatedAtMs = lastIndex >= 0 ? curveData.timestampMs[lastIndex] ?? null : null
+  }
+
+  function formatChartAxisTime(value: number, spanMs: number) {
+    const date = new Date(value)
+    const includeSeconds = spanMs <= 10 * 60 * 1000
+    return date.toLocaleTimeString('zh-CN', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      ...(includeSeconds ? { second: '2-digit' as const } : {}),
+    })
+  }
 
   function initChart() {
     const el = document.getElementById('htp-chart')
@@ -138,18 +253,17 @@ export function useHighTempPressureTesting() {
     disposeChart()
     echarts.getInstanceByDom(el)?.dispose()
     chartInst = echarts.init(el)
-    chartInst.setOption({
-      tooltip: { trigger: 'axis' },
-      legend: { data: ['上部水温', '下部水温', '容器压力×10'], orient: 'horizontal', top: 6, right: 8 },
-      grid: { left: 40, right: 20, top: 40, bottom: 10 },
-      xAxis: { type: 'category', data: [] },
-      yAxis: { type: 'value' },
-      series: [
-        { name: '上部水温', type: 'line', showSymbol: false, smooth: true, data: [] },
-        { name: '下部水温', type: 'line', showSymbol: false, smooth: true, data: [] },
-        { name: '容器压力×10', type: 'line', showSymbol: false, smooth: true, data: [] },
-      ],
+    chartInst.on('datazoom', () => {
+      if (applyingChartOption || !chartInst) return
+      const option = chartInst.getOption() as any
+      const zoom = Array.isArray(option?.dataZoom) ? option.dataZoom[0] : null
+      const start = Number(zoom?.startValue)
+      const end = Number(zoom?.endValue)
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return
+      manualChartRange = { start, end }
+      chartRangeLocked.value = true
     })
+    updateChart()
   }
 
   function disposeChart() {
@@ -158,34 +272,253 @@ export function useHighTempPressureTesting() {
     chartInst = null
   }
 
+  function resizeChart() {
+    chartInst?.resize()
+  }
+
+  function getRenderedChartIndices(length: number) {
+    if (length <= MAX_RENDERED_CHART_POINTS) {
+      return Array.from({ length }, (_, index) => index)
+    }
+    const step = (length - 1) / (MAX_RENDERED_CHART_POINTS - 1)
+    return Array.from(
+      { length: MAX_RENDERED_CHART_POINTS },
+      (_, index) => Math.round(index * step)
+    )
+  }
+
+  function scheduleChartUpdate() {
+    if (chartRenderTimer !== null) return
+    chartRenderTimer = window.setTimeout(() => {
+      chartRenderTimer = null
+      updateChart()
+    }, 1000)
+  }
+
   function updateChart() {
+    updateChartSummary()
     if (!chartInst) return
-    const len = Math.max(state.chartData.t1.length, state.chartData.p.length)
-    const x = Array.from({ length: len }, (_, i) => i + 1)
+    const range = getChartRange()
+    const span = range.displayEnd - range.displayStart
+    const renderedIndices = getRenderedChartIndices(curveData.timestampMs.length)
+    const pointCount = renderedIndices.length
+    const createSeriesData = (values: number[]) => renderedIndices.map((index) => [
+      curveData.timestampMs[index],
+      values[index] ?? null,
+    ])
+    const upperData = createSeriesData(curveData.upperTemp)
+    const lowerData = createSeriesData(curveData.lowerTemp)
+    const pressureData = createSeriesData(curveData.pressure)
+
+    applyingChartOption = true
     chartInst.setOption({
-      legend: { orient: 'horizontal', top: 6, right: 8 },
-      xAxis: { data: x },
-      series: [
-        { name: '上部水温', data: state.chartData.t1.map(v => +v.toFixed(1)) },
-        { name: '下部水温', data: state.chartData.t2.map(v => +v.toFixed(1)) },
-        { name: '容器压力×10', data: state.chartData.p.map(v => +(v * 10).toFixed(2)) },
+      animation: false,
+      backgroundColor: '#ffffff',
+      color: ['#e14b55', '#f59e0b', '#3f69c9'],
+      grid: { left: 58, right: 58, top: 28, bottom: 72, containLabel: false },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: '#98a2b3', width: 1 } },
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params]
+          const firstItem = items.find((item) => Array.isArray(item?.data))
+          if (!firstItem) return ''
+          const timestamp = Number(firstItem.data[0])
+          const time = new Date(timestamp).toLocaleString('zh-CN', {
+            hour12: false,
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+          const rows = items.map((item) => {
+            const value = Number(Array.isArray(item?.data) ? item.data[1] : NaN)
+            const isPressure = item?.seriesName === '容器压力'
+            const unit = isPressure ? 'MPa' : '°C'
+            const digits = isPressure ? 3 : 1
+            return `${item?.marker ?? ''}${item?.seriesName ?? ''}：${Number.isFinite(value) ? value.toFixed(digits) : '--'} ${unit}`
+          })
+          return `${time}<br/>${rows.join('<br/>')}`
+        },
+      },
+      xAxis: {
+        type: 'time',
+        min: range.fullStart,
+        max: range.fullEnd,
+        splitNumber: span <= 10 * 60 * 1000 ? 8 : 12,
+        axisLine: { lineStyle: { color: '#8c94a3' } },
+        axisTick: { alignWithLabel: true },
+        axisLabel: {
+          color: '#7a8190',
+          hideOverlap: true,
+          formatter: (value: number) => formatChartAxisTime(value, span),
+        },
+        splitLine: { show: true, lineStyle: { color: '#edf1f7', width: 1 } },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: '°C',
+          min: 0,
+          max: 300,
+          interval: 50,
+          nameTextStyle: { color: '#7a8190', padding: [0, 0, 0, 6] },
+          axisLabel: { color: '#7a8190', formatter: (value: number) => Number(value).toFixed(1) },
+          splitLine: { show: true, lineStyle: { color: '#e8edf5', width: 1 } },
+        },
+        {
+          type: 'value',
+          name: 'MPa',
+          min: 0,
+          max: 300,
+          interval: 50,
+          nameTextStyle: { color: '#7a8190', padding: [0, 6, 0, 0] },
+          axisLabel: { color: '#7a8190', formatter: (value: number) => Number(value).toFixed(2) },
+          splitLine: { show: false },
+        },
       ],
+      dataZoom: [
+        {
+          type: 'inside',
+          throttle: 50,
+          startValue: range.displayStart,
+          endValue: range.displayEnd,
+        },
+        {
+          type: 'slider',
+          height: 28,
+          bottom: 22,
+          startValue: range.displayStart,
+          endValue: range.displayEnd,
+          borderColor: '#d6e2f7',
+          backgroundColor: '#f4f7fc',
+          fillerColor: 'rgba(79, 116, 209, 0.18)',
+          handleStyle: { color: '#ffffff', borderColor: '#a6b8dd' },
+          moveHandleStyle: { color: '#c5d5f3' },
+          dataBackground: {
+            lineStyle: { color: '#9db7f2' },
+            areaStyle: { color: '#d8e4ff' },
+          },
+          selectedDataBackground: {
+            lineStyle: { color: '#4f74d1' },
+            areaStyle: { color: '#bfd0ff' },
+          },
+        },
+      ],
+      series: [
+        {
+          name: '上部水温',
+          type: 'line',
+          data: chartSeriesVisibility.upperTemp ? upperData : [],
+          connectNulls: false,
+          showSymbol: pointCount <= 60,
+          symbolSize: 5,
+          smooth: false,
+          lineStyle: { width: 2 },
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(225, 75, 85, 0.12)' },
+              { offset: 1, color: 'rgba(225, 75, 85, 0.01)' },
+            ]),
+          },
+          emphasis: { focus: 'series' },
+        },
+        {
+          name: '下部水温',
+          type: 'line',
+          data: chartSeriesVisibility.lowerTemp ? lowerData : [],
+          connectNulls: false,
+          showSymbol: pointCount <= 60,
+          symbolSize: 5,
+          smooth: false,
+          lineStyle: { width: 2 },
+          emphasis: { focus: 'series' },
+        },
+        {
+          name: '容器压力',
+          type: 'line',
+          yAxisIndex: 1,
+          data: chartSeriesVisibility.pressure ? pressureData : [],
+          connectNulls: false,
+          showSymbol: pointCount <= 60,
+          symbolSize: 5,
+          smooth: false,
+          lineStyle: { width: 2 },
+          emphasis: { focus: 'series' },
+        },
+      ],
+    }, true)
+    queueMicrotask(() => {
+      applyingChartOption = false
     })
   }
 
-  function appendCurvePoint(t1?: number, t2?: number, p?: number, timeSec?: number) {
+  function setChartWindowMinutes(value: number | null) {
+    chartWindowMinutes.value = value !== null && [0, 5, 30, 60, 240].includes(value) ? value : null
+    manualChartRange = null
+    chartRangeLocked.value = false
+    updateChart()
+  }
+
+  function toggleChartSeries(key: HighTempPressureChartSeriesKey) {
+    if (!(key in chartSeriesVisibility)) return
+    if (chartSeriesVisibility[key]) {
+      const visibleCount = Object.values(chartSeriesVisibility).filter(Boolean).length
+      if (visibleCount <= 1) {
+        ElMessage.warning('实时监控曲线至少保留一条')
+        return
+      }
+    }
+    chartSeriesVisibility[key] = !chartSeriesVisibility[key]
+    updateChart()
+  }
+
+  function showAllChartSeries() {
+    chartSeriesVisibility.upperTemp = true
+    chartSeriesVisibility.lowerTemp = true
+    chartSeriesVisibility.pressure = true
+    updateChart()
+  }
+
+  function parseTimestampMs(value: unknown) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value !== 'string' || !value.trim()) return null
+    const timestamp = Date.parse(value)
+    return Number.isFinite(timestamp) ? timestamp : null
+  }
+
+  function appendCurvePoint(t1?: number, t2?: number, p?: number, timeSec?: number, timestampMs?: number | null) {
     const lastTime = curveData.timeSec[curveData.timeSec.length - 1]
+    const resolvedTime = Number.isFinite(timeSec)
+      ? Number(timeSec)
+      : (lastTime ?? -SAMPLE_INTERVAL_SECONDS) + SAMPLE_INTERVAL_SECONDS
+    const lastTimestamp = curveData.timestampMs[curveData.timestampMs.length - 1]
+    const sessionTimestamp = testStartTime.value !== null
+      ? testStartTime.value + resolvedTime * 1000
+      : null
+    const resolvedTimestamp = Number.isFinite(timestampMs)
+      ? Number(timestampMs)
+      : sessionTimestamp ?? (lastTimestamp ?? Date.now() - SAMPLE_INTERVAL_SECONDS * 1000) + SAMPLE_INTERVAL_SECONDS * 1000
     const lastT1 = curveData.upperTemp[curveData.upperTemp.length - 1] ?? 0
     const lastT2 = curveData.lowerTemp[curveData.lowerTemp.length - 1] ?? 0
     const lastP = curveData.pressure[curveData.pressure.length - 1] ?? 0
-    curveData.timeSec.push(Number.isFinite(timeSec) ? Number(timeSec) : (lastTime ?? -SAMPLE_INTERVAL_SECONDS) + SAMPLE_INTERVAL_SECONDS)
+    curveData.timestampMs.push(resolvedTimestamp)
+    curveData.timeSec.push(resolvedTime)
     curveData.upperTemp.push(t1 ?? lastT1)
     curveData.lowerTemp.push(t2 ?? lastT2)
     curveData.pressure.push(p ?? lastP)
   }
 
-  function pushPrimaryPoint(t1?: number, t2?: number, p?: number, timeSec?: number) {
-    appendCurvePoint(t1, t2, p, timeSec)
+  function pushPrimaryPoint(
+    t1?: number,
+    t2?: number,
+    p?: number,
+    timeSec?: number,
+    timestampMs?: number | null,
+    renderChart = true
+  ) {
+    appendCurvePoint(t1, t2, p, timeSec, timestampMs)
     const lastT1 = state.chartData.t1[state.chartData.t1.length - 1] ?? 0
     const lastT2 = state.chartData.t2[state.chartData.t2.length - 1] ?? 0
     const lastP = state.chartData.p[state.chartData.p.length - 1] ?? 0
@@ -195,10 +528,11 @@ export function useHighTempPressureTesting() {
     if (state.chartData.t1.length > MAX_POINTS) state.chartData.t1.shift()
     if (state.chartData.t2.length > MAX_POINTS) state.chartData.t2.shift()
     if (state.chartData.p.length > MAX_POINTS) state.chartData.p.shift()
-    updateChart()
+    if (renderChart) updateChart()
   }
 
   function resetCurveData() {
+    curveData.timestampMs = []
     curveData.timeSec = []
     curveData.upperTemp = []
     curveData.lowerTemp = []
@@ -206,10 +540,10 @@ export function useHighTempPressureTesting() {
     curveChartImagePath.value = ''
   }
 
-  function clearVideoReadings() {
-    videoMeasurements.value = []
-    for (const key of Object.keys(videoReadings)) delete videoReadings[key]
-    for (const key of Object.keys(videoConfidence)) delete videoConfidence[key]
+  function clearOcrReadings() {
+    ocrMeasurements.value = []
+    for (const key of Object.keys(ocrReadings)) delete ocrReadings[key]
+    for (const key of Object.keys(ocrConfidence)) delete ocrConfidence[key]
   }
 
   function inferMeasurementUnit(data: string) {
@@ -223,38 +557,35 @@ export function useHighTempPressureTesting() {
     return part || data || fallback
   }
 
-  function hasLegacyMeasurementSchema(measurements: VideoMeasurementPayload[]) {
-    return measurements.some(item => LEGACY_MEASUREMENT_MARKERS.has(String(item?.id || '')))
-  }
-
-  function normalizeMeasurementId(id: string, legacySchema: boolean) {
-    if (!legacySchema) return id
-    return LEGACY_MEASUREMENT_ALIASES[id] || id
-  }
-
   function resetCaptureState() {
+    captureGeneration += 1
+    recordSyncPromise = null
+    pendingOcrRecords.clear()
+    if (chartRenderTimer !== null) {
+      clearTimeout(chartRenderTimer)
+      chartRenderTimer = null
+    }
     state.chartData.t1 = []
     state.chartData.t2 = []
     state.chartData.p = []
     resetCurveData()
     csvCount.value = 0
     captureRecordCount.value = 0
-    captureProgressPct.value = 0
+    ocrReadyPct.value = 0
     captureCompleted.value = false
     captureOutputDir.value = ''
     lastSyncedRecordCount = 0
     latestFrameUrl.value = ''
     revokeLatestFrameObjectUrl()
     exportedCaptureDir.value = ''
-    captureStatusText.value = '等待选择试验视频'
-    clearVideoReadings()
+    captureStatusText.value = '等待连接采集卡'
+    clearOcrReadings()
     updateChart()
   }
 
-  function clearVideoSelection() {
-    videoPath.value = ''
-    videoFileName.value = ''
-    videoUrl.value = ''
+  function clearOcrDevice() {
+    ocrDeviceIndex.value = null
+    ocrDeviceName.value = ''
   }
 
   function syncRuntime(nowMs = Date.now()) {
@@ -267,16 +598,16 @@ export function useHighTempPressureTesting() {
     stopCapturePolling()
     cleanupStreamListener()
     if (captureOutputDir.value) {
-      void invoke('stop_high_temp_pressure_video_stream', {
+      void invoke('stop_high_temp_pressure_ocr_stream', {
         outputDir: captureOutputDir.value,
       }).catch(() => undefined)
     }
     resetCaptureState()
-    clearVideoSelection()
+    clearOcrDevice()
     testRunning.value = false
     testStartTime.value = null
     syncRuntime()
-    captureStatusText.value = '等待选择试验视频'
+    captureStatusText.value = '等待连接采集卡'
     disposeChart()
   }
 
@@ -299,15 +630,13 @@ export function useHighTempPressureTesting() {
   }
 
   function extractPrimaryValues(record: any) {
-    const measurements: VideoMeasurementPayload[] = Array.isArray(record?.measurements)
+    const measurements: OcrMeasurementPayload[] = Array.isArray(record?.measurements)
       ? record.measurements
       : []
-    const legacySchema = hasLegacyMeasurementSchema(measurements)
     const values: Partial<Record<string, number>> = {}
 
     measurements.forEach((item) => {
-      const rawId = String(item?.id || '')
-      const id = normalizeMeasurementId(rawId, legacySchema)
+      const id = String(item?.id || '')
       const value = item?.value
       if (!id || typeof value !== 'number' || !Number.isFinite(value)) return
       values[id] = value
@@ -315,49 +644,23 @@ export function useHighTempPressureTesting() {
 
     return {
       timeSec: Number(record?.time_sec),
+      timestampMs: parseTimestampMs(record?.captured_at),
       upperWaterTemp: values.vessel_250_upper_water_temp ?? values.vessel_480_upper_water_temp,
       lowerWaterTemp: values.vessel_250_lower_water_temp ?? values.vessel_480_lower_water_temp,
       pressure: values.vessel_250_pressure ?? values.cylinder_pressure ?? values.high_pressure_pump_outlet_pressure,
     }
   }
 
-  function rebuildCurveData(records: any[]) {
-    resetCurveData()
-    state.chartData.t1 = []
-    state.chartData.t2 = []
-    state.chartData.p = []
-    records.forEach((record, index) => {
-      const point = extractPrimaryValues(record)
-      if (
-        point.upperWaterTemp === undefined &&
-        point.lowerWaterTemp === undefined &&
-        point.pressure === undefined
-      ) return
-      appendCurvePoint(
-        point.upperWaterTemp,
-        point.lowerWaterTemp,
-        point.pressure,
-        Number.isFinite(point.timeSec) ? point.timeSec : index * SAMPLE_INTERVAL_SECONDS
-      )
-    })
-    state.chartData.t1 = curveData.upperTemp.slice(-MAX_POINTS)
-    state.chartData.t2 = curveData.lowerTemp.slice(-MAX_POINTS)
-    state.chartData.p = curveData.pressure.slice(-MAX_POINTS)
-    updateChart()
-  }
-
-  function applyVideoRecord(record: any, appendPoint = true) {
+  function applyOcrRecord(record: any, appendPoint = true, renderChart = true) {
     if (!record) return
-    const measurements: VideoMeasurementPayload[] = Array.isArray(record.measurements)
+    const measurements: OcrMeasurementPayload[] = Array.isArray(record.measurements)
       ? record.measurements
       : []
-    const legacySchema = hasLegacyMeasurementSchema(measurements)
     const values: Partial<Record<string, number>> = {}
-    const nextMeasurements: HighTempPressureVideoMeasurement[] = []
+    const nextMeasurements: HighTempPressureOcrMeasurement[] = []
 
     measurements.forEach((item) => {
-      const rawId = String(item?.id || '')
-      const id = normalizeMeasurementId(rawId, legacySchema)
+      const id = String(item?.id || '')
       if (!id) return
       const metadata = MEASUREMENT_METADATA[id]
       const part = metadata?.part || String(item?.part || '').trim()
@@ -376,12 +679,12 @@ export function useHighTempPressureTesting() {
       })
       if (numericValue === null) return
       values[id] = numericValue
-      videoReadings[id] = numericValue
+      ocrReadings[id] = numericValue
       if (typeof item?.confidence === 'number') {
-        videoConfidence[id] = item.confidence
+        ocrConfidence[id] = item.confidence
       }
     })
-    videoMeasurements.value = nextMeasurements
+    ocrMeasurements.value = nextMeasurements
 
     const point = extractPrimaryValues(record)
     const upperWaterTemp = point.upperWaterTemp
@@ -395,8 +698,84 @@ export function useHighTempPressureTesting() {
         pressure !== undefined
       )
     ) {
-      pushPrimaryPoint(upperWaterTemp, lowerWaterTemp, pressure, point.timeSec)
+      pushPrimaryPoint(
+        upperWaterTemp,
+        lowerWaterTemp,
+        pressure,
+        point.timeSec,
+        point.timestampMs,
+        renderChart
+      )
     }
+  }
+
+  function getOcrRecordIndex(record: any, fallbackIndex?: number) {
+    const value = Number(record?.record_index)
+    if (Number.isInteger(value) && value > 0) return value
+    return fallbackIndex && fallbackIndex > 0 ? fallbackIndex : lastSyncedRecordCount + 1
+  }
+
+  function drainQueuedOcrRecords() {
+    let applied = false
+    while (pendingOcrRecords.has(lastSyncedRecordCount + 1)) {
+      const nextIndex = lastSyncedRecordCount + 1
+      const record = pendingOcrRecords.get(nextIndex)
+      pendingOcrRecords.delete(nextIndex)
+      applyOcrRecord(record, true, false)
+      lastSyncedRecordCount = nextIndex
+      applied = true
+    }
+    if (applied) {
+      captureRecordCount.value = Math.max(captureRecordCount.value, lastSyncedRecordCount)
+      csvCount.value = captureRecordCount.value
+      scheduleChartUpdate()
+    }
+  }
+
+  function queueOcrRecord(record: any, fallbackIndex?: number) {
+    if (!record) return
+    const recordIndex = getOcrRecordIndex(record, fallbackIndex)
+    if (recordIndex <= lastSyncedRecordCount || pendingOcrRecords.has(recordIndex)) return
+    pendingOcrRecords.set(recordIndex, record)
+    drainQueuedOcrRecords()
+  }
+
+  function syncMissingOcrRecords(targetCount = captureRecordCount.value) {
+    if (!captureOutputDir.value || targetCount <= lastSyncedRecordCount) {
+      return Promise.resolve()
+    }
+    if (recordSyncPromise) return recordSyncPromise
+
+    const outputDir = captureOutputDir.value
+    const generation = captureGeneration
+    const task = (async () => {
+      let requiredCount = Math.max(targetCount, captureRecordCount.value)
+      while (lastSyncedRecordCount < requiredCount) {
+        const afterIndex = lastSyncedRecordCount
+        const result = await invoke<any>('get_high_temp_pressure_capture_records', {
+          outputDir,
+          afterIndex,
+          limit: 1000,
+        })
+        if (generation !== captureGeneration || outputDir !== captureOutputDir.value) return
+        const records = Array.isArray(result?.records) ? result.records : []
+        records.forEach((record: any, offset: number) => {
+          queueOcrRecord(record, afterIndex + offset + 1)
+        })
+        if (!records.length || lastSyncedRecordCount <= afterIndex) return
+        requiredCount = Math.max(requiredCount, captureRecordCount.value)
+      }
+    })()
+    recordSyncPromise = task
+    void task.then(
+      () => {
+        if (recordSyncPromise === task) recordSyncPromise = null
+      },
+      () => {
+        if (recordSyncPromise === task) recordSyncPromise = null
+      }
+    )
+    return task
   }
 
   function formatCurveTime(sec: number) {
@@ -454,8 +833,8 @@ export function useHighTempPressureTesting() {
         grid: { left: 78, right: 82, top: 128, bottom: 78 },
         xAxis: { type: 'category', name: '时间', data: labels, axisLabel: { rotate: 35 } },
         yAxis: [
-          { type: 'value', name: '温度 (°C)' },
-          { type: 'value', name: '压力 (MPa)' },
+          { type: 'value', name: '温度 (°C)', min: 0, max: 300, interval: 50 },
+          { type: 'value', name: '压力 (MPa)', min: 0, max: 300, interval: 50 },
         ],
         series: [
           {
@@ -492,6 +871,7 @@ export function useHighTempPressureTesting() {
       const result = await invoke<any>('write_high_temp_pressure_curve_chart', {
         exportDir,
         imageBytes: Array.from(dataUrlToBytes(dataUrl)),
+        fileName: '高温高压测试结果曲线.png',
       })
       const savedPath = String(result?.image_path || imagePath)
       curveChartImagePath.value = savedPath
@@ -504,28 +884,12 @@ export function useHighTempPressureTesting() {
 
   async function ensureCurveChartImage() {
     if (curveChartImagePath.value) return curveChartImagePath.value
-    await syncCaptureResultFromOutputDir().catch(() => undefined)
+    await syncMissingOcrRecords().catch(() => undefined)
     const outputDir = captureOutputDir.value
     if (!outputDir) {
-      throw new Error('未找到视频识别结果目录，无法生成温度/压力测试曲线图')
+      throw new Error('未找到 OCR 识别结果目录，无法生成温度/压力测试曲线图')
     }
     return exportCurveChartImage(outputDir)
-  }
-
-  async function syncCaptureResultFromOutputDir() {
-    if (!captureOutputDir.value) return
-    const result = await invoke<any>('get_high_temp_pressure_capture_result', {
-      outputDir: captureOutputDir.value,
-    })
-    const records = Array.isArray(result?.records) ? result.records : []
-    captureRecordCount.value = records.length
-    csvCount.value = records.length
-    lastSyncedRecordCount = records.length
-    if (result?.latest_frame) await updateLatestFrame(String(result.latest_frame))
-    if (records.length) {
-      rebuildCurveData(records)
-      applyVideoRecord(records[records.length - 1], false)
-    }
   }
 
   async function pollCaptureStatus() {
@@ -537,23 +901,29 @@ export function useHighTempPressureTesting() {
 
     captureRecordCount.value = Number(status?.current || status?.record_count || 0)
     csvCount.value = captureRecordCount.value
-    captureProgressPct.value = Number(status?.progress_pct || 0)
+    ocrReadyPct.value = Number(status?.ready_pct || 0)
     if (status?.latest_frame) await updateLatestFrame(String(status.latest_frame))
-    if (captureRecordCount.value > 0 && captureRecordCount.value !== lastSyncedRecordCount) {
-      await syncCaptureResultFromOutputDir().catch(() => undefined)
+    if (captureRecordCount.value > lastSyncedRecordCount) {
+      await syncMissingOcrRecords(captureRecordCount.value).catch(() => undefined)
     }
 
-    if (status?.complete) {
+    const statusError = String(status?.error || '').trim()
+    if (statusError) {
+      stopCapturePolling()
+      testRunning.value = false
+      captureStatusText.value = captureRecordCount.value
+        ? `OCR 采集异常停止：${statusError}；已保留 ${captureRecordCount.value} 条数据`
+        : `OCR 采集异常停止：${statusError}`
+    } else if (status?.complete) {
       stopCapturePolling()
       captureCompleted.value = true
       testRunning.value = false
-      captureStatusText.value = `视频识别完成，已采集 ${captureRecordCount.value} 条`
-      await syncCaptureResultFromOutputDir().catch(() => undefined)
+      captureStatusText.value = `OCR 识别完成，已采集 ${captureRecordCount.value} 条`
     } else if (status?.paused) {
-      captureStatusText.value = `视频识别已暂停 (${captureRecordCount.value}/${Number(status?.total_targets || captureRecordCount.value)})`
+      captureStatusText.value = `OCR 识别已暂停，已采集 ${captureRecordCount.value} 条`
       testRunning.value = false
     } else {
-      captureStatusText.value = `视频识别中 (${captureRecordCount.value}/${Number(status?.total_targets || captureRecordCount.value)})`
+      captureStatusText.value = `OCR 实时识别中，已采集 ${captureRecordCount.value} 条`
     }
   }
 
@@ -561,7 +931,7 @@ export function useHighTempPressureTesting() {
     stopCapturePolling()
     capturePollTimer = window.setInterval(() => {
       void pollCaptureStatus().catch(() => undefined)
-    }, 700)
+    }, 1000)
   }
 
   function stopCapturePolling() {
@@ -582,14 +952,21 @@ export function useHighTempPressureTesting() {
     if (!eventType) return
 
     if (eventType === 'status' || eventType === 'log') {
-      captureStatusText.value = String(payload?.message || '视频识别脚本运行中...')
+      captureStatusText.value = String(payload?.message || 'OCR 识别进程运行中...')
       return
     }
 
     if (eventType === 'start') {
-      captureStatusText.value = `视频识别已启动，共 ${Number(payload?.total_targets || 0)} 个采样点`
-      captureProgressPct.value = 1
+      captureStatusText.value = 'OCR 识别已启动，正在等待模型和画面就绪'
+      ocrReadyPct.value = 1
       captureCompleted.value = false
+      testRunning.value = true
+      return
+    }
+
+    if (eventType === 'ready') {
+      ocrReadyPct.value = Number(payload?.ready_pct || 100)
+      captureStatusText.value = String(payload?.message || 'OCR 已就绪，正在识别实时数据')
       testRunning.value = true
       return
     }
@@ -597,40 +974,49 @@ export function useHighTempPressureTesting() {
     if (eventType === 'sample') {
       captureRecordCount.value = Number(payload?.current || captureRecordCount.value + 1)
       csvCount.value = captureRecordCount.value
-      captureProgressPct.value = Number(payload?.progress_pct || captureProgressPct.value)
+      ocrReadyPct.value = Number(payload?.ready_pct || ocrReadyPct.value)
       if (payload?.preview_path) void updateLatestFrame(String(payload.preview_path))
-      applyVideoRecord(payload?.record)
-      captureStatusText.value = `视频识别中 (${captureRecordCount.value}/${Number(payload?.total || captureRecordCount.value)})`
+      queueOcrRecord(payload?.record, captureRecordCount.value)
+      if (captureRecordCount.value > lastSyncedRecordCount + pendingOcrRecords.size) {
+        void syncMissingOcrRecords(captureRecordCount.value).catch(() => undefined)
+      }
+      captureStatusText.value = `OCR 实时识别中，已采集 ${captureRecordCount.value} 条`
       return
     }
 
     if (eventType === 'complete') {
       captureRecordCount.value = Number(payload?.record_count || captureRecordCount.value)
       csvCount.value = captureRecordCount.value
-      captureProgressPct.value = 100
+      ocrReadyPct.value = 100
       captureCompleted.value = true
       testRunning.value = false
       stopCapturePolling()
       if (payload?.latest_frame) void updateLatestFrame(String(payload.latest_frame))
-      captureStatusText.value = `视频识别完成，已采集 ${captureRecordCount.value} 条`
-      void syncCaptureResultFromOutputDir().catch(() => undefined)
+      captureStatusText.value = `OCR 识别完成，已采集 ${captureRecordCount.value} 条`
+      void syncMissingOcrRecords(captureRecordCount.value).catch(() => undefined)
       return
     }
 
-    if (eventType === 'paused' || eventType === 'stopped') {
+    if (eventType === 'paused') {
       testRunning.value = false
-      stopCapturePolling()
-      captureStatusText.value = String(payload?.message || (eventType === 'paused' ? '视频识别已暂停' : '视频识别已停止'))
+      captureStatusText.value = String(payload?.message || 'OCR 数据采集已暂停')
+      return
+    }
+
+    if (eventType === 'resumed') {
+      testRunning.value = true
+      captureStatusText.value = String(payload?.message || 'OCR 数据采集已恢复')
       return
     }
 
     if (eventType === 'error') {
       testRunning.value = false
       stopCapturePolling()
-      captureStatusText.value = String(payload?.message || '视频识别失败')
+      const message = String(payload?.message || 'OCR 识别失败')
+      captureStatusText.value = message
       if (captureRecordCount.value > 0) {
-        captureStatusText.value = `视频识别已停止，已保留 ${captureRecordCount.value} 条采集数据`
-        void syncCaptureResultFromOutputDir().catch(() => undefined)
+        captureStatusText.value = `OCR 采集异常停止：${message}；已保留 ${captureRecordCount.value} 条数据`
+        void syncMissingOcrRecords(captureRecordCount.value).catch(() => undefined)
         ElMessage.warning(captureStatusText.value)
         return
       }
@@ -640,25 +1026,22 @@ export function useHighTempPressureTesting() {
 
   async function ensureStreamListener() {
     cleanupStreamListener()
-    unlistenStream = await listen<any>('high-temp-pressure-video-stream', (event) => {
+    unlistenStream = await listen<any>('high-temp-pressure-ocr-stream', (event) => {
       handleStreamEvent(event.payload)
     })
   }
 
-  async function startVideoCollection(resume = false) {
-    if (!videoPath.value) return false
+  async function startOcrCollection() {
+    if (ocrDeviceIndex.value === null) return false
     await ensureStreamListener()
-    await initConfig()
-    if (!resume) resetCaptureState()
+    resetCaptureState()
 
-    captureStatusText.value = resume ? '正在恢复视频识别...' : '正在启动视频识别脚本...'
+    captureStatusText.value = '正在启动 OCR 模型并连接采集卡...'
     try {
-      const result = await invoke<any>('start_high_temp_pressure_video_stream', {
+      const result = await invoke<any>('start_high_temp_pressure_ocr_stream', {
         pythonPath: null,
-        videoPath: videoPath.value,
+        deviceIndex: ocrDeviceIndex.value,
         interval: SAMPLE_INTERVAL_SECONDS,
-        outputDir: resume ? captureOutputDir.value : null,
-        resume,
       })
       captureOutputDir.value = String(result?.output_dir || captureOutputDir.value)
       testRunning.value = true
@@ -666,7 +1049,7 @@ export function useHighTempPressureTesting() {
       void pollCaptureStatus().catch(() => undefined)
       return true
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error || '启动视频识别失败')
+      const message = error instanceof Error ? error.message : String(error || '启动 OCR 识别失败')
       captureStatusText.value = message
       testRunning.value = false
       stopCapturePolling()
@@ -676,21 +1059,25 @@ export function useHighTempPressureTesting() {
     }
   }
 
-  async function selectVideoFile() {
-    const selected = await open({
-      title: '选择高温高压井试验视频',
-      multiple: false,
-      directory: false,
-      filters: [{ name: '视频文件', extensions: ['wmv', 'mp4', 'avi', 'mov'] }],
-    })
-    if (!selected || typeof selected !== 'string') return
+  async function connectOcrDevice() {
+    if (captureOutputDir.value) {
+      await invoke('stop_high_temp_pressure_ocr_stream', {
+        outputDir: captureOutputDir.value,
+      }).catch(() => undefined)
+    }
+    await initConfig()
+    const configuredDevice = Number(getConfigItem('highTempPressureCaptureDevice'))
+    const configuredDeviceName = String(getConfigItem('highTempPressureCaptureDeviceName') || '').trim()
+    if (!Number.isInteger(configuredDevice) || configuredDevice < 0) {
+      ElMessage.error('请先在设置页刷新搜索并选择高温高压采集卡')
+      return
+    }
 
-    videoPath.value = selected
-    videoFileName.value = selected.split(/[\\/]/).pop() || selected
-    videoUrl.value = convertFileSrc(selected)
-    const started = await startVideoCollection(false)
+    ocrDeviceIndex.value = configuredDevice
+    ocrDeviceName.value = configuredDeviceName || `采集卡 ${configuredDevice}`
+    const started = await startOcrCollection()
     if (!started) return
-    ElMessage.success('试验视频已选择，开始视频识别采集')
+    ElMessage.success(`已连接 ${ocrDeviceName.value}，开始 OCR 识别采集`)
   }
 
   function switchPanel(panel: HighTempPressurePanel) {
@@ -712,25 +1099,30 @@ export function useHighTempPressureTesting() {
     syncRuntime(testStartTime.value)
     switchPanel('testing')
     nextTick(() => initChart())
-    captureStatusText.value = '等待选择试验视频并启动识别采集'
+    captureStatusText.value = '等待连接采集卡并启动 OCR 识别'
   }
 
   async function pauseTest() {
     if (captureOutputDir.value) {
-      captureStatusText.value = '正在暂停视频识别...'
-      await invoke('pause_high_temp_pressure_video_stream', { outputDir: captureOutputDir.value })
-      stopCapturePolling()
+      captureStatusText.value = '正在暂停 OCR 数据采集...'
+      await invoke('pause_high_temp_pressure_ocr_stream', { outputDir: captureOutputDir.value })
     }
     testRunning.value = false
   }
 
   async function resumeTest() {
     if (!chartInst) nextTick(() => initChart())
-    if (videoPath.value) {
-      await startVideoCollection(!!captureOutputDir.value)
+    if (captureOutputDir.value) {
+      await invoke('resume_high_temp_pressure_ocr_stream', { outputDir: captureOutputDir.value })
+      testRunning.value = true
+      startCapturePolling()
       return
     }
-    ElMessage.warning('请先选择试验视频，再启动视频识别采集')
+    if (ocrDeviceIndex.value !== null) {
+      await startOcrCollection()
+      return
+    }
+    ElMessage.warning('请先连接采集卡，再启动 OCR 识别采集')
   }
 
   function stopTest() {
@@ -740,8 +1132,8 @@ export function useHighTempPressureTesting() {
   }
 
   function buildExportFolderName() {
-    const source = (videoFileName.value || 'video_capture').replace(/\.[^.]+$/, '')
-    return `${source}_高温高压井视频采集结果`
+    const source = ocrDeviceName.value || 'ocr_capture'
+    return `${source}_高温高压井OCR采集结果`
   }
 
   async function getConfiguredDownloadDir() {
@@ -755,14 +1147,19 @@ export function useHighTempPressureTesting() {
     return configuredDownloadDir
   }
 
-  async function finalizeVideoCapture() {
+  async function finalizeOcrCapture() {
     stopCapturePolling()
-    if (!captureOutputDir.value) return true
+    if (!captureOutputDir.value) {
+      captureStatusText.value = '尚未生成 OCR 采集结果，无法结束并上传报告'
+      ElMessage.error(captureStatusText.value)
+      return false
+    }
 
-    await invoke('stop_high_temp_pressure_video_stream', {
+    await invoke('stop_high_temp_pressure_ocr_stream', {
       outputDir: captureOutputDir.value || null,
-    }).catch(() => undefined)
-    await syncCaptureResultFromOutputDir().catch(() => undefined)
+    })
+    await pollCaptureStatus().catch(() => undefined)
+    await syncMissingOcrRecords(captureRecordCount.value).catch(() => undefined)
 
     const configuredDownloadDir = await getConfiguredDownloadDir()
     if (!configuredDownloadDir) {
@@ -777,10 +1174,11 @@ export function useHighTempPressureTesting() {
       })
       exportedCaptureDir.value = String(result?.export_dir || configuredDownloadDir)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error || '视频识别结果导出失败')
+      const message = error instanceof Error ? error.message : String(error || 'OCR 识别结果导出失败')
       console.warn('[high-temp-pressure] export capture output failed:', error)
       captureStatusText.value = message
-      ElMessage.warning(`视频识别结果导出失败，已继续结束测试：${message}`)
+      ElMessage.error(`OCR 识别结果导出失败，无法结束测试：${message}`)
+      return false
     }
     return true
   }
@@ -791,25 +1189,28 @@ export function useHighTempPressureTesting() {
     testRunning.value = false
     testStartTime.value = null
     closeModal()
-    switchPanel('report')
+    switchPanel('dashboard')
   }
 
   onMounted(() => {
     timerInterval = window.setInterval(() => {
       if (testStartTime.value !== null) syncRuntime()
     }, 1000)
+    window.addEventListener('resize', resizeChart)
   })
 
   onUnmounted(() => {
     if (timerInterval) clearInterval(timerInterval)
+    if (chartRenderTimer !== null) clearTimeout(chartRenderTimer)
     revokeLatestFrameObjectUrl()
     stopCapturePolling()
     cleanupStreamListener()
     if (captureOutputDir.value) {
-      void invoke('stop_high_temp_pressure_video_stream', {
+      void invoke('stop_high_temp_pressure_ocr_stream', {
         outputDir: captureOutputDir.value,
       }).catch(() => undefined)
     }
+    window.removeEventListener('resize', resizeChart)
     disposeChart()
   })
 
@@ -819,11 +1220,10 @@ export function useHighTempPressureTesting() {
     testRunning,
     testStartTime,
     csvCount,
-    videoPath,
-    videoFileName,
-    videoUrl,
+    ocrDeviceIndex,
+    ocrDeviceName,
     captureOutputDir,
-    captureProgressPct,
+    ocrReadyPct,
     captureRecordCount,
     captureStatusText,
     captureCompleted,
@@ -831,9 +1231,13 @@ export function useHighTempPressureTesting() {
     exportedCaptureDir,
     curveChartImagePath,
     curveData,
-    videoMeasurements,
-    videoReadings,
-    videoConfidence,
+    chartWindowMinutes,
+    chartRangeLocked,
+    chartSeriesVisibility,
+    chartSummary,
+    ocrMeasurements,
+    ocrReadings,
+    ocrConfidence,
     onlineSeconds,
     onlineTimerStr,
     state,
@@ -842,12 +1246,15 @@ export function useHighTempPressureTesting() {
     closeModal,
     confirmStart,
     resetTestSession,
-    selectVideoFile,
+    connectOcrDevice,
     pauseTest,
     resumeTest,
     stopTest,
-    finalizeVideoCapture,
+    finalizeOcrCapture,
     ensureCurveChartImage,
+    setChartWindowMinutes,
+    toggleChartSeries,
+    showAllChartSeries,
     endTest,
   }
 }

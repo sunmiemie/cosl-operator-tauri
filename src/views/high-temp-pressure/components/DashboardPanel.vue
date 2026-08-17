@@ -7,6 +7,7 @@ import type { ScheduledSelection, TimeSlotItem, WeekDayItem, WorkOrder } from '.
 const props = defineProps<{
   unscheduledOrders: WorkOrder[]
   workOrdersLoading: boolean
+  scheduleOperationLoading: boolean
   searchKeyword: string
   hostDeviceTabs: string[]
   activeHostDeviceName: string
@@ -63,6 +64,7 @@ const emit = defineEmits<{
   'select-scheduled-order': [instrumentIds: string[]]
   unschedule: [instrumentIds: string[], eventId: string]
   'start-scheduled-test': []
+  'retest-instrument': [order: WorkOrder, instrumentSn: string]
   'refresh': []
 }>()
 
@@ -81,7 +83,6 @@ const closeDetail = () => {
 
 const timeColWidth = 60
 const cellPadding = 3
-const maxLanesBeforeExpand = 2
 
 const gridScrollRef = ref<HTMLElement | null>(null)
 const gridViewportWidth = ref(0)
@@ -103,10 +104,8 @@ onBeforeUnmount(() => {
   ro = null
 })
 
-const widthFactor = computed(() => Math.max(1, Math.ceil((props.maxLaneCount || 1) / maxLanesBeforeExpand)))
 const gridInnerWidth = computed(() => {
-  const base = Math.max(0, gridViewportWidth.value - timeColWidth)
-  return timeColWidth + base * widthFactor.value
+  return Math.max(0, gridViewportWidth.value)
 })
 
 const selectedScheduledOrderGroups = computed(() => {
@@ -134,6 +133,10 @@ const getActiveInstruments = (order: WorkOrder) => {
   return order.items.filter((item) => props.isInstrumentPending(item.id))
 }
 
+const getCompletedInstruments = (order: WorkOrder) => {
+  return order.items.filter((item) => item.completed && !props.isInstrumentRunning(item.id))
+}
+
 const getRunningInstrumentCount = (order: WorkOrder) => {
   return getActiveInstruments(order).filter((item) => props.isInstrumentRunning(item.id)).length
 }
@@ -153,7 +156,16 @@ const getInstrumentStatusMeta = (instrumentId: string) => {
 }
 
 const getOrderStatusMeta = (order: WorkOrder) => {
+  if (order.statusCode === 4) {
+    return { label: '待重做', className: 'status-rework' }
+  }
   if (getRunningInstrumentCount(order) > 0) {
+    return { label: '测试中', className: 'status-testing' }
+  }
+  if (order.statusCode === 2) {
+    if (getActiveInstruments(order).length === 0) {
+      return { label: '待提交报告', className: 'status-report-pending' }
+    }
     return { label: '测试中', className: 'status-testing' }
   }
   if (getScheduledInstrumentCount(order) > 0) {
@@ -225,6 +237,11 @@ const handleGridDrop = (e: DragEvent) => {
 
 <template>
   <div class="panel active">
+    <div v-if="scheduleOperationLoading" class="schedule-operation-mask" role="status" aria-live="assertive">
+      <span class="schedule-operation-spinner" aria-hidden="true"></span>
+      <strong>正在保存排程</strong>
+      <span>请稍候，完成前不可继续操作</span>
+    </div>
     <div class="schedule-wrap">
       <div class="sidebar">
         <div class="panel-header">
@@ -324,9 +341,9 @@ const handleGridDrop = (e: DragEvent) => {
                         <div class="instrument-panel-head">
                           <div>
                             <div class="instrument-title">设备明细</div>
-                            <div class="instrument-subtitle">该工单当前未完成的测试设备</div>
+                            <div class="instrument-subtitle">未测试设备可排程，已测试设备可重新测试</div>
                           </div>
-                          <span class="instrument-count">{{ getActiveInstruments(order).length }} 台</span>
+                          <span class="instrument-count">{{ order.items.length }} 台</span>
                         </div>
                         <div v-if="getActiveInstruments(order).length === 0" class="instrument-empty">
                           当前工单暂无待测试设备
@@ -345,6 +362,23 @@ const handleGridDrop = (e: DragEvent) => {
                             >
                               {{ getInstrumentStatusMeta(item.id).label }}
                             </span>
+                          </div>
+                        </div>
+                        <div v-if="getCompletedInstruments(order).length" class="instrument-list completed-instrument-list">
+                          <div
+                            v-for="item in getCompletedInstruments(order)"
+                            :key="`${item.id}-completed`"
+                            class="instrument-item instrument-item-completed"
+                          >
+                            <span class="instrument-name">{{ item.label }}</span>
+                            <span class="instrument-sn">{{ item.sn }}</span>
+                            <span class="instrument-status instrument-status-completed">已测试</span>
+                            <button
+                              class="op-btn retest"
+                              @click.stop="emit('retest-instrument', order, item.sn)"
+                            >
+                              重新测试
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -477,14 +511,52 @@ const handleGridDrop = (e: DragEvent) => {
 
 <style scoped src="./high-temp-pressure.shared.css"></style>
 <style scoped>
+.panel.active {
+  position: relative;
+}
+
+.schedule-operation-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(248, 250, 252, 0.9);
+  color: var(--color-text-primary);
+  text-align: center;
+  cursor: wait;
+  backdrop-filter: blur(2px);
+}
+
+.schedule-operation-mask > span:last-child {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.schedule-operation-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(37, 99, 235, 0.18);
+  border-top-color: var(--color-accent-blue);
+  border-radius: 50%;
+  animation: schedule-operation-spin 0.8s linear infinite;
+}
+
+@keyframes schedule-operation-spin {
+  to { transform: rotate(360deg); }
+}
+
 .sidebar {
   width: 440px;
   min-width: 440px;
 }
 
-.grid-scroll { flex: 1; overflow: auto; }
+.grid-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; }
 .grid-body { position: relative; overflow: hidden; }
-.grid-inner { position: relative; }
+.grid-inner { position: relative; min-width: 0; }
 .events-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .scheduled-item { position: absolute; padding: 4px 6px; background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4)); border-radius: 4px; color: #fff; display: flex; flex-direction: column; justify-content: flex-start; cursor: pointer; user-select: none; transition: all 0.2s ease; overflow: hidden; pointer-events: auto; z-index: 10; font-size: 10px; }
 .calendar-grid.is-dragging .scheduled-item { pointer-events: none; }
@@ -708,6 +780,18 @@ const handleGridDrop = (e: DragEvent) => {
   border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
+.status-report-pending {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.1);
+  border: 1px solid rgba(124, 58, 237, 0.2);
+}
+
+.status-rework {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.2);
+}
+
 .expanded-cell {
   padding: 0 16px 12px 19px !important;
   background: var(--color-bg-primary) !important;
@@ -757,6 +841,12 @@ const handleGridDrop = (e: DragEvent) => {
   gap: 8px;
 }
 
+.completed-instrument-list {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+}
+
 .instrument-item {
   align-items: center;
   display: grid;
@@ -771,6 +861,18 @@ const handleGridDrop = (e: DragEvent) => {
 .instrument-item:hover {
   border-color: var(--color-border);
   background: var(--color-bg-hover);
+}
+
+.instrument-item-completed {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  opacity: 0.9;
+}
+
+.op-btn.retest {
+  min-width: 64px;
+  color: #d97706;
+  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(245, 158, 11, 0.1);
 }
 
 .instrument-name {
@@ -818,6 +920,11 @@ const handleGridDrop = (e: DragEvent) => {
 .instrument-status-running {
   color: #047857;
   background: rgba(16, 185, 129, 0.16);
+}
+
+.instrument-status-completed {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.14);
 }
 
 .instrument-empty {

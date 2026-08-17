@@ -11,6 +11,7 @@ import { useAppLock } from '@/composables/useAppLock'
 import { useFlojoyBackend, BackendStatus, InitStatus } from '@/composables/useFlojoyBackend'
 import { ThemeMode } from '@/enums'
 import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { platform as getPlatform } from '@tauri-apps/plugin-os'
 import { http } from '@/services/http'
 import { cacheApi, type CacheSizes } from '@/services/process'
@@ -56,6 +57,11 @@ const planeDevice = ref<number>(-1)
 const xrayDevice = ref<number>(-1)
 const isLoadingCameras = ref(false)
 const isRestartingCameras = ref(false)
+type HighTempPressureCaptureDevice = { index: number; name: string; available: boolean }
+const highTempPressureCaptureDevices = ref<HighTempPressureCaptureDevice[]>([])
+const highTempPressureCaptureDevice = ref(-1)
+const highTempPressureCaptureDeviceName = ref('')
+const isRefreshingHighTempPressureCaptureDevices = ref(false)
 
 // 离线功能设置
 const dataDir = ref('')
@@ -153,6 +159,15 @@ onMounted(async () => {
   microDevice.value = config.value.microDevice ?? -1
   planeDevice.value = config.value.planeDevice ?? -1
   xrayDevice.value = config.value.xrayDevice ?? -1
+  highTempPressureCaptureDevice.value = config.value.highTempPressureCaptureDevice ?? -1
+  highTempPressureCaptureDeviceName.value = config.value.highTempPressureCaptureDeviceName ?? ''
+  if (highTempPressureCaptureDevice.value >= 0) {
+    highTempPressureCaptureDevices.value = [{
+      index: highTempPressureCaptureDevice.value,
+      name: highTempPressureCaptureDeviceName.value || `采集设备 ${highTempPressureCaptureDevice.value}`,
+      available: true,
+    }]
+  }
   dataDir.value = config.value.dataDir ?? ''
   highTempPressureDownloadDir.value = config.value.highTempPressureDownloadDir ?? ''
   vibrationDownloadDir.value = config.value.vibrationDownloadDir ?? ''
@@ -194,6 +209,34 @@ async function loadCameraList() {
   } finally {
     isLoadingCameras.value = false
   }
+}
+
+async function refreshHighTempPressureCaptureDevices() {
+  isRefreshingHighTempPressureCaptureDevices.value = true
+  try {
+    const devices = await invoke<HighTempPressureCaptureDevice[]>('get_high_temp_pressure_ocr_devices')
+    highTempPressureCaptureDevices.value = devices.filter(device => device.available)
+    if (!highTempPressureCaptureDevices.value.length) {
+      ElMessage.warning('未搜索到OCR视频采集卡')
+      return
+    }
+    ElMessage.success(`已搜索到 ${highTempPressureCaptureDevices.value.length} 个采集设备`)
+  } catch (error) {
+    console.error('搜索OCR视频采集卡失败:', error)
+    ElMessage.error(`搜索OCR视频采集卡失败：${String(error)}`)
+  } finally {
+    isRefreshingHighTempPressureCaptureDevices.value = false
+  }
+}
+
+async function saveHighTempPressureCaptureDevice() {
+  const selected = highTempPressureCaptureDevices.value.find(
+    device => device.index === highTempPressureCaptureDevice.value
+  )
+  highTempPressureCaptureDeviceName.value = selected?.name || ''
+  await setConfigItem('highTempPressureCaptureDevice', highTempPressureCaptureDevice.value)
+  await setConfigItem('highTempPressureCaptureDeviceName', highTempPressureCaptureDeviceName.value)
+  if (selected) ElMessage.success(`OCR视频采集卡已设为 ${selected.name}`)
 }
 
 // ==================== 缓存管理 ====================
@@ -1061,6 +1104,41 @@ function getFlojoyInitStatusText(): string {
                 title="区域校准"
               >
                 <Icon icon="mdi:crop" />
+              </button>
+            </div>
+          </div>
+
+          <!-- OCR视频采集卡：仅手动刷新时搜索 -->
+          <div class="settings-item">
+            <span class="item-label">OCR视频采集卡</span>
+            <div class="device-selector">
+              <select
+                v-model.number="highTempPressureCaptureDevice"
+                class="item-select"
+                :disabled="isRefreshingHighTempPressureCaptureDevices"
+                @change="saveHighTempPressureCaptureDevice"
+              >
+                <option :value="-1">
+                  {{ isRefreshingHighTempPressureCaptureDevices ? '正在搜索...' : '点击刷新搜索设备' }}
+                </option>
+                <option
+                  v-for="device in highTempPressureCaptureDevices"
+                  :key="device.index"
+                  :value="device.index"
+                >
+                  {{ device.name }}
+                </option>
+              </select>
+              <button
+                class="preview-btn"
+                :disabled="isRefreshingHighTempPressureCaptureDevices"
+                title="刷新搜索OCR视频采集卡"
+                @click="refreshHighTempPressureCaptureDevices"
+              >
+                <Icon
+                  :icon="isRefreshingHighTempPressureCaptureDevices ? 'mdi:loading' : 'mdi:refresh'"
+                  :class="{ spin: isRefreshingHighTempPressureCaptureDevices }"
+                />
               </button>
             </div>
           </div>

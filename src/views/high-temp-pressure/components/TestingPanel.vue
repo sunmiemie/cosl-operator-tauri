@@ -2,43 +2,128 @@
 import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
-import type { HighTempPressureVideoMeasurement } from '../composables/useHighTempPressureTesting'
+import type {
+  HighTempPressureChartSummary,
+  HighTempPressureChartSeriesKey,
+  HighTempPressureChartSeriesVisibility,
+  HighTempPressureOcrMeasurement,
+} from '../composables/useHighTempPressureTesting'
 
 const props = defineProps<{
   t1: number[]
   t2: number[]
   p: number[]
   testRunning: boolean
+  testStartTime: number | null
+  onlineTimerStr: string
   csvCount: number
   currentSelected: ScheduledSelection | null
-  videoFileName: string
-  videoUrl: string
-  captureProgressPct: number
+  ocrDeviceName: string
+  ocrReadyPct: number
   captureStatusText: string
   latestFrameUrl: string
   exportedCaptureDir: string
-  videoMeasurements: HighTempPressureVideoMeasurement[]
+  ocrMeasurements: HighTempPressureOcrMeasurement[]
+  chartWindowMinutes: number | null
+  chartRangeLocked: boolean
+  chartSummary: HighTempPressureChartSummary
+  chartSeriesVisibility: HighTempPressureChartSeriesVisibility
 }>()
 
 const emit = defineEmits<{
-  'select-video': []
+  'connect-ocr': []
   pause: []
   resume: []
   'open-stop-modal': []
   'open-end-modal': []
+  'set-chart-window': [value: number | null]
+  'toggle-chart-series': [key: HighTempPressureChartSeriesKey]
+  'show-all-chart-series': []
 }>()
 
 const detailModalVisible = ref(false)
 const detailModuleCount = 6
+const chartWindowOptions = [5, 30, 60, 240]
+const chartSeriesOptions: Array<{
+  key: HighTempPressureChartSeriesKey
+  label: string
+  className: string
+}> = [
+  { key: 'upperTemp', label: '上部水温', className: 'series-hot' },
+  { key: 'lowerTemp', label: '下部水温', className: 'series-warm' },
+  { key: 'pressure', label: '容器压力', className: 'series-pressure' },
+]
+
+const allChartSeriesVisible = computed(() => Object.values(props.chartSeriesVisibility).every(Boolean))
 
 const currentOrder = computed(() => props.currentSelected?.order ?? null)
 const currentInstrument = computed(() => props.currentSelected?.instrument ?? null)
 const currentOrderBadge = computed(() => currentOrder.value?.no || currentOrder.value?.receivingNo || '未选择')
-const captureProgressSafe = computed(() => {
-  const value = Number(props.captureProgressPct)
+const ocrReadySafe = computed(() => {
+  const value = Number(props.ocrReadyPct)
   if (!Number.isFinite(value)) return 0
   return Math.min(100, Math.max(0, value))
 })
+
+const formatChartValue = (value: number | null, digits: number, unit: string) => {
+  if (value === null || !Number.isFinite(value)) return '--'
+  return `${value.toFixed(digits)} ${unit}`
+}
+
+const formatChartUpdatedAt = (timestamp: number | null) => {
+  if (timestamp === null || !Number.isFinite(timestamp)) return '--:--:--'
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+const formatDateTime = (timestamp: number | null) => {
+  if (timestamp === null || !Number.isFinite(timestamp)) return '--'
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+const formatDuration = (seconds: number) => {
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const secs = safeSeconds % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+const scheduleEndTimestamp = computed(() => {
+  const instrument = currentInstrument.value
+  const segmentEnds = (instrument?.scheduleSegments || [])
+    .map((segment) => Date.parse(segment.scheduledEndAt))
+    .filter(Number.isFinite)
+  const directEnd = Date.parse(String(instrument?.scheduledEndAt || ''))
+  if (Number.isFinite(directEnd)) segmentEnds.push(directEnd)
+  return segmentEnds.length ? Math.max(...segmentEnds) : null
+})
+
+const scheduleRemainingText = computed(() => {
+  // onlineTimerStr 每秒更新，用作纯显示倒计时的响应式时钟，不触发任何结束动作。
+  void props.onlineTimerStr
+  if (scheduleEndTimestamp.value === null) return '--'
+  return formatDuration((scheduleEndTimestamp.value - Date.now()) / 1000)
+})
+
+const scheduleEndText = computed(() => formatDateTime(scheduleEndTimestamp.value))
+
+const handleTestStart = () => {
+  if (props.testRunning) return
+  if (props.ocrDeviceName) emit('resume')
+  else emit('connect-ocr')
+}
 
 const displayValue = (value: unknown) => {
   if (value === undefined || value === null || value === '') return '-'
@@ -98,63 +183,85 @@ const testPurposeText = computed(() => {
 
 <template>
   <div class="panel">
-    <div class="ocr-bar">
-      <div class="ocr-mini on">
-        <div class="ocr-mini-title">视频 OCR · 当前识别</div>
-        <div class="ocr-mini-row">
-          <span class="ocr-mini-label">上部水温</span>
-          <span class="ocr-val temp">{{ t1[t1.length - 1]?.toFixed(1) || '--.-' }} °C</span>
-        </div>
-        <div class="ocr-mini-row">
-          <span class="ocr-mini-label">下部水温</span>
-          <span class="ocr-val temp">{{ t2[t2.length - 1]?.toFixed(2) || '--.-' }} °C</span>
-        </div>
-        <div class="ocr-mini-row">
-          <span class="ocr-mini-label">容器压力</span>
-          <span class="ocr-val press">{{ p[p.length - 1]?.toFixed(3) || '--.--' }} MPa</span>
-        </div>
-      </div>
-      <div class="ocr-mini">
-        <div class="ocr-mini-title">系统状态</div>
-        <div class="ocr-mini-row">
-          <span class="ocr-mini-label">测试状态</span>
-          <span class="badge" :class="testRunning ? 'badge-green' : ''">{{ testRunning ? '测试中' : '已暂停' }}</span>
-        </div>
-        <div class="ocr-mini-row">
-          <span class="ocr-mini-label">已采集</span>
-          <span class="mono-value">{{ csvCount }} 条</span>
-        </div>
-        <div class="ocr-mini-row">
-          <span class="ocr-mini-label">视频进度</span>
-          <span class="mono-value">{{ captureProgressSafe }}%</span>
-        </div>
-      </div>
-    </div>
-
     <div class="testing-scroll-region">
-      <div class="video-capture-card">
-        <div class="video-capture-head">
-          <div class="capture-title-block">
-            <div class="capture-kicker">VIDEO OCR</div>
-            <div class="card-title">视频识别采集</div>
-            <div class="video-status">{{ captureStatusText }}</div>
+      <div class="ocr-capture-card">
+        <section class="overview-zone">
+          <div class="overview-head">
+            <div>
+              <div class="capture-kicker">LIVE TEST OVERVIEW</div>
+              <div class="overview-title">实时参数与采集状态</div>
+            </div>
+            <div class="overview-live" :class="{ active: testRunning }">
+              <i></i>{{ testRunning ? '测试进行中' : '等待开始 / 已暂停' }}
+            </div>
           </div>
-          <button class="select-video-btn" @click="emit('select-video')">
-            <Icon icon="mdi:video-switch-outline" />
-            {{ videoFileName ? '重新选择视频' : '选择视频并开始采集' }}
-          </button>
-        </div>
 
-        <div
-          class="capture-progress-track"
-          role="progressbar"
-          aria-label="视频识别采集进度"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          :aria-valuenow="captureProgressSafe"
-        >
-          <div class="capture-progress-fill" :style="{ width: `${captureProgressSafe}%` }"></div>
-        </div>
+          <div class="overview-metrics">
+            <div class="overview-metric metric-upper">
+              <span>上部温度</span>
+              <strong>{{ formatChartValue(chartSummary.latestUpperTemp, 1, '°C') }}</strong>
+            </div>
+            <div class="overview-metric metric-lower">
+              <span>下部温度</span>
+              <strong>{{ formatChartValue(chartSummary.latestLowerTemp, 1, '°C') }}</strong>
+            </div>
+            <div class="overview-metric metric-pressure-live">
+              <span>容器压力</span>
+              <strong>{{ formatChartValue(chartSummary.latestPressure, 3, 'MPa') }}</strong>
+            </div>
+            <div class="overview-metric">
+              <span>温度最高值</span>
+              <strong>{{ formatChartValue(chartSummary.maxTemp, 1, '°C') }}</strong>
+            </div>
+            <div class="overview-metric">
+              <span>温度最低值</span>
+              <strong>{{ formatChartValue(chartSummary.minTemp, 1, '°C') }}</strong>
+            </div>
+            <div class="overview-metric">
+              <span>压力最高值</span>
+              <strong>{{ formatChartValue(chartSummary.maxPressure, 3, 'MPa') }}</strong>
+            </div>
+            <div class="overview-metric">
+              <span>压力最低值</span>
+              <strong>{{ formatChartValue(chartSummary.minPressure, 3, 'MPa') }}</strong>
+            </div>
+            <div class="overview-metric">
+              <span>已采集条数</span>
+              <strong>{{ csvCount }} 条</strong>
+            </div>
+            <div class="overview-metric overview-status-metric">
+              <span>OCR 采集状态 · 就绪 {{ ocrReadySafe }}%</span>
+              <strong :title="captureStatusText">{{ captureStatusText }}</strong>
+            </div>
+            <div class="overview-metric overview-time-metric">
+              <span>开始时间</span>
+              <strong>{{ formatDateTime(testStartTime) }}</strong>
+            </div>
+            <div class="overview-metric overview-time-metric remaining">
+              <span>排期剩余时间 · 截止 {{ scheduleEndText }}</span>
+              <strong>{{ scheduleRemainingText }}</strong>
+            </div>
+          </div>
+
+          <div class="test-controls">
+            <button class="control-action control-action-start" :disabled="testRunning" @click="handleTestStart">
+              <span class="control-icon"><Icon icon="mdi:play" /></span>
+              <span class="control-copy"><strong>测试开始</strong><small>启动或恢复 OCR 采集</small></span>
+            </button>
+            <button class="control-action control-action-pause" :disabled="!testRunning" @click="emit('pause')">
+              <span class="control-icon"><Icon icon="mdi:pause" /></span>
+              <span class="control-copy"><strong>测试暂停</strong><small>暂停当前采集进程</small></span>
+            </button>
+            <button class="control-action control-action-end" @click="emit('open-end-modal')">
+              <span class="control-icon"><Icon icon="mdi:check" /></span>
+              <span class="control-copy"><strong>测试结束</strong><small>保存本次识别结果</small></span>
+            </button>
+            <button class="control-action control-action-reconnect" @click="emit('connect-ocr')">
+              <span class="control-icon"><Icon icon="mdi:camera-wireless-outline" /></span>
+              <span class="control-copy"><strong>重新连接采集卡</strong><small>{{ ocrDeviceName || '尚未连接采集卡' }}</small></span>
+            </button>
+          </div>
+        </section>
 
         <div class="monitoring-board">
           <div class="monitoring-chart-card">
@@ -163,16 +270,73 @@ const testPurposeText = computed(() => {
                 <Icon icon="mdi:chart-line" />
                 <span>实时监控曲线</span>
               </div>
-              <div class="monitoring-card-meta">
-                <span class="monitoring-series series-hot">上部水温</span>
-                <span class="monitoring-series series-warm">下部水温</span>
-                <span class="monitoring-series series-pressure">容器压力 x10</span>
-                <span class="monitoring-status">{{ captureStatusText }}</span>
-                <span class="monitoring-count">{{ csvCount }} 条</span>
+              <div class="monitoring-card-meta chart-head-meta">
+                <span class="monitoring-updated">更新 {{ formatChartUpdatedAt(chartSummary.updatedAtMs) }}</span>
               </div>
             </div>
+
+            <div class="monitoring-chart-subbar">
+              <div class="chart-window-control" role="group" aria-label="曲线显示时间范围">
+                <span class="chart-window-label">时间范围</span>
+                <span v-if="chartRangeLocked" class="chart-window-custom">自定义</span>
+                <button
+                  type="button"
+                  :class="{ active: chartWindowMinutes === null && !chartRangeLocked }"
+                  @click="emit('set-chart-window', null)"
+                >
+                  自动
+                </button>
+                <button
+                  type="button"
+                  :class="{ active: chartWindowMinutes === 0 && !chartRangeLocked }"
+                  @click="emit('set-chart-window', 0)"
+                >
+                  全程
+                </button>
+                <button
+                  v-for="minutes in chartWindowOptions"
+                  :key="minutes"
+                  type="button"
+                  :class="{ active: chartWindowMinutes === minutes }"
+                  @click="emit('set-chart-window', minutes)"
+                >
+                  {{ minutes >= 60 ? `${minutes / 60} 小时` : `${minutes} 分钟` }}
+                </button>
+              </div>
+              <div class="monitoring-card-meta chart-series-legend" role="group" aria-label="选择显示曲线">
+                <span class="chart-series-label">显示曲线</span>
+                <button
+                  v-for="series in chartSeriesOptions"
+                  :key="series.key"
+                  type="button"
+                  :class="[
+                    'monitoring-series',
+                    series.className,
+                    { inactive: !chartSeriesVisibility[series.key] },
+                  ]"
+                  :aria-pressed="chartSeriesVisibility[series.key]"
+                  :title="`${chartSeriesVisibility[series.key] ? '隐藏' : '显示'}${series.label}`"
+                  @click="emit('toggle-chart-series', series.key)"
+                >
+                  {{ series.label }}
+                  <Icon :icon="chartSeriesVisibility[series.key] ? 'mdi:eye-outline' : 'mdi:eye-off-outline'" />
+                </button>
+                <button
+                  v-if="!allChartSeriesVisible"
+                  type="button"
+                  class="chart-series-reset"
+                  @click="emit('show-all-chart-series')"
+                >
+                  全部显示
+                </button>
+              </div>
+            </div>
+
             <div class="monitoring-chart-body">
               <div id="htp-chart" class="monitoring-chart"></div>
+              <div v-if="!chartSummary.count" class="monitoring-chart-empty">
+                {{ testRunning ? '正在等待第一个 OCR 数据点' : '连接采集卡并开始 OCR 后显示实时曲线' }}
+              </div>
             </div>
           </div>
 
@@ -420,36 +584,6 @@ const testPurposeText = computed(() => {
       </div>
     </div>
 
-    <div class="test-controls">
-      <button v-if="testRunning" class="control-action control-action-pause" @click="emit('pause')">
-        <span class="control-icon"><Icon icon="mdi:pause" /></span>
-        <span class="control-copy">
-          <strong>测试暂停</strong>
-          <small>暂停采集进程</small>
-        </span>
-      </button>
-      <button v-else class="control-action control-action-pause" @click="emit('resume')">
-        <span class="control-icon"><Icon icon="mdi:play" /></span>
-        <span class="control-copy">
-          <strong>继续测试</strong>
-          <small>恢复视频识别</small>
-        </span>
-      </button>
-      <button class="control-action control-action-stop" @click="emit('open-stop-modal')">
-        <span class="control-icon"><Icon icon="mdi:stop" /></span>
-        <span class="control-copy">
-          <strong>测试中止</strong>
-          <small>放弃本次采集</small>
-        </span>
-      </button>
-      <button class="control-action control-action-end" @click="emit('open-end-modal')">
-        <span class="control-icon"><Icon icon="mdi:check" /></span>
-        <span class="control-copy">
-          <strong>测试结束</strong>
-          <small>保存识别结果</small>
-        </span>
-      </button>
-    </div>
   </div>
 </template>
 
@@ -470,11 +604,6 @@ const testPurposeText = computed(() => {
   gap: 12px;
 }
 
-.ocr-bar {
-  flex: 0 0 auto;
-  margin-bottom: 0;
-}
-
 .testing-scroll-region {
   flex: 1 1 auto;
   min-height: 0;
@@ -485,7 +614,7 @@ const testPurposeText = computed(() => {
   overscroll-behavior: contain;
 }
 
-.video-capture-card {
+.ocr-capture-card {
   --capture-amber-soft: rgba(245, 158, 11, 0.12);
   border: 1px solid var(--capture-line);
   border-radius: 20px;
@@ -496,9 +625,150 @@ const testPurposeText = computed(() => {
   padding: 18px;
   margin: 0 0 12px;
   min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
-.video-capture-head {
+.overview-zone {
+  flex: 0 0 35%;
+  min-height: 260px;
+  padding: 15px;
+  border: 1px solid #dce5f4;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 5px 18px rgba(23, 32, 51, 0.05);
+}
+
+.overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 11px;
+}
+
+.overview-title {
+  color: var(--capture-ink);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.overview-live {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.overview-live i {
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.overview-live.active {
+  border-color: #b7dfcb;
+  background: #effaf4;
+  color: #28715d;
+}
+
+.overview-live.active i {
+  background: #2f855a;
+  box-shadow: 0 0 0 3px rgba(47, 133, 90, 0.12);
+}
+
+.overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.overview-metric {
+  min-width: 0;
+  min-height: 70px;
+  padding: 10px 11px;
+  border: 1px solid #e3e9f2;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.overview-metric > span {
+  display: block;
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-metric > strong {
+  display: block;
+  margin-top: 8px;
+  overflow: hidden;
+  color: #172033;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-upper {
+  border-color: rgba(225, 75, 85, 0.2);
+  background: rgba(225, 75, 85, 0.06);
+}
+
+.metric-upper > strong { color: #c53d48; }
+
+.metric-lower {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.metric-lower > strong { color: #c97508; }
+
+.metric-pressure-live {
+  border-color: rgba(63, 105, 201, 0.2);
+  background: rgba(63, 105, 201, 0.07);
+}
+
+.metric-pressure-live > strong { color: #315bb8; }
+
+.overview-status-metric,
+.overview-time-metric {
+  grid-column: span 2;
+}
+
+.overview-status-metric > strong {
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.overview-time-metric > strong {
+  font-size: 14px;
+}
+
+.overview-time-metric.remaining {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.overview-time-metric.remaining > strong {
+  color: #2557a7;
+  font-size: 18px;
+}
+
+.ocr-capture-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -519,14 +789,14 @@ const testPurposeText = computed(() => {
   margin-bottom: 4px;
 }
 
-.video-status {
+.ocr-status {
   margin-top: 5px;
   color: var(--capture-muted);
   font-size: 13px;
   line-height: 1.4;
 }
 
-.select-video-btn {
+.connect-ocr-btn {
   border: 0;
   border-radius: 14px;
   background: linear-gradient(135deg, var(--color-accent-blue), var(--color-accent-cyan, #06b6d4));
@@ -544,7 +814,7 @@ const testPurposeText = computed(() => {
   transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
 }
 
-.select-video-btn:hover {
+.connect-ocr-btn:hover {
   filter: saturate(1.05);
   transform: translateY(-1px);
   box-shadow: 0 16px 30px rgba(37, 99, 235, 0.28);
@@ -578,13 +848,24 @@ const testPurposeText = computed(() => {
 }
 
 .monitoring-board {
+  flex: 1 1 65%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 2.45fr) minmax(310px, 1fr);
   gap: 14px;
-  margin-top: 16px;
+  min-height: 500px;
+  margin-top: 14px;
 }
 
-.monitoring-chart-card,
+.monitoring-chart-card {
+  border: 1px solid #dce5f4;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 5px 18px rgba(23, 32, 51, 0.06);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .monitoring-order-card {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 18px;
@@ -600,6 +881,12 @@ const testPurposeText = computed(() => {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.monitoring-chart-card .monitoring-card-head {
+  min-height: 52px;
+  padding: 11px 14px;
+  border-bottom-color: #e6ebf3;
 }
 
 .monitoring-card-title {
@@ -626,8 +913,9 @@ const testPurposeText = computed(() => {
 }
 
 .monitoring-series,
-.monitoring-status,
-.monitoring-count {
+.monitoring-count,
+.monitoring-live-state,
+.monitoring-updated {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -636,6 +924,112 @@ const testPurposeText = computed(() => {
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.chart-head-meta {
+  gap: 8px;
+  color: #667085;
+}
+
+.monitoring-live-state,
+.monitoring-count {
+  border: 1px solid #e2e8f1;
+  background: #f8fafc;
+  color: #667085;
+}
+
+.monitoring-live-state i {
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #98a2b3;
+}
+
+.monitoring-live-state.active {
+  border-color: #b7dfcb;
+  background: #effaf4;
+  color: #28715d;
+}
+
+.monitoring-live-state.active i {
+  background: #2f855a;
+  box-shadow: 0 0 0 3px rgba(47, 133, 90, 0.12);
+}
+
+.monitoring-updated {
+  height: auto;
+  padding: 0;
+  color: #7a8190;
+  font-weight: 500;
+}
+
+.monitoring-chart-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #edf1f7;
+  background: #fbfcfe;
+}
+
+.chart-window-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chart-window-label {
+  margin-right: 2px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chart-window-custom {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff2d7;
+  color: #a15c00;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chart-window-control button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d8e0ec;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475467;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.chart-window-control button:hover {
+  border-color: #a9bce4;
+  color: #2557a7;
+}
+
+.chart-window-control button.active {
+  border-color: #3f69c9;
+  background: #3f69c9;
+  color: #ffffff;
+}
+
+.chart-series-legend {
+  gap: 7px;
+}
+
+.chart-series-label {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -674,20 +1068,118 @@ const testPurposeText = computed(() => {
   background: #0ea5e9;
 }
 
-.monitoring-status,
-.monitoring-count {
-  color: var(--capture-muted);
-  background: rgba(148, 163, 184, 0.12);
+.monitoring-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 14px 4px;
+  background: #ffffff;
+}
+
+.monitoring-series {
+  border: 1px solid transparent;
+  cursor: pointer;
+  gap: 5px;
+  transition: opacity 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.monitoring-series:hover {
+  border-color: currentColor;
+}
+
+.monitoring-series svg {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.monitoring-series.inactive {
+  border-color: #e1e6ee;
+  background: #f5f7fa;
+  color: #98a2b3;
+  opacity: 0.78;
+}
+
+.monitoring-series.inactive::before {
+  background: #b8c0cc;
+}
+
+.chart-series-reset {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px dashed #a9bce4;
+  border-radius: 999px;
+  background: #fff;
+  color: #315bb8;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.monitoring-stat {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #e3e9f2;
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.monitoring-stat span {
+  display: block;
+  margin-bottom: 4px;
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitoring-stat strong {
+  display: block;
+  overflow: hidden;
+  color: #172033;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitoring-stat.stat-hot strong {
+  color: #c53d48;
+}
+
+.monitoring-stat.stat-warm strong {
+  color: #c97508;
+}
+
+.monitoring-stat.stat-pressure strong {
+  color: #315bb8;
 }
 
 .monitoring-chart-body {
-  padding: 8px 14px 14px;
+  flex: 1 1 auto;
+  min-height: 400px;
+  position: relative;
+  padding: 0 10px 10px;
 }
 
 .monitoring-chart {
   width: 100%;
-  height: 420px;
-  min-height: 420px;
+  height: 100%;
+  min-height: 440px;
+}
+
+.monitoring-chart-empty {
+  position: absolute;
+  left: 50%;
+  top: 43%;
+  max-width: calc(100% - 40px);
+  transform: translate(-50%, -50%);
+  color: #7a8190;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
 }
 
 .compact-order-card {
@@ -1186,10 +1678,9 @@ const testPurposeText = computed(() => {
 .test-controls {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 210px));
-  justify-content: center;
-  gap: 12px;
-  padding: 4px 0 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 10px;
 }
 
 .control-action {
@@ -1199,13 +1690,20 @@ const testPurposeText = computed(() => {
   color: var(--capture-ink);
   cursor: pointer;
   min-height: 58px;
-  padding: 10px 12px;
+  padding: 8px 11px;
   display: flex;
   align-items: center;
   gap: 10px;
   text-align: left;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.control-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+  box-shadow: none;
 }
 
 .control-action:hover {
@@ -1244,6 +1742,16 @@ const testPurposeText = computed(() => {
   background: rgba(245, 158, 11, 0.14);
 }
 
+.control-action-start .control-icon {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.control-action-reconnect .control-icon {
+  color: #0369a1;
+  background: rgba(14, 165, 233, 0.13);
+}
+
 .control-action-stop .control-icon {
   color: var(--capture-red);
   background: rgba(239, 68, 68, 0.12);
@@ -1259,9 +1767,21 @@ const testPurposeText = computed(() => {
 }
 
 @media (max-width: 1100px) {
-  .test-controls,
   .monitoring-board {
     grid-template-columns: 1fr;
+  }
+
+  .test-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .overview-status-metric,
+  .overview-time-metric {
+    grid-column: span 2;
   }
 
   .monitoring-chart {
@@ -1271,8 +1791,9 @@ const testPurposeText = computed(() => {
 }
 
 @media (max-width: 768px) {
-  .video-capture-head,
+  .ocr-capture-head,
   .monitoring-card-head,
+  .monitoring-chart-subbar,
   .hthp-report-header,
   .hthp-report-footer {
     flex-direction: column;
@@ -1283,7 +1804,21 @@ const testPurposeText = computed(() => {
     justify-content: flex-start;
   }
 
-  .ocr-bar,
+  .overview-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .overview-metrics,
+  .test-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-status-metric,
+  .overview-time-metric {
+    grid-column: span 2;
+  }
+
   .metric-card-grid,
   .report-info-strip,
   .report-grid,
@@ -1293,7 +1828,7 @@ const testPurposeText = computed(() => {
     grid-template-columns: 1fr;
   }
 
-  .select-video-btn {
+  .connect-ocr-btn {
     width: 100%;
   }
 }

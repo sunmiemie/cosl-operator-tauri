@@ -8,6 +8,7 @@ export interface EquipmentInstrumentReportResult {
   instrument_id?: number | string
   instrument_name: string
   instrument_sn: string
+  equipment_id?: string
   result: EquipmentReportResult
   result_text?: string
   observation?: string
@@ -39,12 +40,60 @@ export interface EquipmentReportItem extends EquipmentReportPayload {
   submit_time?: string
   audit_time?: string | null
   reviewer_id?: number | null
+  batch_submit_id?: string
+  order?: number | null
+  instrument?: number | null
+  instrument_name?: string
+  instrument_sn?: string
+  equipment_id?: string
+  attempt_no?: number
+  is_current?: boolean
+  assistantSync?: {
+    success?: boolean
+    deferred?: boolean
+    error?: string
+    failed?: number
+  }
+}
+
+export interface EquipmentReportBatchItem {
+  batch_submit_id: string
+  report_no: string
+  reports: EquipmentReportItem[]
+  assistantSync?: EquipmentReportItem['assistantSync'] & {
+    list?: Array<Record<string, unknown>>
+  }
+}
+
+export interface EquipmentReportListResponse {
+  code: number
+  data: {
+    list: EquipmentReportItem[]
+    total: number
+    page: number
+    pageSize: number
+  }
+  msg?: string
+}
+
+export interface ListEquipmentReportsParams {
+  page?: number
+  pageSize?: number
+  taskNumber?: string
+  tester?: string
+  status?: number | string
+}
+
+export interface EquipmentReportDetailResponse {
+  code: number
+  data: EquipmentReportItem
+  msg?: string
 }
 
 export interface EquipmentReportMutationResponse {
   code: number
   msg?: string
-  data?: EquipmentReportItem
+  data?: EquipmentReportItem | EquipmentReportBatchItem
   errors?: Record<string, unknown>
 }
 
@@ -107,6 +156,44 @@ export function createHighTempPressureReportWithFiles(
   )
 }
 
+export function listHighTempPressureReports(
+  params: ListEquipmentReportsParams = {},
+  headers?: Record<string, string>
+): Promise<ApiResponse<EquipmentReportListResponse>> {
+  const query: Record<string, string> = {}
+  if (params.page !== undefined) query.page = String(params.page)
+  if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
+  if (params.taskNumber) query.taskNumber = params.taskNumber
+  if (params.tester) query.tester = params.tester
+  if (params.status !== undefined && params.status !== '') query.status = String(params.status)
+  return http.get<EquipmentReportListResponse>(
+    '/test/high-temp-pressure/report/list/',
+    headers,
+    query
+  )
+}
+
+export function getHighTempPressureReportDetail(
+  id: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<EquipmentReportDetailResponse>> {
+  return http.get<EquipmentReportDetailResponse>(
+    `/test/high-temp-pressure/report/detail/${id}/`,
+    headers
+  )
+}
+
+export function downloadHighTempPressureReportPdf(
+  id: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<ArrayBuffer>> {
+  return http.downloadFile(
+    `/test/high-temp-pressure/report/download/${id}/`,
+    undefined,
+    headers
+  )
+}
+
 export function createVibrationTableReport(
   payload: EquipmentReportPayload,
   headers?: Record<string, string>
@@ -114,6 +201,23 @@ export function createVibrationTableReport(
   return http.post<EquipmentReportMutationResponse>(
     '/test/vibration-table/report/create/',
     payload,
+    headers
+  )
+}
+
+export function createVibrationTableReportWithFiles(
+  payload: EquipmentReportPayload,
+  files: EquipmentReportUploadFile[],
+  headers?: Record<string, string>
+): Promise<ApiResponse<EquipmentReportMutationResponse>> {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  files.forEach((file) => {
+    formData.append(file.fieldName, file.blob, file.fileName)
+  })
+  return http.postFormData<EquipmentReportMutationResponse>(
+    '/test/vibration-table/report/create/',
+    formData,
     headers
   )
 }

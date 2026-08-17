@@ -1,24 +1,33 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import DashboardPanel from './components/DashboardPanel.vue'
 import StartupCheckModal from './components/StartupCheckModal.vue'
 import StartPanel from './components/StartPanel.vue'
 import TestingPanel from './components/TestingPanel.vue'
 import ReportPanel from './components/ReportPanel.vue'
+import ReportListPanel from './components/ReportListPanel.vue'
 import ActionModals from './components/ActionModals.vue'
 import { useHighTempPressureSchedule } from './composables/useHighTempPressureSchedule'
 import { useHighTempPressureStartupCheck } from './composables/useHighTempPressureStartupCheck'
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
 import { useAuth } from '@/composables/useAuth'
-import { pushEngineerAssistantSchedules, resolveEngineerAssistantTestType } from '@/services'
 import {
   cancelHighTempPressureOrder,
   finishHighTempPressureOrder,
+  retestHighTempPressureOrder,
   startHighTempPressureOrder,
 } from '@/services/high-temp-pressure-api'
-import type { ScheduledSelection } from './types'
+import type { ScheduledSelection, WorkOrder } from './types'
+import {
+  createHighTempPressureClientSubmitId,
+  loadPendingHighTempPressureReports,
+  removePendingHighTempPressureReport,
+  savePendingHighTempPressureReport,
+  type HighTempPressureReportDraft,
+  type HighTempPressurePendingReport,
+} from './utils/pendingReport'
 
 const schedule = useHighTempPressureSchedule()
 const startupCheck = useHighTempPressureStartupCheck()
@@ -28,6 +37,33 @@ const completedSelections = ref<ScheduledSelection[]>([])
 const activeTestSelections = ref<ScheduledSelection[]>([])
 const productPickerVisible = ref(false)
 const selectedProductIds = ref<string[]>([])
+const pendingReportSession = ref<HighTempPressurePendingReport | null>(null)
+const pendingReportSessions = ref<HighTempPressurePendingReport[]>([])
+const pendingReportCount = computed(() => pendingReportSessions.value.length)
+const reportCenterInitialTab = ref<'pending' | 'server'>('pending')
+const testCompletionSaving = ref(false)
+const testCompletionSavingText = ref('')
+const pageHeaderMeta = computed(() => {
+  if (testing.currentPanel.value === 'reports') {
+    return {
+      icon: 'mdi:file-document-multiple-outline',
+      title: '高温高压井报告中心',
+      subtitle: '管理待填写报告并查看服务端测试报告',
+    }
+  }
+  if (testing.currentPanel.value === 'report') {
+    return {
+      icon: 'mdi:file-document-edit-outline',
+      title: '填写高温高压测试报告',
+      subtitle: '按测试设备完善报告信息并提交审核',
+    }
+  }
+  return {
+    icon: 'mdi:gas-burner',
+    title: '高温高压井',
+    subtitle: '高温高压井测试系统',
+  }
+})
 
 const productPickerRows = computed(() =>
   schedule.selectedScheduledOrders.value.map((selection) => ({
@@ -39,91 +75,53 @@ const productPickerRows = computed(() =>
   }))
 )
 
-function getEngineerAssistantScheduleError(resp: Awaited<ReturnType<typeof pushEngineerAssistantSchedules>>) {
-  const detail = resp.data?.detail
-  const detailPayload = detail?.payload
-  const messages = [
-    resp.error,
-    resp.data?.msg,
-    detailPayload?.msg,
-    detailPayload?.message,
-    detailPayload?.error,
-    detail?.error,
-    detail?.text,
-  ]
-    .map((item) => String(item || '').trim())
-    .filter(Boolean)
-  return Array.from(new Set(messages)).join('；')
-}
-
-function getEngineerAssistantEquipmentId(selection: ScheduledSelection) {
-  return String(selection.instrument.sn || selection.instrument.dbId || selection.instrument.id).trim()
-}
-
-async function pushEngineerAssistantSchedulesInBackground(selections: ScheduledSelection[]) {
-  try {
-    const selectedScheduleInfos = selections
-      .map((selection) => ({
-        selection,
-        scheduleInfo: schedule.getScheduleChangePayload(selection.instrument.id),
-      }))
-      .filter((item) => item.scheduleInfo)
-    console.log('[high-temp-pressure schedule]', selectedScheduleInfos)
-    if (!selectedScheduleInfos.length) return
-
-    const ok = await initAuth()
-    if (!ok) {
-      ElMessage.warning('未登录，已跳过第三方排期推送')
-      return
-    }
-
-    const headers = getAuthHeaders()
-    const testTypeResult = await resolveEngineerAssistantTestType('高温高压井', headers)
-    const testType = testTypeResult.typeId || ''
-    if (!testType) {
-      const availableTypes = testTypeResult.candidates
-        .map((item) => item.typeName || item.name)
-        .filter(Boolean)
-        .slice(0, 6)
-        .join('、')
-      const detailLines = [
-        testTypeResult.error ? `原因：${testTypeResult.error}` : '',
-        availableTypes ? `当前返回类型：${availableTypes}` : '',
-      ].filter(Boolean)
-      ElMessage.warning(`未匹配到第三方测试类型（高温高压井），已跳过第三方排期推送${detailLines.length ? `：${detailLines.join('；')}` : ''}`)
-      return
-    }
-
-    if (testTypeResult.source === 'fallback') {
-      const reason = testTypeResult.error ? `：${testTypeResult.error}` : ''
-      ElMessage.warning(`未从接口匹配到高温高压井测试类型，已使用默认 testType=${testType}${reason}`)
-    }
-
-    const resp = await pushEngineerAssistantSchedules(
-      {
-        schedulesInfo: selectedScheduleInfos.flatMap(({ selection, scheduleInfo }) =>
-          scheduleInfo!.segments.map((segment) => ({
-            testId: String(selection.order.dbId ?? selection.order.id),
-            testType,
-            equipmentId: getEngineerAssistantEquipmentId(selection),
-            startTime: segment.startAtHour,
-            endTime: segment.endAtHour,
-          }))
-        ),
-      },
-      headers
-    )
-    if (!resp.success || !resp.data || resp.data.code !== 0) {
-      const reason = getEngineerAssistantScheduleError(resp)
-      ElMessage.warning(`推送第三方排期失败，已继续开始实验${reason ? `：${reason}` : ''}`)
-    }
-  } catch (e) {
-    ElMessage.warning(e instanceof Error ? `推送第三方排期失败，已继续开始实验：${e.message}` : '推送第三方排期失败，已继续开始实验')
-  }
-}
-
 function refreshWorkOrdersInBackground() {
   void schedule.refreshWorkOrders()
+}
+
+function reloadPendingReports() {
+  pendingReportSessions.value = loadPendingHighTempPressureReports()
+}
+
+function openReportCenter() {
+  reloadPendingReports()
+  pendingReportSession.value = null
+  completedSelections.value = []
+  reportCenterInitialTab.value = 'pending'
+  testing.switchPanel('reports')
+}
+
+function returnToDashboard() {
+  pendingReportSession.value = null
+  completedSelections.value = []
+  testing.switchPanel('dashboard')
+}
+
+function openPendingReport(session: HighTempPressurePendingReport) {
+  pendingReportSession.value = session
+  completedSelections.value = session.selections.slice()
+  testing.exportedCaptureDir.value = session.exportedCaptureDir
+  testing.csvCount.value = session.csvCount
+  testing.onlineSeconds.value = session.runtimeSeconds
+  testing.switchPanel('report')
+}
+
+async function removePendingReport(session: HighTempPressurePendingReport) {
+  try {
+    await ElMessageBox.confirm(
+      `确认从待办列表移除工单 ${Array.from(new Set(session.selections.map((item) => item.order.no))).join('、')} 的报告记录吗？采集目录中的文件不会被删除。`,
+      '移除待报告记录',
+      { type: 'warning', confirmButtonText: '确认移除', cancelButtonText: '取消' }
+    )
+    if (!removePendingHighTempPressureReport(session.clientSubmitId)) {
+      throw new Error('本机缓存更新失败')
+    }
+    reloadPendingReports()
+    ElMessage.success('待报告记录已移除，采集文件仍保留在原目录')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof Error ? error.message : '移除失败')
+  }
 }
 
 watch(
@@ -177,7 +175,6 @@ async function confirmProductSelection() {
   activeTestSelections.value = selectedSelections.slice()
   productPickerVisible.value = false
   startupCheck.openStartupCheck()
-  void pushEngineerAssistantSchedulesInBackground(selectedSelections)
 }
 
 function handleStartupCheckComplete() {
@@ -194,18 +191,9 @@ async function handleConfirmStart() {
   const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
   completedSelections.value = []
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
-  const ordersNeedingStart = uniqueOrders.filter((order) => order.statusCode !== 2)
-  const missingDbOrder = ordersNeedingStart.find((order) => typeof order.dbId !== 'number')
+  const missingDbOrder = uniqueOrders.find((order) => typeof order.dbId !== 'number')
   if (missingDbOrder) {
     ElMessage.error('未找到工单ID')
-    return
-  }
-
-  if (!ordersNeedingStart.length) {
-    uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
-    schedule.markInstrumentsRunning(runningInstrumentIds)
-    testing.confirmStart()
-    refreshWorkOrdersInBackground()
     return
   }
 
@@ -216,7 +204,8 @@ async function handleConfirmStart() {
       return
     }
 
-    const startResults = await Promise.all(ordersNeedingStart.map(async (order) => {
+    // 状态2工单中的其他未测试设备/重测设备也必须通知服务端开始，不能只改本地状态。
+    const startResults = await Promise.all(uniqueOrders.map(async (order) => {
       const dbId = order.dbId
       if (typeof dbId !== 'number') {
         throw new Error(`工单 ${order.no} 未找到工单ID`)
@@ -247,6 +236,8 @@ async function handleConfirmStart() {
 }
 
 async function handleConfirmEnd() {
+  if (testCompletionSaving.value) return
+
   const currentSelections = activeTestSelections.value.length
     ? activeTestSelections.value
     : schedule.selectedScheduledOrders.value
@@ -256,11 +247,32 @@ async function handleConfirmEnd() {
     ElMessage.error('未找到已选中的仪器')
     return
   }
+
+  // 结束测试会固化 OCR 数据、写入本地恢复记录并更新服务端状态，必须串行执行。
+  testCompletionSaving.value = true
+  testCompletionSavingText.value = '正在停止采集并保存 OCR 数据…'
   const endConfirmedAt = Date.now()
 
   try {
-    const captureSaved = await testing.finalizeVideoCapture()
+    const captureSaved = await testing.finalizeOcrCapture()
     if (!captureSaved) return
+
+    testCompletionSavingText.value = '正在固化待提交报告数据…'
+    const recoverySession: HighTempPressurePendingReport = {
+      version: 1,
+      phase: 'finishing',
+      selections: currentSelections,
+      exportedCaptureDir: testing.exportedCaptureDir.value,
+      csvCount: testing.csvCount.value,
+      runtimeSeconds: testing.onlineSeconds.value,
+      clientSubmitId: createHighTempPressureClientSubmitId(),
+      savedAt: new Date().toISOString(),
+    }
+    if (!savePendingHighTempPressureReport(recoverySession)) {
+      ElMessage.error('无法保存待提交报告的恢复记录，请检查客户端存储后重试结束测试')
+      return
+    }
+    pendingReportSession.value = recoverySession
 
     const groupedByOrder = new Map<string, { order: ScheduledSelection['order']; selections: ScheduledSelection[] }>()
     currentSelections.forEach((selection) => {
@@ -283,6 +295,7 @@ async function handleConfirmEnd() {
 
     const readyReportOrderNos: string[] = []
     if (ordersToFinish.length) {
+      testCompletionSavingText.value = '正在更新工单和设备测试状态…'
       const authOk = await initAuth()
       if (!authOk) {
         throw new Error('登录已失效，请重新登录后再结束测试')
@@ -306,22 +319,85 @@ async function handleConfirmEnd() {
     }
 
     currentSelections.forEach((selection) => schedule.markInstrumentCompleted(selection.instrument.id))
+    recoverySession.phase = 'report'
+    recoverySession.savedAt = new Date().toISOString()
+    savePendingHighTempPressureReport(recoverySession)
+    reloadPendingReports()
+    testCompletionSavingText.value = '正在刷新排程状态…'
     await schedule.refreshWorkOrders()
 
     const uniqueReadyReportOrderNos = Array.from(new Set(readyReportOrderNos))
     const pendingOrderNos = Array.from(new Set(partialOrderNos))
     if (uniqueReadyReportOrderNos.length && pendingOrderNos.length) {
-      ElMessage.success(`${uniqueReadyReportOrderNos.join('、')} 已完成测试待提交报告；${pendingOrderNos.join('、')} 仍有仪器待测试`)
+      ElMessage.success(`${uniqueReadyReportOrderNos.join('、')} 的报告已进入报告中心；${pendingOrderNos.join('、')} 仍有仪器待测试`)
     } else if (uniqueReadyReportOrderNos.length) {
-      ElMessage.success(`工单 ${uniqueReadyReportOrderNos.join('、')} 已完成测试，请提交报告进入待审核`)
+      ElMessage.success(`工单 ${uniqueReadyReportOrderNos.join('、')} 已完成测试，报告已进入报告中心`)
     } else {
-      ElMessage.success('当前仪器测试已完成，工单中其余仪器仍保留在待排程列表')
+      ElMessage.success('当前仪器测试已完成，报告已进入报告中心，其余仪器仍保留在待排程列表')
     }
     testing.endTest(endConfirmedAt)
+    schedule.clearSelectedSchedule()
     activeTestSelections.value = []
+    completedSelections.value = []
+    pendingReportSession.value = null
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '结束测试失败')
+  } finally {
+    testCompletionSaving.value = false
+    testCompletionSavingText.value = ''
   }
+}
+
+async function handleRetestInstrument(order: WorkOrder, instrumentSn: string) {
+  if (typeof order.dbId !== 'number' || !instrumentSn) {
+    ElMessage.error('未找到重测设备对应的工单信息')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认重新测试设备 ${instrumentSn} 吗？当前报告将退出待审核并保留为历史记录。`,
+      '重新测试',
+      { type: 'warning', confirmButtonText: '确认重测', cancelButtonText: '取消' }
+    )
+    const authOk = await initAuth()
+    if (!authOk) {
+      ElMessage.error('登录已失效，请重新登录后再操作')
+      return
+    }
+    const res = await retestHighTempPressureOrder(
+      order.dbId,
+      { instrument_sns: [instrumentSn] },
+      getAuthHeaders()
+    )
+    if (!res.success || res.data?.code !== 0) {
+      throw new Error(res.data?.msg || res.error || '重测设置失败')
+    }
+    await schedule.refreshWorkOrders()
+    ElMessage.success(`设备 ${instrumentSn} 已恢复为待排程`)
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error instanceof Error ? error.message : '重测设置失败')
+  }
+}
+
+async function handleReportSubmitted() {
+  const submittedSession = pendingReportSession.value
+  if (submittedSession) {
+    removePendingHighTempPressureReport(submittedSession.clientSubmitId)
+  }
+  reloadPendingReports()
+  pendingReportSession.value = null
+  completedSelections.value = []
+  reportCenterInitialTab.value = 'server'
+  testing.switchPanel('reports')
+  await schedule.refreshWorkOrders()
+}
+
+function handleReportDraftChange(draft: HighTempPressureReportDraft) {
+  if (!pendingReportSession.value) return
+  pendingReportSession.value.draft = draft
+  pendingReportSession.value.savedAt = new Date().toISOString()
+  savePendingHighTempPressureReport(pendingReportSession.value)
 }
 
 async function handleConfirmStop() {
@@ -331,7 +407,7 @@ async function handleConfirmStop() {
   testing.stopTest()
 
   if (!currentSelections.length) {
-    ElMessage.info('已中止本次测试，视频采集状态已重置')
+    ElMessage.info('已中止本次测试，OCR 采集状态已重置')
     return
   }
 
@@ -374,6 +450,7 @@ async function handleConfirmStop() {
 }
 
 async function handleShutdownComplete() {
+  pendingReportSession.value = null
   completedSelections.value = []
   activeTestSelections.value = []
   schedule.clearSelectedSchedule()
@@ -386,6 +463,10 @@ onMounted(async () => {
   testing.resetTestSession()
   schedule.resetScheduleState()
   await schedule.refreshWorkOrders()
+  reloadPendingReports()
+  if (pendingReportSessions.value.length > 0) {
+    ElMessage.info(`发现 ${pendingReportSessions.value.length} 份待处理的高温高压报告，可从报告中心继续填写`)
+  }
 })
 </script>
 
@@ -394,14 +475,38 @@ onMounted(async () => {
     <div class="page-header">
       <div class="header-left">
         <div class="header-icon">
-          <Icon icon="mdi:gas-burner" />
+          <Icon :icon="pageHeaderMeta.icon" />
         </div>
         <div>
-          <h1 class="header-title">高温高压井</h1>
-          <p class="header-subtitle">高温高压井测试系统</p>
+          <h1 class="header-title">{{ pageHeaderMeta.title }}</h1>
+          <p class="header-subtitle">{{ pageHeaderMeta.subtitle }}</p>
         </div>
       </div>
-      <div class="header-right"></div>
+      <div class="header-right">
+        <button
+          v-if="testing.currentPanel.value === 'dashboard'"
+          class="report-center-button"
+          @click="openReportCenter"
+        >
+          <Icon icon="mdi:file-document-multiple-outline" />
+          报告中心
+          <span v-if="pendingReportCount" class="report-count-badge">{{ pendingReportCount }}</span>
+        </button>
+        <button
+          v-if="testing.currentPanel.value === 'report'"
+          class="week-cal-nav header-nav-button"
+          @click="openReportCenter"
+        >
+          <Icon icon="mdi:format-list-bulleted" /> 报告列表
+        </button>
+        <button
+          v-if="testing.currentPanel.value === 'reports' || testing.currentPanel.value === 'report'"
+          class="week-cal-nav header-nav-button"
+          @click="returnToDashboard"
+        >
+          <Icon icon="mdi:calendar-clock-outline" /> 返回排程
+        </button>
+      </div>
     </div>
 
     <StartupCheckModal
@@ -418,6 +523,7 @@ onMounted(async () => {
         v-if="testing.currentPanel.value === 'dashboard'"
         :unscheduled-orders="schedule.unscheduledOrders.value"
         :work-orders-loading="schedule.workOrdersLoading.value"
+        :schedule-operation-loading="schedule.scheduleOperationLoading.value"
         :search-keyword="schedule.searchKeyword.value"
         :host-device-tabs="schedule.hostDeviceTabs.value"
         :active-host-device-name="schedule.activeHostDeviceName.value"
@@ -458,6 +564,7 @@ onMounted(async () => {
         @select-scheduled-order="schedule.handleSelectScheduledOrder"
         @unschedule="schedule.handleUnschedule"
         @start-scheduled-test="handleStartScheduledTest"
+        @retest-instrument="handleRetestInstrument"
         @refresh="schedule.refreshWorkOrders"
       />
 
@@ -475,29 +582,51 @@ onMounted(async () => {
         :t2="testing.state.chartData.t2"
         :p="testing.state.chartData.p"
         :test-running="testing.testRunning.value"
+        :test-start-time="testing.testStartTime.value"
+        :online-timer-str="testing.onlineTimerStr.value"
         :csv-count="testing.csvCount.value"
         :current-selected="schedule.currentSelected.value"
-        :video-file-name="testing.videoFileName.value"
-        :video-url="testing.videoUrl.value"
-        :capture-progress-pct="testing.captureProgressPct.value"
+        :ocr-device-name="testing.ocrDeviceName.value"
+        :ocr-ready-pct="testing.ocrReadyPct.value"
         :capture-status-text="testing.captureStatusText.value"
         :latest-frame-url="testing.latestFrameUrl.value"
         :exported-capture-dir="testing.exportedCaptureDir.value"
-        :video-measurements="testing.videoMeasurements.value"
-        @select-video="testing.selectVideoFile"
+        :ocr-measurements="testing.ocrMeasurements.value"
+        :chart-window-minutes="testing.chartWindowMinutes.value"
+        :chart-range-locked="testing.chartRangeLocked.value"
+        :chart-summary="testing.chartSummary"
+        :chart-series-visibility="testing.chartSeriesVisibility"
+        @connect-ocr="testing.connectOcrDevice"
+        @set-chart-window="testing.setChartWindowMinutes"
+        @toggle-chart-series="testing.toggleChartSeries"
+        @show-all-chart-series="testing.showAllChartSeries"
         @pause="testing.pauseTest"
         @resume="testing.resumeTest"
         @open-stop-modal="testing.showModal('stop-test')"
         @open-end-modal="testing.showModal('end-test')"
       />
 
+      <ReportListPanel
+        v-if="testing.currentPanel.value === 'reports'"
+        :pending-reports="pendingReportSessions"
+        :initial-tab="reportCenterInitialTab"
+        @open-pending="openPendingReport"
+        @remove-pending="removePendingReport"
+        @back="returnToDashboard"
+      />
+
       <ReportPanel
         v-if="testing.currentPanel.value === 'report'"
+        :key="pendingReportSession?.clientSubmitId || 'submitted-report'"
         :current-selected="schedule.currentSelected.value"
         :selected-scheduled-orders="completedSelections.length ? completedSelections : schedule.selectedScheduledOrders.value"
         :csv-count="testing.csvCount.value"
         :exported-capture-dir="testing.exportedCaptureDir.value"
         :runtime-seconds="testing.onlineSeconds.value"
+        :client-submit-id="pendingReportSession?.clientSubmitId || ''"
+        :initial-draft="pendingReportSession?.draft"
+        @report-draft-change="handleReportDraftChange"
+        @report-submitted="handleReportSubmitted"
         @shutdown-complete="handleShutdownComplete"
       />
     </div>
@@ -541,6 +670,8 @@ onMounted(async () => {
       :active-modal="testing.activeModal.value"
       :current-selected="schedule.currentSelected.value"
       :selected-scheduled-orders="schedule.selectedScheduledOrders.value"
+      :confirm-end-saving="testCompletionSaving"
+      :confirm-end-saving-text="testCompletionSavingText"
       @close="testing.closeModal"
       @confirm-start="handleConfirmStart"
       @confirm-end="handleConfirmEnd"
@@ -551,6 +682,39 @@ onMounted(async () => {
 
 <style scoped src="./components/high-temp-pressure.shared.css"></style>
 <style scoped>
+.report-center-button,
+.header-nav-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.report-center-button {
+  padding: 9px 13px;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  border-radius: 9px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--color-accent-blue);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.report-center-button:hover {
+  background: rgba(59, 130, 246, 0.16);
+}
+
+.report-count-badge {
+  min-width: 21px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--color-error);
+  color: white;
+  font-size: 11px;
+  line-height: 17px;
+  text-align: center;
+}
+
 .product-picker-mask {
   position: fixed;
   inset: 0;

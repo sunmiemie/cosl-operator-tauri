@@ -14,6 +14,8 @@ import { useAuth } from '@/composables/useAuth'
 import { ElMessage } from 'element-plus'
 import type { Stage, VibrationInstrument, WorkOrder } from './types'
 
+defineOptions({ name: 'VibrationPage' })
+
 const stage = ref<Stage>('dashboard')
 const currentWorkOrderId = ref<string | null>(null)
 const currentWorkOrderSnapshot = ref<WorkOrder | null>(null)
@@ -28,6 +30,8 @@ const {
   searchKeyword,
   workOrdersLoading,
   orderStatusMutating,
+  scheduleOperationLoading,
+  scheduleOperationText,
   refreshWorkOrders,
   selectedScheduledOrderIds,
   selectedScheduledOrders,
@@ -97,6 +101,7 @@ const testMode = computed<'formal' | 'pre'>(() => forcedMode.value)
 
 type DashboardReturnOptions = {
   resetRunningInstruments?: boolean
+  skipStatusMutation?: boolean
 }
 
 const productPickerRows = computed(() =>
@@ -160,9 +165,31 @@ const report = useVibrationReport({
     const tester = userInfo.value?.username || userInfo.value?.nickName || currentWorkOrder.value?.applicant || ''
     return testing.getPreExperimentPayload(exportDir, tester)
   },
+  getFormalReportPayload: (clientSubmitId: string, softwareReportName: string) => {
+    const tester = userInfo.value?.username || userInfo.value?.nickName || currentWorkOrder.value?.applicant || ''
+    return testing.getFormalReportPayload(tester, clientSubmitId, softwareReportName)
+  },
   onComplete: () => {
     stage.value = 'shutdown'
   },
+})
+
+const pageOperationVisible = computed(() =>
+  workOrdersLoading.value ||
+  scheduleOperationLoading.value ||
+  orderStatusMutating.value ||
+  report.reportProcessing.value ||
+  report.fileGenRunning.value
+)
+
+const pageOperationText = computed(() => {
+  if (report.reportProcessing.value || report.fileGenRunning.value) {
+    return testMode.value === 'formal' ? '正在提交正式报告...' : '正在提交预实验结果...'
+  }
+  if (scheduleOperationLoading.value) return scheduleOperationText.value || '正在处理排程...'
+  if (orderStatusMutating.value) return '正在同步工单状态...'
+  if (workOrdersLoading.value) return '正在刷新排程数据...'
+  return '正在处理，请稍候...'
 })
 
 async function resolveVibrationSchedulePayload(selected: WorkOrder, headers: Record<string, string>) {
@@ -225,6 +252,7 @@ function beginSelectedVibrationExperiment(selected: WorkOrder, selectedInstrumen
     device: selectedInstruments.map((instrument) => instrument.name).join('、') || selected.device,
   }
   forcedMode.value = 'pre'
+  testing.resetCaptureSession()
   productPickerVisible.value = false
   resetStartupChecks()
   showStartupCheck.value = true
@@ -289,11 +317,6 @@ async function startSelectedVibrationOrder() {
     return false
   }
 
-  if (selected.status === 2) {
-    void refreshWorkOrders()
-    return true
-  }
-
   const authOk = await initAuth()
   if (!authOk) {
     ElMessage.error('登录已失效，请重新登录后再开始实验')
@@ -306,11 +329,12 @@ async function startSelectedVibrationOrder() {
     const runningInstrumentIds = selectedInstruments
       .map((instrument) => instrument.dbId)
       .filter((id): id is number | string => id !== undefined)
+    const runningInstrumentSns = selectedInstruments.map((instrument) => instrument.sn).filter(Boolean)
     const resp = await changeVibrationTableOrderStatus(
       selected.dbId,
       2,
       authHeaders,
-      { runningInstrumentIds }
+      { runningInstrumentIds, runningInstrumentSns }
     )
     if (!resp.success || !resp.data || resp.data.code !== 0) {
       ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
@@ -361,7 +385,10 @@ async function backToDashboard(finalStatus: number = 1, options: DashboardReturn
   const completedInstrumentIds = finalStatus === 5
     ? selectedInstrumentDbIds
     : []
+  const selectedInstrumentSns = selectedInstruments.map((instrument) => instrument.sn).filter(Boolean)
+  const completedInstrumentSns = finalStatus === 5 ? selectedInstrumentSns : []
   const runningInstrumentIds = options.resetRunningInstruments ? selectedInstrumentDbIds : []
+  const runningInstrumentSns = options.resetRunningInstruments ? selectedInstrumentSns : []
   if (order && selectedInstruments.length) {
     if (finalStatus === 5) {
       shouldRemoveSchedule = true
@@ -371,7 +398,7 @@ async function backToDashboard(finalStatus: number = 1, options: DashboardReturn
     clearRunningInstruments(order.id, selectedInstruments)
   }
 
-  if (order && order.dbId !== undefined) {
+  if (order && order.dbId !== undefined && !options.skipStatusMutation) {
     const authOk = await initAuth()
     const authHeaders = authOk ? getAuthHeaders() : undefined
     orderStatusMutating.value = true
@@ -380,7 +407,7 @@ async function backToDashboard(finalStatus: number = 1, options: DashboardReturn
         order.dbId,
         nextOrderStatus,
         authHeaders,
-        { completedInstrumentIds, runningInstrumentIds }
+        { completedInstrumentIds, completedInstrumentSns, runningInstrumentIds, runningInstrumentSns }
       )
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         ElMessage.error(resp.data?.msg || resp.error || '工单状态更新失败')
@@ -396,7 +423,7 @@ async function backToDashboard(finalStatus: number = 1, options: DashboardReturn
     }
   }
 
-  if (shouldRemoveSchedule && currentWorkOrderId.value) {
+  if (shouldRemoveSchedule && currentWorkOrderId.value && !options.skipStatusMutation) {
     removeScheduledOrder(currentWorkOrderId.value)
   }
 
@@ -406,6 +433,7 @@ async function backToDashboard(finalStatus: number = 1, options: DashboardReturn
   selectedInstrumentIds.value = []
   productPickerVisible.value = false
   showStartupCheck.value = false
+  if (options.skipStatusMutation) void refreshWorkOrders()
 }
 
 function handleCancelStartupCheck() {
@@ -451,8 +479,9 @@ async function confirmStartVibration() {
   calStep.value = 'amp'
 }
 
-function convertToFormal() {
-  testing.pauseVibTest()
+async function convertToFormal() {
+  if (testing.isFinalizing.value) return
+  await testing.prepareFreshFormalSession()
   forcedMode.value = 'formal'
   devCheckItems.value.forEach(i => { i.answer = 'yes'; i.remark = '' })
   showSafetyWarning.value = false
@@ -461,8 +490,12 @@ function convertToFormal() {
 
 function finishShutdown() {
   resetShutdownChecks()
-  const finalStatus = testMode.value === 'pre' ? 1 : 5
-  backToDashboard(finalStatus, { resetRunningInstruments: testMode.value === 'pre' })
+  if (testMode.value === 'pre') {
+    backToDashboard(1, { resetRunningInstruments: true })
+    return
+  }
+  // 正式报告提交成功后，服务端已按设备重算为“测试中”或“待审核”；客户端不再越级改成已完成。
+  backToDashboard(3, { skipStatusMutation: true })
 }
 
 function toggleShutdownCheck(id: number) {
@@ -549,6 +582,8 @@ function toggleShutdownCheck(id: number) {
         :cal-step="calStep"
         :live-level="testing.liveLevel.value"
         :live-freq="testing.liveFreq.value"
+        :live-input-level="testing.liveInputLevel.value"
+        :live-drive="testing.liveDrive.value"
         :vib-data-count="testing.vibDataCount.value"
         :formatted-duration="testing.formattedDuration.value"
         :is-running="testing.isRunning.value"
@@ -559,11 +594,10 @@ function toggleShutdownCheck(id: number) {
         :live-ay="testing.liveAy.value"
         :live-az="testing.liveAz.value"
         :test-mode="testMode"
-        :video-ready="testing.videoReady.value"
-        :backend-processing-required="testing.backendProcessingRequired.value"
-        :video-file-name="testing.videoFileName.value"
-        :video-url="testing.videoUrl.value"
-        :video-duration-text="testing.videoDurationText.value"
+        :capture-device-ready="testing.captureDeviceReady.value"
+        :capture-device-name="testing.selectedCaptureDeviceName.value || testing.selectedCaptureDevice.value"
+        :device-refreshing="testing.deviceRefreshing.value"
+        :ocr-ready="testing.ocrReady.value"
         :sample-interval-seconds="testing.sampleIntervalSeconds.value"
         :capture-status-text="testing.captureStatusText.value"
         :capture-progress-pct="testing.captureProgressPct.value"
@@ -590,9 +624,7 @@ function toggleShutdownCheck(id: number) {
         @go-prev-stage="goPrevStage"
         @go-next-stage="goNextStage"
         @set-cal-step="calStep = $event"
-        @select-video="testing.selectVideoFile"
-        @import-video-path="testing.importVideoFile"
-        @clear-video="testing.clearVideoFile"
+        @refresh-capture-devices="testing.refreshCaptureDevices"
         @start-vib-test="testing.startVibTestMonitor"
         @pause-vib-test="testing.pauseVibTest"
         @resume-vib-test="testing.resumeVibTest"
@@ -608,6 +640,25 @@ function toggleShutdownCheck(id: number) {
         @finish-shutdown="finishShutdown"
       />
     </div>
+
+    <Transition name="operation-mask">
+      <div
+        v-if="pageOperationVisible"
+        class="page-operation-mask"
+        role="status"
+        aria-live="assertive"
+        aria-busy="true"
+        @click.stop.prevent
+        @mousedown.stop.prevent
+        @touchstart.stop.prevent
+      >
+        <div class="page-operation-card">
+          <span class="page-operation-spinner" aria-hidden="true"></span>
+          <strong>{{ pageOperationText }}</strong>
+          <span>操作完成前请勿重复点击或关闭页面</span>
+        </div>
+      </div>
+    </Transition>
 
     <div v-if="stage === 'dashboard' && productPickerVisible" class="product-picker-mask">
       <div class="product-picker-dialog">
@@ -660,6 +711,71 @@ function toggleShutdownCheck(id: number) {
 
 <style scoped src="./components/vibration.shared.css"></style>
 <style scoped>
+.page-operation-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.46);
+  backdrop-filter: blur(3px);
+  cursor: wait;
+  pointer-events: auto;
+}
+
+.page-operation-card {
+  min-width: 280px;
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 28px 32px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 16px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+  text-align: center;
+}
+
+.page-operation-card strong {
+  font-size: 17px;
+}
+
+.page-operation-card > span:last-child {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.page-operation-spinner {
+  width: 38px;
+  height: 38px;
+  border: 4px solid rgba(59, 130, 246, 0.2);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: page-operation-spin 0.8s linear infinite;
+}
+
+.operation-mask-enter-active,
+.operation-mask-leave-active {
+  transition: opacity 0.16s ease;
+}
+
+.operation-mask-enter-from,
+.operation-mask-leave-to {
+  opacity: 0;
+}
+
+@keyframes page-operation-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-operation-spinner {
+    animation-duration: 1.6s;
+  }
+}
+
 .product-picker-mask {
   position: fixed;
   inset: 0;

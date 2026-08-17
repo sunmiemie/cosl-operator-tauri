@@ -2,10 +2,12 @@
 import { Icon } from '@iconify/vue'
 import type { HighTempPressureModal, ScheduledSelection } from '../types'
 
-defineProps<{
+const props = defineProps<{
   activeModal: HighTempPressureModal
   currentSelected: ScheduledSelection | null
   selectedScheduledOrders: ScheduledSelection[]
+  confirmEndSaving?: boolean
+  confirmEndSavingText?: string
 }>()
 
 const emit = defineEmits<{
@@ -14,10 +16,18 @@ const emit = defineEmits<{
   'confirm-end': []
   'confirm-stop': []
 }>()
+
+function requestClose() {
+  if (!props.confirmEndSaving) emit('close')
+}
+
+function requestConfirmEnd() {
+  if (!props.confirmEndSaving) emit('confirm-end')
+}
 </script>
 
 <template>
-  <div class="modal-overlay" v-if="activeModal" @click.self="emit('close')">
+  <div class="modal-overlay" v-if="activeModal" @click.self="requestClose">
     <div class="startup-check-modal" v-if="activeModal === 'confirm-start'">
       <h2 class="modal-title">启动前确认</h2>
       <div class="two-col">
@@ -86,7 +96,7 @@ const emit = defineEmits<{
       </div>
     </div>
 
-    <div class="modal" v-if="activeModal === 'end-test'">
+    <div class="modal end-test-modal" v-if="activeModal === 'end-test'" :aria-busy="confirmEndSaving">
       <div class="modal-header modal-header-row">
         <Icon icon="mdi:check-circle-outline" />
         <span>确认测试已完成？</span>
@@ -100,8 +110,16 @@ const emit = defineEmits<{
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-outline" @click="emit('close')">取消</button>
-        <button class="btn btn-primary" @click="emit('confirm-end')">确认</button>
+        <button class="btn btn-outline" :disabled="confirmEndSaving" @click="requestClose">取消</button>
+        <button class="btn btn-primary confirm-saving-btn" :disabled="confirmEndSaving" @click="requestConfirmEnd">
+          <span v-if="confirmEndSaving" class="saving-spinner saving-spinner-small" aria-hidden="true"></span>
+          {{ confirmEndSaving ? '保存中…' : '确认' }}
+        </button>
+      </div>
+      <div v-if="confirmEndSaving" class="test-complete-saving-mask" role="status" aria-live="polite">
+        <span class="saving-spinner" aria-hidden="true"></span>
+        <strong>正在保存测试结果</strong>
+        <span>{{ confirmEndSavingText || '请稍候，请勿重复操作或关闭客户端…' }}</span>
       </div>
     </div>
 
@@ -210,5 +228,65 @@ const emit = defineEmits<{
   border-color: rgba(88, 166, 255, 0.2);
   color: var(--color-text-secondary);
   line-height: 1.7;
+}
+
+.end-test-modal {
+  position: relative;
+}
+
+.confirm-saving-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 78px;
+}
+
+.test-complete-saving-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);
+  color: var(--color-text-primary);
+  text-align: center;
+  cursor: wait;
+  backdrop-filter: blur(3px);
+}
+
+.test-complete-saving-mask > strong {
+  font-size: 16px;
+}
+
+.test-complete-saving-mask > span:last-child {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.saving-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(59, 130, 246, 0.2);
+  border-top-color: var(--color-accent-blue);
+  border-radius: 50%;
+  animation: saving-spin 0.8s linear infinite;
+}
+
+.saving-spinner-small {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+
+@keyframes saving-spin {
+  to { transform: rotate(360deg); }
 }
 </style>

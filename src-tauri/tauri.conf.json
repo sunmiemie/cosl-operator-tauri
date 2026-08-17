@@ -42,7 +42,15 @@
     "resources": [
       "resources/flojoy/**/*",
       "resources/models/*",
-      "resources/vibration/**/*",
+      "resources/vibration/ocr-service/*.py",
+      "resources/vibration/ocr-service/*.yaml",
+      "resources/vibration/ocr-service/*.txt",
+      "resources/vibration/ocr-service/data/**/*.png",
+      "resources/vibration/ocr-service/ocr_service/*.py",
+      "resources/vibration/ocr-service/ocr_service/capture/*.py",
+      "resources/vibration/ocr-service/ocr_service/ocr/*.py",
+      "resources/vibration/ocr-service/ocr_service/vision/*.py",
+      "resources/vibration/ocr-service/bin/**/*",
       "resources/high-temp-pressure/**/*"
     ]
   }

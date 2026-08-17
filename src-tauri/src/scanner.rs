@@ -1,5 +1,5 @@
 //! 扫码枪模块 - USB HID 扫码枪驱动
-//! 
+//!
 //! 支持 YC200D 等 HID 键盘模拟类型的扫码枪
 //! VID: 0x0581, PID: 0x011C
 
@@ -80,10 +80,10 @@ fn decode_hid_data(data: &[u8]) -> String {
     if data.len() < 3 {
         return String::new();
     }
-    
+
     // 检查 Shift 键状态 (左 Shift: bit 1, 右 Shift: bit 5)
     let shift_pressed = (data[0] & 0x22) != 0;
-    
+
     let mut result = String::new();
     // 从第3个字节开始是按键数据
     for &byte in &data[2..] {
@@ -120,7 +120,7 @@ lazy_static! {
 /// 查找扫码枪设备
 fn find_scanner_device(context: &Context) -> Option<Device<Context>> {
     let devices = context.devices().ok()?;
-    
+
     for device in devices.iter() {
         if let Ok(desc) = device.device_descriptor() {
             if desc.vendor_id() == SCANNER_VID && desc.product_id() == SCANNER_PID_YC200D {
@@ -142,7 +142,7 @@ pub fn check_scanner() -> Result<bool, String> {
 #[tauri::command]
 pub fn get_scanner_info() -> Result<Option<serde_json::Value>, String> {
     let context = Context::new().map_err(|e| format!("USB 上下文创建失败: {}", e))?;
-    
+
     if let Some(device) = find_scanner_device(&context) {
         if let Ok(desc) = device.device_descriptor() {
             return Ok(Some(serde_json::json!({
@@ -161,7 +161,7 @@ pub fn get_scanner_info() -> Result<Option<serde_json::Value>, String> {
 #[tauri::command]
 pub fn start_scanner(app: AppHandle) -> Result<(), String> {
     let mut state = SCANNER_STATE.lock();
-    
+
     // 如果已经在运行，先停止
     if state.running.load(Ordering::SeqCst) {
         state.running.store(false, Ordering::SeqCst);
@@ -169,65 +169,71 @@ pub fn start_scanner(app: AppHandle) -> Result<(), String> {
             let _ = handle.join();
         }
     }
-    
+
     // 创建 USB 上下文
     let context = Context::new().map_err(|e| format!("USB 上下文创建失败: {}", e))?;
-    
+
     // 查找扫码枪设备
-    let device = find_scanner_device(&context)
-        .ok_or_else(|| "未找到扫码枪设备".to_string())?;
-    
+    let device = find_scanner_device(&context).ok_or_else(|| "未找到扫码枪设备".to_string())?;
+
     // 打开设备
-    let mut handle: DeviceHandle<Context> = device.open()
+    let mut handle: DeviceHandle<Context> = device
+        .open()
         .map_err(|e| format!("打开扫码枪失败: {}", e))?;
-    
+
     // 设置配置
-    handle.set_active_configuration(1)
+    handle
+        .set_active_configuration(1)
         .map_err(|e| format!("设置配置失败: {}", e))?;
-    
+
     // 在 Linux 上需要 detach kernel driver
     #[cfg(target_os = "linux")]
     {
         if handle.kernel_driver_active(0).unwrap_or(false) {
-            handle.detach_kernel_driver(0)
+            handle
+                .detach_kernel_driver(0)
                 .map_err(|e| format!("Detach kernel driver 失败: {}", e))?;
         }
     }
-    
+
     // 声明接口
-    handle.claim_interface(0)
+    handle
+        .claim_interface(0)
         .map_err(|e| format!("声明接口失败: {}", e))?;
-    
+
     // 获取端点地址 (通常 HID 设备使用 endpoint 0x81)
     let endpoint_address = 0x81u8;
-    
+
     // 设置运行标志
     let running = Arc::clone(&state.running);
     running.store(true, Ordering::SeqCst);
-    
+
     // 启动扫描线程
     let thread_handle = thread::spawn(move || {
         let mut code_buffer = String::new();
         let mut buf = [0u8; 8]; // HID 键盘报告通常是 8 字节
-        
+
         while running.load(Ordering::SeqCst) {
             // 尝试读取数据，超时 100ms
             match handle.read_interrupt(endpoint_address, &mut buf, Duration::from_millis(100)) {
                 Ok(len) if len > 0 => {
                     let decoded = decode_hid_data(&buf[..len]);
                     code_buffer.push_str(&decoded);
-                    
+
                     // 检查是否有完整的扫描结果（以换行符结束）
                     while let Some(pos) = code_buffer.find('\n') {
                         let code = code_buffer[..pos].to_string();
                         code_buffer = code_buffer[pos + 1..].to_string();
-                        
+
                         if !code.is_empty() {
                             // 发送扫描结果到前端
-                            let _ = app.emit("scanner-data", serde_json::json!({
-                                "code": 0,
-                                "data": code
-                            }));
+                            let _ = app.emit(
+                                "scanner-data",
+                                serde_json::json!({
+                                    "code": 0,
+                                    "data": code
+                                }),
+                            );
                         }
                     }
                 }
@@ -238,26 +244,29 @@ pub fn start_scanner(app: AppHandle) -> Result<(), String> {
                 Err(e) => {
                     eprintln!("扫码枪读取错误: {}", e);
                     // 发送错误事件
-                    let _ = app.emit("scanner-data", serde_json::json!({
-                        "code": 1,
-                        "error": format!("读取错误: {}", e)
-                    }));
+                    let _ = app.emit(
+                        "scanner-data",
+                        serde_json::json!({
+                            "code": 1,
+                            "error": format!("读取错误: {}", e)
+                        }),
+                    );
                     break;
                 }
             }
         }
-        
+
         // 释放接口
         let _ = handle.release_interface(0);
-        
+
         #[cfg(target_os = "linux")]
         {
             let _ = handle.attach_kernel_driver(0);
         }
     });
-    
+
     state.thread_handle = Some(thread_handle);
-    
+
     Ok(())
 }
 
@@ -265,13 +274,15 @@ pub fn start_scanner(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn stop_scanner() -> Result<(), String> {
     let mut state = SCANNER_STATE.lock();
-    
+
     state.running.store(false, Ordering::SeqCst);
-    
+
     if let Some(handle) = state.thread_handle.take() {
-        handle.join().map_err(|_| "等待扫描线程结束失败".to_string())?;
+        handle
+            .join()
+            .map_err(|_| "等待扫描线程结束失败".to_string())?;
     }
-    
+
     Ok(())
 }
 

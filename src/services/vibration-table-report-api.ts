@@ -1,5 +1,6 @@
 export {
   createVibrationTableReport,
+  createVibrationTableReportWithFiles,
   createVibrationTablePreExperiment,
   type EquipmentInstrumentReportResult as VibrationTableInstrumentReportResult,
   type EquipmentReportItem as VibrationTableReportItem,

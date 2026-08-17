@@ -1,11 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-mod camera;
-mod scanner;
 mod cache;
+mod camera;
 mod flojoy;
-mod high_temp_pressure_video;
+mod high_temp_pressure_ocr;
 mod ocr;
-mod vibration_video;
+mod scanner;
+mod vibration_ocr;
 
 use tauri::{Manager, RunEvent};
 
@@ -48,6 +48,50 @@ fn cleanup_flojoy_backend(state: &flojoy::FlojoyBackendState) {
     }
 }
 
+fn cleanup_high_temp_pressure_ocr(state: &high_temp_pressure_ocr::HighTempPressureOcrState) {
+    if let Ok(mut process_guard) = state.process.lock() {
+        if let Some(ref mut child) = *process_guard {
+            #[cfg(target_os = "windows")]
+            {
+                use std::process::Command;
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &child.id().to_string(), "/F", "/T"])
+                    .output();
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = child.kill();
+            }
+
+            let _ = child.wait();
+            *process_guard = None;
+        }
+    }
+}
+
+fn cleanup_vibration_ocr(state: &vibration_ocr::VibrationOcrState) {
+    if let Ok(mut process_guard) = state.process.lock() {
+        if let Some(ref mut child) = *process_guard {
+            #[cfg(target_os = "windows")]
+            {
+                use std::process::Command;
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &child.id().to_string(), "/F", "/T"])
+                    .output();
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = child.kill();
+            }
+
+            let _ = child.wait();
+            *process_guard = None;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -60,10 +104,10 @@ pub fn run() {
         .manage(flojoy::FlojoyBackendState::default())
         // 注册 OCR 状态管理
         .manage(ocr::OcrState::default())
-        // 注册高温高压井视频识别状态管理
-        .manage(high_temp_pressure_video::HighTempPressureVideoState::default())
-        // 注册振动视频处理状态管理
-        .manage(vibration_video::VibrationVideoState::default())
+        // 注册高温高压井 OCR 识别状态管理
+        .manage(high_temp_pressure_ocr::HighTempPressureOcrState::default())
+        // 注册振动台采集卡实时 OCR 状态管理
+        .manage(vibration_ocr::VibrationOcrState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -120,21 +164,26 @@ pub fn run() {
             ocr::stop_ocr_stream,
             ocr::is_ocr_streaming,
             ocr::release_ocr,
-            vibration_video::extract_vibration_video_data,
-            vibration_video::start_vibration_video_stream,
-            vibration_video::pause_vibration_video_stream,
-            vibration_video::stop_vibration_video_stream,
-            vibration_video::get_vibration_capture_status,
-            vibration_video::get_vibration_capture_result,
-            vibration_video::export_vibration_capture_output,
-            vibration_video::write_vibration_report_files,
-            high_temp_pressure_video::start_high_temp_pressure_video_stream,
-            high_temp_pressure_video::pause_high_temp_pressure_video_stream,
-            high_temp_pressure_video::stop_high_temp_pressure_video_stream,
-            high_temp_pressure_video::get_high_temp_pressure_capture_status,
-            high_temp_pressure_video::get_high_temp_pressure_capture_result,
-            high_temp_pressure_video::export_high_temp_pressure_capture_output,
-            high_temp_pressure_video::write_high_temp_pressure_curve_chart,
+            vibration_ocr::get_vibration_ocr_devices,
+            vibration_ocr::start_vibration_ocr_stream,
+            vibration_ocr::pause_vibration_ocr_stream,
+            vibration_ocr::resume_vibration_ocr_stream,
+            vibration_ocr::stop_vibration_ocr_stream,
+            vibration_ocr::get_vibration_capture_status,
+            vibration_ocr::get_vibration_capture_result,
+            vibration_ocr::export_vibration_capture_output,
+            high_temp_pressure_ocr::get_high_temp_pressure_ocr_devices,
+            high_temp_pressure_ocr::start_high_temp_pressure_ocr_stream,
+            high_temp_pressure_ocr::pause_high_temp_pressure_ocr_stream,
+            high_temp_pressure_ocr::resume_high_temp_pressure_ocr_stream,
+            high_temp_pressure_ocr::stop_high_temp_pressure_ocr_stream,
+            high_temp_pressure_ocr::get_high_temp_pressure_capture_status,
+            high_temp_pressure_ocr::get_high_temp_pressure_capture_records,
+            high_temp_pressure_ocr::get_high_temp_pressure_capture_result,
+            high_temp_pressure_ocr::export_high_temp_pressure_capture_output,
+            high_temp_pressure_ocr::read_high_temp_pressure_business_report,
+            high_temp_pressure_ocr::read_high_temp_pressure_curve_records,
+            high_temp_pressure_ocr::write_high_temp_pressure_curve_chart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -145,6 +194,14 @@ pub fn run() {
             // 应用退出时，停止 Flojoy 后端
             if let Some(state) = app_handle.try_state::<flojoy::FlojoyBackendState>() {
                 cleanup_flojoy_backend(state.inner());
+            }
+            if let Some(state) =
+                app_handle.try_state::<high_temp_pressure_ocr::HighTempPressureOcrState>()
+            {
+                cleanup_high_temp_pressure_ocr(state.inner());
+            }
+            if let Some(state) = app_handle.try_state::<vibration_ocr::VibrationOcrState>() {
+                cleanup_vibration_ocr(state.inner());
             }
         }
     });

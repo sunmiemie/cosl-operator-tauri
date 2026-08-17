@@ -1,4 +1,4 @@
-export type HighTempPressurePanel = 'dashboard' | 'start' | 'testing' | 'report'
+export type HighTempPressurePanel = 'dashboard' | 'start' | 'testing' | 'reports' | 'report'
 
 export type HighTempPressureModal = 'confirm-start' | 'end-test' | 'stop-test' | null
 
@@ -15,6 +15,7 @@ export interface InstrumentItem {
   scheduledEndAt?: string | null
   scheduleSegments?: InstrumentScheduleSegment[]
   useDevice?: string
+  equipmentId?: string
   status?: number
   completed?: boolean
 }
@@ -23,6 +24,7 @@ export interface InstrumentScheduleSegment {
   scheduledStartAt: string
   scheduledEndAt: string
   useDevice?: string
+  equipmentId?: string
 }
 
 export interface WorkOrder {
@@ -89,6 +91,8 @@ export interface TimeSlotItem {
 export interface ScheduledSelection {
   instrument: InstrumentItem
   order: WorkOrder
+  useDevice?: string
+  equipmentId?: string
 }
 
 export interface StartupCheckItem {

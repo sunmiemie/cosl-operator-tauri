@@ -33,6 +33,8 @@ export interface AppConfig {
   microDevice: number      // 显微镜摄像头索引
   planeDevice: number      // 水平仪摄像头索引
   xrayDevice: number       // X光机摄像头索引
+  highTempPressureCaptureDevice: number // OCR视频采集卡索引（保留原配置键）
+  highTempPressureCaptureDeviceName: string // OCR视频采集卡名称（保留原配置键）
   
   // X-Ray 裁剪区域设置
   xrayCropArea: XrayCropArea
@@ -70,6 +72,8 @@ const defaultConfig: AppConfig = {
   microDevice: -1,
   planeDevice: -1,
   xrayDevice: -1,
+  highTempPressureCaptureDevice: -1,
+  highTempPressureCaptureDeviceName: '',
   // X-Ray 裁剪区域默认值（默认不启用，使用全画面）
   xrayCropArea: {
     w: [0, 1920],    // 默认水平范围
@@ -132,6 +136,8 @@ export async function initializeConfig(): Promise<AppConfig> {
       const microDevice = await store.get<number>('microDevice')
       const planeDevice = await store.get<number>('planeDevice')
       const xrayDevice = await store.get<number>('xrayDevice')
+      const highTempPressureCaptureDevice = await store.get<number>('highTempPressureCaptureDevice')
+      const highTempPressureCaptureDeviceName = await store.get<string>('highTempPressureCaptureDeviceName')
       const xrayCropArea = await store.get<XrayCropArea>('xrayCropArea')
       const dataDir = await store.get<string>('dataDir')
       const downloadDir = await store.get<string>('downloadDir')
@@ -177,6 +183,14 @@ export async function initializeConfig(): Promise<AppConfig> {
       }
       if (xrayDevice === null || xrayDevice === undefined) {
         await store.set('xrayDevice', defaultConfig.xrayDevice)
+        needsSave = true
+      }
+      if (highTempPressureCaptureDevice === null || highTempPressureCaptureDevice === undefined) {
+        await store.set('highTempPressureCaptureDevice', defaultConfig.highTempPressureCaptureDevice)
+        needsSave = true
+      }
+      if (highTempPressureCaptureDeviceName === null || highTempPressureCaptureDeviceName === undefined) {
+        await store.set('highTempPressureCaptureDeviceName', defaultConfig.highTempPressureCaptureDeviceName)
         needsSave = true
       }
       if (xrayCropArea === null || xrayCropArea === undefined) {
@@ -251,6 +265,8 @@ export async function initializeConfig(): Promise<AppConfig> {
         microDevice: microDevice ?? defaultConfig.microDevice,
         planeDevice: planeDevice ?? defaultConfig.planeDevice,
         xrayDevice: xrayDevice ?? defaultConfig.xrayDevice,
+        highTempPressureCaptureDevice: highTempPressureCaptureDevice ?? defaultConfig.highTempPressureCaptureDevice,
+        highTempPressureCaptureDeviceName: highTempPressureCaptureDeviceName ?? defaultConfig.highTempPressureCaptureDeviceName,
         xrayCropArea: xrayCropArea ?? defaultConfig.xrayCropArea,
         dataDir: dataDir ?? defaultConfig.dataDir,
         downloadDir: downloadDir ?? defaultConfig.downloadDir,

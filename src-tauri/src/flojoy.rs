@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State};
 use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Manager, State};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -58,8 +58,15 @@ fn get_flojoy_dir(app: &AppHandle) -> PathBuf {
     // 使用 Tauri 官方 API 解析资源路径
     // tauri.conf.json 配置: "resources/flojoy/**/*" (数组格式保留路径结构)
     // 解析路径需要与配置中的源路径一致
-    println!("resource_path: {:?}", app.path().resolve("resources/flojoy", BaseDirectory::Resource));
-    match app.path().resolve("resources/flojoy", BaseDirectory::Resource) {
+    println!(
+        "resource_path: {:?}",
+        app.path()
+            .resolve("resources/flojoy", BaseDirectory::Resource)
+    );
+    match app
+        .path()
+        .resolve("resources/flojoy", BaseDirectory::Resource)
+    {
         Ok(resource_path) => resource_path,
         Err(e) => {
             eprintln!("Failed to resolve flojoy resource path: {}", e);
@@ -113,12 +120,8 @@ pub fn check_python_version(python_path: String) -> Result<(u32, u32, u32, bool)
         return Err(format!("无法解析版本号: {}", parts[1]));
     }
 
-    let major: u32 = version_parts[0]
-        .parse()
-        .map_err(|_| "无法解析主版本号")?;
-    let minor: u32 = version_parts[1]
-        .parse()
-        .map_err(|_| "无法解析次版本号")?;
+    let major: u32 = version_parts[0].parse().map_err(|_| "无法解析主版本号")?;
+    let minor: u32 = version_parts[1].parse().map_err(|_| "无法解析次版本号")?;
     let patch: u32 = version_parts
         .get(2)
         .and_then(|s| s.parse().ok())
@@ -201,7 +204,7 @@ fn get_poetry_path(python_path: &str) -> String {
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    
+
     #[cfg(target_os = "windows")]
     {
         // Windows: 检查 Scripts 目录
@@ -209,21 +212,27 @@ fn get_poetry_path(python_path: &str) -> String {
         if std::path::Path::new(&poetry_in_scripts).exists() {
             return poetry_in_scripts;
         }
-        
+
         // 检查用户 pipx 目录
         if let Ok(home) = std::env::var("USERPROFILE") {
-            let pipx_poetry = format!("{}\\AppData\\Local\\pipx\\pipx\\venvs\\poetry\\Scripts\\poetry.exe", home);
+            let pipx_poetry = format!(
+                "{}\\AppData\\Local\\pipx\\pipx\\venvs\\poetry\\Scripts\\poetry.exe",
+                home
+            );
             if std::path::Path::new(&pipx_poetry).exists() {
                 return pipx_poetry;
             }
             // 检查用户 Scripts 目录
-            let user_poetry = format!("{}\\AppData\\Roaming\\Python\\Python311\\Scripts\\poetry.exe", home);
+            let user_poetry = format!(
+                "{}\\AppData\\Roaming\\Python\\Python311\\Scripts\\poetry.exe",
+                home
+            );
             if std::path::Path::new(&user_poetry).exists() {
                 return user_poetry;
             }
         }
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
         // Unix: 检查 bin 目录
@@ -231,7 +240,7 @@ fn get_poetry_path(python_path: &str) -> String {
         if std::path::Path::new(&poetry_in_bin).exists() {
             return poetry_in_bin;
         }
-        
+
         // 检查用户 pipx 目录
         if let Ok(home) = std::env::var("HOME") {
             let pipx_poetry = format!("{}/.local/pipx/venvs/poetry/bin/poetry", home);
@@ -244,7 +253,7 @@ fn get_poetry_path(python_path: &str) -> String {
             }
         }
     }
-    
+
     // 默认使用 poetry（依赖 PATH）
     "poetry".to_string()
 }
@@ -307,10 +316,13 @@ fn ensure_flojoy_dependencies(
 
 /// 安装依赖
 #[tauri::command]
-pub fn install_dependencies(state: State<FlojoyBackendState>, app: AppHandle) -> Result<String, String> {
+pub fn install_dependencies(
+    state: State<FlojoyBackendState>,
+    app: AppHandle,
+) -> Result<String, String> {
     let py_path = state.python_path.lock().map_err(|e| e.to_string())?;
     let mut be_dir = state.backend_dir.lock().map_err(|e| e.to_string())?;
-    
+
     // 如果后端目录未配置或不存在，重新获取
     if be_dir.is_empty() || !std::path::Path::new(&*be_dir).exists() {
         let new_dir = get_flojoy_dir(&app);
@@ -319,13 +331,13 @@ pub fn install_dependencies(state: State<FlojoyBackendState>, app: AppHandle) ->
         }
         *be_dir = new_dir.to_string_lossy().to_string();
     }
-    
+
     // 验证目录存在
     let backend_path = std::path::Path::new(&*be_dir);
     if !backend_path.exists() {
         return Err(format!("后端目录不存在: {}", *be_dir));
     }
-    
+
     // 验证 pyproject.toml 存在
     if !backend_path.join("pyproject.toml").exists() {
         return Err(format!("pyproject.toml 不存在于: {}", *be_dir));
@@ -333,7 +345,7 @@ pub fn install_dependencies(state: State<FlojoyBackendState>, app: AppHandle) ->
 
     // 获取 poetry 路径
     let poetry_path = get_poetry_path(&py_path);
-    
+
     // 首先使用 poetry env use 指定 Python 版本
     let env_use_result = create_hidden_command(&poetry_path)
         .args(["env", "use", &*py_path])
@@ -341,7 +353,7 @@ pub fn install_dependencies(state: State<FlojoyBackendState>, app: AppHandle) ->
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output();
-    
+
     // 如果直接调用 poetry 失败，尝试通过 python -m poetry
     if env_use_result.is_err() || !env_use_result.as_ref().unwrap().status.success() {
         let _ = create_hidden_command(&*py_path)
@@ -351,7 +363,7 @@ pub fn install_dependencies(state: State<FlojoyBackendState>, app: AppHandle) ->
             .stderr(Stdio::piped())
             .output();
     }
-    
+
     // 然后运行 poetry install --no-root（不安装当前项目，只安装依赖）
     let output = create_hidden_command(&poetry_path)
         .args(["install", "--no-interaction", "--no-root"])
@@ -457,12 +469,12 @@ pub fn start_flojoy_backend(
 
     // 获取 poetry 路径
     let poetry_path = get_poetry_path(&py_path);
-    
+
     // 工作目录应该是 flojoy 根目录（不是 captain 子目录）
     // 因为 main.py 中使用 "from captain.routes import ..." 这样的导入
     // Python 需要从 flojoy/ 目录运行才能正确解析 captain 模块
     let working_dir = backend_dir.clone();
-    
+
     // 规范化路径，去掉 Windows 扩展路径前缀 \\?\
     let working_dir_str = working_dir.to_string_lossy().to_string();
     let working_dir_clean = if working_dir_str.starts_with(r"\\?\") {
@@ -470,12 +482,13 @@ pub fn start_flojoy_backend(
     } else {
         working_dir.clone()
     };
-    
+
     println!("[Flojoy] 后端目录: {:?}", backend_dir);
     println!("[Flojoy] 工作目录: {:?}", working_dir_clean);
     println!("[Flojoy] Poetry 路径: {}", poetry_path);
 
-    let dependencies_installed = ensure_flojoy_dependencies(&poetry_path, &py_path, &working_dir_clean)?;
+    let dependencies_installed =
+        ensure_flojoy_dependencies(&poetry_path, &py_path, &working_dir_clean)?;
     if dependencies_installed {
         let mut deps_guard = state
             .dependencies_installed
@@ -483,7 +496,7 @@ pub fn start_flojoy_backend(
             .map_err(|e| e.to_string())?;
         *deps_guard = true;
     }
-    
+
     // 检查 main.py 是否存在（入口在 flojoy/main.py，使用 uvicorn 运行 captain.main:app）
     let main_py = working_dir_clean.join("main.py");
     if !main_py.exists() {
@@ -496,7 +509,7 @@ pub fn start_flojoy_backend(
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    
+
     // 构建新的 PATH，将 Python 目录放在最前面
     let current_path = std::env::var("PATH").unwrap_or_default();
     let new_path = if python_dir.is_empty() {
@@ -504,7 +517,7 @@ pub fn start_flojoy_backend(
     } else {
         format!("{};{}", python_dir, current_path)
     };
-    
+
     println!("[Flojoy] Python 目录: {}", python_dir);
 
     // 首先尝试直接使用 poetry
@@ -522,10 +535,21 @@ pub fn start_flojoy_backend(
     let mut child = match child_result {
         Ok(c) => c,
         Err(e1) => {
-            println!("[Flojoy] poetry 直接启动失败: {}, 尝试 python -m poetry", e1);
+            println!(
+                "[Flojoy] poetry 直接启动失败: {}, 尝试 python -m poetry",
+                e1
+            );
             // 如果 poetry 命令失败，尝试通过 python -m poetry
             create_hidden_command(&*py_path)
-                .args(["-m", "poetry", "run", "python", "main.py", "--port", &port.to_string()])
+                .args([
+                    "-m",
+                    "poetry",
+                    "run",
+                    "python",
+                    "main.py",
+                    "--port",
+                    &port.to_string(),
+                ])
                 .current_dir(&working_dir_clean)
                 .env("PATH", &new_path)
                 .stdout(Stdio::inherit())
@@ -537,10 +561,10 @@ pub fn start_flojoy_backend(
 
     let pid = child.id();
     println!("[Flojoy] 进程已 spawn，PID: {}", pid);
-    
+
     // 等待更长时间检查进程是否立即退出（Python 启动可能需要时间）
     std::thread::sleep(std::time::Duration::from_millis(2000));
-    
+
     match child.try_wait() {
         Ok(Some(status)) => {
             // 进程已退出，说明启动失败
@@ -558,7 +582,7 @@ pub fn start_flojoy_backend(
             return Err(format!("检查进程状态失败: {}", e));
         }
     }
-    
+
     *process_guard = Some(child);
 
     // 更新后端目录
@@ -566,10 +590,7 @@ pub fn start_flojoy_backend(
     let mut be_dir = state.backend_dir.lock().map_err(|e| e.to_string())?;
     *be_dir = backend_dir.to_string_lossy().to_string();
 
-    Ok(format!(
-        "Flojoy 后端已启动，PID: {}, Port: {}",
-        pid, *port
-    ))
+    Ok(format!("Flojoy 后端已启动，PID: {}, Port: {}", pid, *port))
 }
 
 /// 停止 Flojoy 后端
@@ -628,7 +649,10 @@ pub fn get_flojoy_backend_pid(state: State<FlojoyBackendState>) -> Result<Option
 
 /// 设置后端端口
 #[tauri::command]
-pub fn set_flojoy_backend_port(state: State<FlojoyBackendState>, new_port: u16) -> Result<(), String> {
+pub fn set_flojoy_backend_port(
+    state: State<FlojoyBackendState>,
+    new_port: u16,
+) -> Result<(), String> {
     let mut port = state.port.lock().map_err(|e| e.to_string())?;
     *port = new_port;
     Ok(())
@@ -641,7 +665,7 @@ pub fn init_flojoy_backend_dir(
     app: AppHandle,
 ) -> Result<String, String> {
     let backend_dir = get_flojoy_dir(&app);
-    
+
     // 验证目录存在
     if !backend_dir.exists() {
         return Err(format!(
@@ -649,7 +673,7 @@ pub fn init_flojoy_backend_dir(
             backend_dir
         ));
     }
-    
+
     // 验证 pyproject.toml 存在
     if !backend_dir.join("pyproject.toml").exists() {
         return Err(format!(
@@ -657,11 +681,11 @@ pub fn init_flojoy_backend_dir(
             backend_dir
         ));
     }
-    
+
     let mut be_dir = state.backend_dir.lock().map_err(|e| e.to_string())?;
     *be_dir = backend_dir.to_string_lossy().to_string();
-    
+
     println!("[Flojoy] 后端目录已初始化: {}", *be_dir);
-    
+
     Ok(be_dir.clone())
 }

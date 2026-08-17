@@ -3,9 +3,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ab_glyph::FontArc;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use image::codecs::jpeg::JpegEncoder;
 use image::{Rgb, RgbImage};
 use imageproc::drawing::{
@@ -21,16 +22,23 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-pub struct HighTempPressureVideoState {
+const HIGH_TEMP_PRESSURE_BUSINESS_REPORT_FILENAME: &str = "高温高压测试报告.pdf";
+
+pub struct HighTempPressureOcrState {
     pub process: Arc<Mutex<Option<Child>>>,
-    pub stop_reason: Arc<Mutex<Option<String>>>,
 }
 
-impl Default for HighTempPressureVideoState {
+#[derive(serde::Serialize)]
+pub struct HighTempPressureOcrDevice {
+    pub index: u32,
+    pub name: String,
+    pub available: bool,
+}
+
+impl Default for HighTempPressureOcrState {
     fn default() -> Self {
         Self {
             process: Arc::new(Mutex::new(None)),
-            stop_reason: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -72,14 +80,21 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
 
     if let Ok(current_dir) = std::env::current_dir() {
         let candidates = [
-            current_dir.join(".venv-video").join("bin").join("python"),
-            current_dir.join(".venv-video").join("Scripts").join("python.exe"),
+            current_dir.join(".venv-ocr").join("bin").join("python"),
+            current_dir
+                .join(".venv-ocr")
+                .join("Scripts")
+                .join("python.exe"),
             current_dir
                 .join("..")
-                .join(".venv-video")
+                .join(".venv-ocr")
                 .join("bin")
                 .join("python"),
-            current_dir.join("..").join(".venv-video").join("Scripts").join("python.exe"),
+            current_dir
+                .join("..")
+                .join(".venv-ocr")
+                .join("Scripts")
+                .join("python.exe"),
             current_dir.join(".venv").join("Scripts").join("python.exe"),
             current_dir
                 .join("..")
@@ -87,7 +102,11 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
                 .join("Scripts")
                 .join("python.exe"),
             current_dir.join(".venv").join("bin").join("python"),
-            current_dir.join("..").join(".venv").join("bin").join("python"),
+            current_dir
+                .join("..")
+                .join(".venv")
+                .join("bin")
+                .join("python"),
         ];
         for path in candidates {
             if path.exists() {
@@ -103,13 +122,16 @@ fn resolve_python_program(python_path: Option<String>) -> Result<String, String>
     })
 }
 
-fn ensure_video_dependencies(python_program: &str) -> Result<(), String> {
+fn ensure_ocr_dependencies(python_program: &str) -> Result<(), String> {
     let import_check = create_hidden_command(python_program)
-        .args(["-c", "import av, cv2, numpy"])
+        .args([
+            "-c",
+            "import cv2, numpy, onnxruntime, paddleocr, prometheus_client, pydantic, yaml",
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| format!("检查高温高压井视频识别依赖失败: {}", e))?;
+        .map_err(|e| format!("检查高温高压井 OCR 依赖失败: {}", e))?;
 
     if import_check.status.success() {
         return Ok(());
@@ -119,7 +141,7 @@ fn ensure_video_dependencies(python_program: &str) -> Result<(), String> {
         .trim()
         .to_string();
     Err(format!(
-        "当前 Python 缺少高温高压井视频识别依赖，请使用项目内 .venv-video 环境，或执行 python -m pip install av opencv-python-headless numpy。Python: {}{}",
+        "当前 Python 缺少高温高压井 OCR 依赖，请使用项目内 .venv-ocr 环境，或按 OCR 服务 requirements.txt 安装依赖。Python: {}{}",
         python_program,
         if detail.is_empty() {
             String::new()
@@ -133,10 +155,10 @@ fn resolve_script_path(app: &AppHandle) -> Result<PathBuf, String> {
     let bundled = app
         .path()
         .resolve(
-            "resources/high-temp-pressure/extract_video_readings.py",
+            "resources/high-temp-pressure/ocr-service/run_high_temp_pressure_ocr.py",
             BaseDirectory::Resource,
         )
-        .map_err(|e| format!("解析高温高压井视频识别脚本资源失败: {}", e))?;
+        .map_err(|e| format!("解析高温高压井 OCR 脚本资源失败: {}", e))?;
     if bundled.exists() {
         return Ok(bundled);
     }
@@ -146,13 +168,14 @@ fn resolve_script_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("src-tauri")
         .join("resources")
         .join("high-temp-pressure")
-        .join("extract_video_readings.py");
+        .join("ocr-service")
+        .join("run_high_temp_pressure_ocr.py");
     if dev_fallback.exists() {
         return Ok(dev_fallback);
     }
 
     Err(
-        "未找到项目内高温高压井视频识别脚本 resources/high-temp-pressure/extract_video_readings.py"
+        "未找到项目内高温高压井 OCR 脚本 resources/high-temp-pressure/ocr-service/run_high_temp_pressure_ocr.py"
             .to_string(),
     )
 }
@@ -167,30 +190,20 @@ fn create_output_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .resolve("high-temp-pressure-captures", BaseDirectory::AppData)
         .map_err(|e| format!("解析高温高压井采集输出目录失败: {}", e))?;
     let output_dir = base_dir
-        .join("high_temp_pressure_video_extract")
+        .join("high_temp_pressure_ocr")
         .join(timestamp.to_string());
     fs::create_dir_all(&output_dir).map_err(|e| format!("创建输出目录失败: {}", e))?;
     Ok(output_dir)
 }
 
-fn write_progress_status(output_dir: &Path, paused: bool, complete: bool) -> Result<(), String> {
-    let progress_path = output_dir.join("capture_progress.json");
-    if !progress_path.exists() {
-        return Ok(());
-    }
-    let progress_text =
-        fs::read_to_string(&progress_path).map_err(|e| format!("读取采集进度失败: {}", e))?;
-    let mut progress: serde_json::Value =
-        serde_json::from_str(&progress_text).map_err(|e| format!("解析采集进度失败: {}", e))?;
-    if let Some(obj) = progress.as_object_mut() {
-        obj.insert("paused".to_string(), serde_json::Value::Bool(paused));
-        obj.insert("complete".to_string(), serde_json::Value::Bool(complete));
-    }
+fn write_control_action(output_dir: &Path, action: &str) -> Result<(), String> {
+    let control_path = output_dir.join("ocr_control.json");
     fs::write(
-        &progress_path,
-        serde_json::to_string_pretty(&progress).map_err(|e| format!("写入采集进度失败: {}", e))?,
+        &control_path,
+        serde_json::to_string_pretty(&serde_json::json!({ "action": action }))
+            .map_err(|e| format!("序列化 OCR 控制指令失败: {}", e))?,
     )
-    .map_err(|e| format!("写入采集进度失败: {}", e))
+    .map_err(|e| format!("写入 OCR 控制指令失败: {}", e))
 }
 
 fn absolutize_path_field(payload: &mut serde_json::Value, key: &str, output_dir: &Path) {
@@ -214,9 +227,9 @@ fn absolutize_path_field(payload: &mut serde_json::Value, key: &str, output_dir:
 }
 
 fn read_payload_files(output_dir: &Path) -> Result<serde_json::Value, String> {
-    let json_path = output_dir.join("video_readings_0.5s.json");
+    let json_path = output_dir.join("ocr_readings_0.5s.json");
     let summary_path = output_dir.join("experiment_summary.json");
-    let csv_path = output_dir.join("video_readings.csv");
+    let csv_path = output_dir.join("ocr_readings.csv");
 
     let payload_text =
         fs::read_to_string(&json_path).map_err(|e| format!("读取采样JSON失败: {}", e))?;
@@ -241,12 +254,12 @@ fn read_payload_files(output_dir: &Path) -> Result<serde_json::Value, String> {
 }
 
 fn read_progress_file(output_dir: &Path) -> Result<serde_json::Value, String> {
-    let progress_path = output_dir.join("capture_progress.json");
+    let progress_path = output_dir.join("ocr_progress.json");
     if !progress_path.exists() {
         return Ok(serde_json::json!({
             "exists": false,
             "current": 0,
-            "progress_pct": 0,
+            "ready_pct": 0,
             "latest_frame": "",
             "complete": false,
         }));
@@ -261,6 +274,59 @@ fn read_progress_file(output_dir: &Path) -> Result<serde_json::Value, String> {
         obj.insert("exists".to_string(), serde_json::Value::Bool(true));
     }
     Ok(progress)
+}
+
+fn read_journal_records(
+    output_dir: &Path,
+    after_index: usize,
+    limit: usize,
+) -> Result<serde_json::Value, String> {
+    let journal_path = output_dir.join("ocr_records.ndjson");
+    if !journal_path.exists() {
+        return Ok(serde_json::json!({
+            "records": [],
+            "next_index": after_index,
+            "has_more": false,
+        }));
+    }
+
+    let file =
+        fs::File::open(&journal_path).map_err(|e| format!("读取 OCR 增量记录失败: {}", e))?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut record_index = 0usize;
+    let mut records = Vec::new();
+
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|e| format!("读取 OCR 增量记录失败: {}", e))?;
+        if bytes == 0 {
+            break;
+        }
+        if !line.ends_with('\n') {
+            break;
+        }
+        record_index += 1;
+        if record_index <= after_index {
+            continue;
+        }
+        if records.len() >= limit {
+            break;
+        }
+        let record = serde_json::from_str::<serde_json::Value>(line.trim_end())
+            .map_err(|e| format!("解析第 {} 条 OCR 增量记录失败: {}", record_index, e))?;
+        records.push(record);
+    }
+
+    let next_index = after_index + records.len();
+    let has_more = records.len() == limit;
+    Ok(serde_json::json!({
+        "records": records,
+        "next_index": next_index,
+        "has_more": has_more,
+    }))
 }
 
 const REPORT_PAGE_WIDTH: u32 = 1240;
@@ -366,11 +432,7 @@ fn draw_centered_report_text(
 
 fn draw_section_title(image: &mut RgbImage, font: &FontArc, title: &str, y: &mut i32) {
     let blue = Rgb([37, 99, 235]);
-    draw_filled_rect_mut(
-        image,
-        Rect::at(REPORT_MARGIN, *y + 8).of_size(8, 24),
-        blue,
-    );
+    draw_filled_rect_mut(image, Rect::at(REPORT_MARGIN, *y + 8).of_size(8, 24), blue);
     draw_report_text(
         image,
         font,
@@ -601,8 +663,15 @@ fn write_image_pdf(report_path: &Path, jpeg_bytes: &[u8]) -> Result<(), String> 
     pdf.extend_from_slice(jpeg_bytes);
     pdf.extend_from_slice(b"\nendstream\nendobj\n");
 
-    let content = format!("q\n{:.2} 0 0 {:.2} 0 0 cm\n/Im0 Do\nQ\n", page_width, page_height);
-    let content_object = format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content);
+    let content = format!(
+        "q\n{:.2} 0 0 {:.2} 0 0 cm\n/Im0 Do\nQ\n",
+        page_width, page_height
+    );
+    let content_object = format!(
+        "<< /Length {} >>\nstream\n{}endstream",
+        content.len(),
+        content
+    );
     push_object(&mut pdf, &mut offsets, 5, content_object.as_bytes());
 
     let xref_offset = pdf.len();
@@ -621,10 +690,67 @@ fn write_image_pdf(report_path: &Path, jpeg_bytes: &[u8]) -> Result<(), String> 
     fs::write(report_path, pdf).map_err(|e| format!("写入高温高压测试报告 PDF 失败: {}", e))
 }
 
-fn write_high_temp_pressure_pdf_report(
-    readings_json_path: &Path,
-    report_path: &Path,
-) -> Result<(), String> {
+struct ReportRecordSummary {
+    record_count: usize,
+    detected_count: usize,
+    first_time: String,
+    last_time: String,
+    latest: serde_json::Value,
+    preview: Vec<serde_json::Value>,
+}
+
+fn load_report_record_summary(readings_json_path: &Path) -> Result<ReportRecordSummary, String> {
+    let journal_path = readings_json_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("ocr_records.ndjson");
+    if journal_path.exists() {
+        let file =
+            fs::File::open(&journal_path).map_err(|e| format!("读取 OCR 增量记录失败: {}", e))?;
+        let mut record_count = 0usize;
+        let mut detected_count = 0usize;
+        let mut first_time = "-".to_string();
+        let mut last_time = "-".to_string();
+        let mut latest = serde_json::json!({});
+        let mut preview = Vec::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.map_err(|e| format!("读取 OCR 增量记录失败: {}", e))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: serde_json::Value =
+                serde_json::from_str(&line).map_err(|e| format!("解析 OCR 增量记录失败: {}", e))?;
+            record_count += 1;
+            if record
+                .get("screen_detected")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                detected_count += 1;
+            }
+            let time = record
+                .get("time_sec")
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            if record_count == 1 {
+                first_time = time.clone();
+            }
+            last_time = time;
+            if preview.len() < 5 {
+                preview.push(record.clone());
+            }
+            latest = record;
+        }
+        return Ok(ReportRecordSummary {
+            record_count,
+            detected_count,
+            first_time,
+            last_time,
+            latest,
+            preview,
+        });
+    }
+
     let payload_text =
         fs::read_to_string(readings_json_path).map_err(|e| format!("读取采样JSON失败: {}", e))?;
     let payload: serde_json::Value =
@@ -632,35 +758,54 @@ fn write_high_temp_pressure_pdf_report(
     let records = payload
         .get("records")
         .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let record_count = records.len();
-    let detected_count = records
-        .iter()
-        .filter(|record| {
-            record
-                .get("screen_detected")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-        })
-        .count();
-    let first_time = records
-        .first()
-        .and_then(|record| record.get("time_sec"))
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    let last_time = records
-        .last()
-        .and_then(|record| record.get("time_sec"))
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string());
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    Ok(ReportRecordSummary {
+        record_count: records.len(),
+        detected_count: records
+            .iter()
+            .filter(|record| {
+                record
+                    .get("screen_detected")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            })
+            .count(),
+        first_time: records
+            .first()
+            .and_then(|record| record.get("time_sec"))
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        last_time: records
+            .last()
+            .and_then(|record| record.get("time_sec"))
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        latest: records
+            .last()
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+        preview: records.iter().take(5).cloned().collect(),
+    })
+}
+
+fn write_high_temp_pressure_pdf_report(
+    readings_json_path: &Path,
+    report_path: &Path,
+) -> Result<(), String> {
+    let records = load_report_record_summary(readings_json_path)?;
+    let record_count = records.record_count;
+    let detected_count = records.detected_count;
+    let first_time = &records.first_time;
+    let last_time = &records.last_time;
     let generated_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "-".to_string());
 
     let font = load_report_font()?;
-    let mut page = RgbImage::from_pixel(REPORT_PAGE_WIDTH, REPORT_PAGE_HEIGHT, Rgb([255, 255, 255]));
+    let mut page =
+        RgbImage::from_pixel(REPORT_PAGE_WIDTH, REPORT_PAGE_HEIGHT, Rgb([255, 255, 255]));
     let mut y = 80;
     draw_centered_report_text(
         &mut page,
@@ -697,9 +842,15 @@ fn write_high_temp_pressure_pdf_report(
         &mut page,
         &font,
         &[
-            ("报告类型".to_string(), "高温高压井视频识别测试报告".to_string()),
+            (
+                "报告类型".to_string(),
+                "高温高压井 OCR 识别测试报告".to_string(),
+            ),
             ("数据文件".to_string(), file_name),
-            ("原始路径".to_string(), readings_json_path.to_string_lossy().to_string()),
+            (
+                "原始路径".to_string(),
+                readings_json_path.to_string_lossy().to_string(),
+            ),
             ("生成时间".to_string(), format!("{} 秒时间戳", generated_at)),
         ],
         &mut y,
@@ -719,8 +870,8 @@ fn write_high_temp_pressure_pdf_report(
     );
 
     draw_section_title(&mut page, &font, "关键识别数据", &mut y);
-    let latest = records.last().cloned().unwrap_or_else(|| serde_json::json!({}));
-    let latest_rows = latest
+    let latest_rows = records
+        .latest
         .get("measurements")
         .and_then(|value| value.as_array())
         .map(|measurements| {
@@ -751,6 +902,7 @@ fn write_high_temp_pressure_pdf_report(
 
     draw_section_title(&mut page, &font, "采样记录预览", &mut y);
     let preview_rows = records
+        .preview
         .iter()
         .take(5)
         .map(|record| {
@@ -780,7 +932,7 @@ fn write_high_temp_pressure_pdf_report(
             ("总体结论".to_string(), "待人工复核".to_string()),
             (
                 "附件说明".to_string(),
-                "完整采样明细请查看同目录 video_readings_0.5s.json".to_string(),
+                "完整采样明细请查看同目录 ocr_readings_0.5s.json".to_string(),
             ),
         ],
         &mut y,
@@ -789,7 +941,7 @@ fn write_high_temp_pressure_pdf_report(
     draw_report_text(
         &mut page,
         &font,
-        "本报告由测试端根据视频识别采样数据自动生成，样式参考管理端测试报告下载格式。",
+        "本报告由测试端根据 OCR 识别采样数据自动生成，样式参考管理端测试报告下载格式。",
         REPORT_MARGIN,
         REPORT_PAGE_HEIGHT as i32 - 72,
         19.0,
@@ -806,13 +958,12 @@ fn write_high_temp_pressure_pdf_report(
 fn copy_high_temp_pressure_report_output(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|e| format!("创建导出目录失败: {}", e))?;
 
-    let json_source = source.join("video_readings_0.5s.json");
+    let json_source = source.join("ocr_readings_0.5s.json");
     if !json_source.exists() {
         return Err(format!("采样JSON不存在: {}", json_source.to_string_lossy()));
     }
-    fs::copy(&json_source, target.join("video_readings_0.5s.json"))
+    fs::copy(&json_source, target.join("ocr_readings_0.5s.json"))
         .map_err(|e| format!("复制采样JSON失败: {}", e))?;
-    write_high_temp_pressure_pdf_report(&json_source, &target.join("高温高压测试报告.pdf"))?;
 
     Ok(())
 }
@@ -832,26 +983,38 @@ fn sanitize_folder_name(input: &str) -> String {
 }
 
 #[tauri::command]
-pub fn start_high_temp_pressure_video_stream(
+pub fn get_high_temp_pressure_ocr_devices() -> Result<Vec<HighTempPressureOcrDevice>, String> {
+    let mut devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+        .map_err(|error| format!("枚举 OCR 采集设备失败: {}", error))?
+        .into_iter()
+        .filter_map(|device| {
+            let index = device.index().as_index().ok()?;
+            Some(HighTempPressureOcrDevice {
+                index,
+                name: device.human_name(),
+                available: true,
+            })
+        })
+        .collect::<Vec<_>>();
+    devices.sort_by_key(|device| device.index);
+    Ok(devices)
+}
+
+#[tauri::command]
+pub fn start_high_temp_pressure_ocr_stream(
     app: AppHandle,
-    state: State<HighTempPressureVideoState>,
+    state: State<HighTempPressureOcrState>,
     python_path: Option<String>,
-    video_path: String,
+    device_index: i32,
     interval: f64,
-    output_dir: Option<String>,
-    resume: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    ensure_exists(&video_path, "视频文件路径")?;
+    if device_index < 0 {
+        return Err("采集卡设备索引无效".to_string());
+    }
     let python_program = resolve_python_program(python_path)?;
-    ensure_video_dependencies(&python_program)?;
+    ensure_ocr_dependencies(&python_program)?;
     let script_path = resolve_script_path(&app)?;
-    let resume_mode = resume.unwrap_or(false);
-    let output_dir = if let Some(existing) = output_dir {
-        ensure_exists(&existing, "采集输出目录")?;
-        PathBuf::from(existing)
-    } else {
-        create_output_dir(&app)?
-    };
+    let output_dir = create_output_dir(&app)?;
 
     {
         let mut guard = state.process.lock().map_err(|e| e.to_string())?;
@@ -861,47 +1024,41 @@ pub fn start_high_temp_pressure_video_stream(
                     *guard = None;
                 }
                 Ok(None) => {
-                    return Err("已有高温高压井视频识别任务正在运行".to_string());
+                    return Err("已有高温高压井 OCR 任务正在运行".to_string());
                 }
-                Err(e) => return Err(format!("检查高温高压井视频识别进程状态失败: {}", e)),
+                Err(e) => return Err(format!("检查高温高压井 OCR 进程状态失败: {}", e)),
             }
         }
-    }
-    if let Ok(mut reason_guard) = state.stop_reason.lock() {
-        *reason_guard = None;
     }
 
     let script_path_str = script_path.to_string_lossy().to_string();
     let output_dir_str = output_dir.to_string_lossy().to_string();
+    let device_index_str = device_index.to_string();
     let interval_str = interval.to_string();
     let mut cmd = create_hidden_command(&python_program);
     cmd.args([
         script_path_str.as_str(),
-        "--video",
-        video_path.as_str(),
+        "--device-index",
+        device_index_str.as_str(),
         "--output-dir",
         output_dir_str.as_str(),
         "--interval",
         interval_str.as_str(),
-        "--emit-events",
     ])
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
-    if resume_mode {
-        cmd.arg("--resume");
-    }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动高温高压井视频识别脚本失败: {}", e))?;
+        .map_err(|e| format!("启动高温高压井 OCR 进程失败: {}", e))?;
 
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "无法读取高温高压井视频识别脚本标准输出".to_string())?;
+        .ok_or_else(|| "无法读取高温高压井 OCR 进程标准输出".to_string())?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "无法读取高温高压井视频识别脚本错误输出".to_string())?;
+        .ok_or_else(|| "无法读取高温高压井 OCR 进程错误输出".to_string())?;
 
     {
         let mut guard = state.process.lock().map_err(|e| e.to_string())?;
@@ -925,7 +1082,6 @@ pub fn start_high_temp_pressure_video_stream(
 
     let app_clone = app.clone();
     let process_handle = state.process.clone();
-    let stop_reason_handle = state.stop_reason.clone();
     let output_dir_clone = output_dir.clone();
 
     std::thread::spawn(move || {
@@ -940,11 +1096,11 @@ pub fn start_high_temp_pressure_video_stream(
                 Ok(mut payload) => {
                     absolutize_path_field(&mut payload, "preview_path", &output_dir_clone);
                     absolutize_path_field(&mut payload, "latest_frame", &output_dir_clone);
-                    let _ = app_clone.emit("high-temp-pressure-video-stream", payload);
+                    let _ = app_clone.emit("high-temp-pressure-ocr-stream", payload);
                 }
                 Err(_) => {
                     let _ = app_clone.emit(
-                        "high-temp-pressure-video-stream",
+                        "high-temp-pressure-ocr-stream",
                         serde_json::json!({
                             "event": "log",
                             "message": trimmed,
@@ -969,37 +1125,14 @@ pub fn start_high_temp_pressure_video_stream(
         };
 
         if let Some(status) = wait_result {
-            let reason = stop_reason_handle
-                .lock()
-                .ok()
-                .and_then(|mut guard| guard.take());
-            if let Some(reason) = reason {
-                let event_name = if reason == "paused" {
-                    "paused"
-                } else {
-                    "stopped"
-                };
-                let message = if reason == "paused" {
-                    "视频数据采集已暂停"
-                } else {
-                    "视频数据采集已中止"
-                };
-                let _ = app_clone.emit(
-                    "high-temp-pressure-video-stream",
-                    serde_json::json!({
-                        "event": event_name,
-                        "message": message,
-                        "output_dir": output_dir_clone.to_string_lossy().to_string(),
-                    }),
-                );
-            } else if !status.success() {
+            if !status.success() {
                 let message = if stderr_text.is_empty() {
-                    format!("高温高压井视频识别脚本退出失败，退出码: {:?}", status.code())
+                    format!("高温高压井 OCR 进程退出失败，退出码: {:?}", status.code())
                 } else {
                     stderr_text
                 };
                 let _ = app_clone.emit(
-                    "high-temp-pressure-video-stream",
+                    "high-temp-pressure-ocr-stream",
                     serde_json::json!({
                         "event": "error",
                         "message": message,
@@ -1013,52 +1146,71 @@ pub fn start_high_temp_pressure_video_stream(
         "output_dir": output_dir.to_string_lossy(),
         "script_path": script_path.to_string_lossy(),
         "python_program": python_program,
+        "device_index": device_index,
     }))
 }
 
 #[tauri::command]
-pub fn pause_high_temp_pressure_video_stream(
-    state: State<HighTempPressureVideoState>,
+pub fn pause_high_temp_pressure_ocr_stream(
+    state: State<HighTempPressureOcrState>,
     output_dir: String,
 ) -> Result<(), String> {
     ensure_exists(&output_dir, "采集输出目录")?;
-    write_progress_status(Path::new(&output_dir), true, false)?;
-    if let Ok(mut guard) = state.stop_reason.lock() {
-        *guard = Some("paused".to_string());
-    }
-
     let mut guard = state.process.lock().map_err(|e| e.to_string())?;
-    if let Some(mut child) = guard.take() {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = create_hidden_command("taskkill")
-                .args(["/PID", &child.id().to_string(), "/F", "/T"])
-                .output();
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = child.kill();
-        }
-
-        let _ = child.wait();
+    let child = guard
+        .as_mut()
+        .ok_or_else(|| "OCR 采集进程未运行".to_string())?;
+    if child
+        .try_wait()
+        .map_err(|e| format!("检查 OCR 采集进程失败: {}", e))?
+        .is_some()
+    {
+        return Err("OCR 采集进程已结束".to_string());
     }
-    Ok(())
+    write_control_action(Path::new(&output_dir), "pause")
 }
 
 #[tauri::command]
-pub fn stop_high_temp_pressure_video_stream(
-    state: State<HighTempPressureVideoState>,
+pub fn resume_high_temp_pressure_ocr_stream(
+    state: State<HighTempPressureOcrState>,
+    output_dir: String,
+) -> Result<(), String> {
+    ensure_exists(&output_dir, "采集输出目录")?;
+    let mut guard = state.process.lock().map_err(|e| e.to_string())?;
+    let child = guard
+        .as_mut()
+        .ok_or_else(|| "OCR 采集进程未运行".to_string())?;
+    if child
+        .try_wait()
+        .map_err(|e| format!("检查 OCR 采集进程失败: {}", e))?
+        .is_some()
+    {
+        return Err("OCR 采集进程已结束".to_string());
+    }
+    write_control_action(Path::new(&output_dir), "resume")
+}
+
+#[tauri::command]
+pub fn stop_high_temp_pressure_ocr_stream(
+    state: State<HighTempPressureOcrState>,
     output_dir: Option<String>,
 ) -> Result<(), String> {
-    if let Ok(mut guard) = state.stop_reason.lock() {
-        *guard = Some("stopped".to_string());
-    }
     if let Some(dir) = output_dir.as_ref() {
-        let _ = write_progress_status(Path::new(dir), false, false);
+        let _ = write_control_action(Path::new(dir), "stop");
     }
     let mut guard = state.process.lock().map_err(|e| e.to_string())?;
-    if let Some(mut child) = guard.take() {
+    if let Some(child) = guard.as_mut() {
+        for _ in 0..300 {
+            if child
+                .try_wait()
+                .map_err(|e| format!("等待 OCR 采集进程退出失败: {}", e))?
+                .is_some()
+            {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
         #[cfg(target_os = "windows")]
         {
             let _ = create_hidden_command("taskkill")
@@ -1070,20 +1222,36 @@ pub fn stop_high_temp_pressure_video_stream(
         {
             let _ = child.kill();
         }
-
-        let _ = child.wait();
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn get_high_temp_pressure_capture_status(output_dir: String) -> Result<serde_json::Value, String> {
+pub fn get_high_temp_pressure_capture_status(
+    output_dir: String,
+) -> Result<serde_json::Value, String> {
     ensure_exists(&output_dir, "采集输出目录")?;
     read_progress_file(Path::new(&output_dir))
 }
 
 #[tauri::command]
-pub fn get_high_temp_pressure_capture_result(output_dir: String) -> Result<serde_json::Value, String> {
+pub fn get_high_temp_pressure_capture_records(
+    output_dir: String,
+    after_index: usize,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    ensure_exists(&output_dir, "采集输出目录")?;
+    read_journal_records(
+        Path::new(&output_dir),
+        after_index,
+        limit.unwrap_or(1000).clamp(1, 5000),
+    )
+}
+
+#[tauri::command]
+pub fn get_high_temp_pressure_capture_result(
+    output_dir: String,
+) -> Result<serde_json::Value, String> {
     ensure_exists(&output_dir, "采集输出目录")?;
     read_payload_files(Path::new(&output_dir))
 }
@@ -1118,16 +1286,89 @@ pub fn export_high_temp_pressure_capture_output(
 }
 
 #[tauri::command]
+pub fn read_high_temp_pressure_business_report(export_dir: String) -> Result<String, String> {
+    let export_path = PathBuf::from(&export_dir);
+    if !export_path.is_absolute() {
+        return Err("OCR 识别结果目录必须是绝对路径".to_string());
+    }
+    if !export_path.is_dir() {
+        return Err(format!("OCR 识别结果目录不存在: {}", export_dir));
+    }
+
+    let report_path = export_path.join(HIGH_TEMP_PRESSURE_BUSINESS_REPORT_FILENAME);
+    if !report_path.is_file() {
+        return Err(format!("业务报告不存在: {}", report_path.to_string_lossy()));
+    }
+
+    let bytes = fs::read(&report_path).map_err(|error| {
+        format!(
+            "读取业务报告失败 {}: {}",
+            report_path.to_string_lossy(),
+            error
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(format!("业务报告为空: {}", report_path.to_string_lossy()));
+    }
+
+    Ok(BASE64.encode(bytes))
+}
+
+#[tauri::command]
+pub fn read_high_temp_pressure_curve_records(
+    export_dir: String,
+) -> Result<serde_json::Value, String> {
+    let export_path = PathBuf::from(&export_dir);
+    if !export_path.is_absolute() {
+        return Err("OCR 识别结果目录必须是绝对路径".to_string());
+    }
+    if !export_path.is_dir() {
+        return Err(format!("OCR 识别结果目录不存在: {}", export_dir));
+    }
+
+    let json_path = export_path.join("ocr_readings_0.5s.json");
+    let payload_text = fs::read_to_string(&json_path)
+        .map_err(|error| format!("读取采样JSON失败 {}: {}", json_path.to_string_lossy(), error))?;
+    let payload: serde_json::Value = serde_json::from_str(&payload_text)
+        .map_err(|error| format!("解析采样JSON失败 {}: {}", json_path.to_string_lossy(), error))?;
+    let records = payload
+        .get("records")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .or_else(|| payload.as_array().cloned())
+        .ok_or_else(|| "采样JSON缺少 records 数组".to_string())?;
+    let record_count = records.len();
+
+    Ok(serde_json::json!({
+        "records": records,
+        "record_count": record_count,
+        "source_path": json_path.to_string_lossy(),
+    }))
+}
+
+#[tauri::command]
 pub fn write_high_temp_pressure_curve_chart(
     export_dir: String,
     image_bytes: Vec<u8>,
+    file_name: Option<String>,
 ) -> Result<serde_json::Value, String> {
     ensure_exists(&export_dir, "导出目录")?;
     let export_path = PathBuf::from(&export_dir);
     fs::create_dir_all(&export_path).map_err(|e| format!("创建导出目录失败: {}", e))?;
 
-    let image_path = export_path.join("高温高压测试结果曲线.png");
-    fs::write(&image_path, image_bytes).map_err(|e| format!("写入温度/压力测试曲线图失败: {}", e))?;
+    let requested_name = file_name.unwrap_or_else(|| "高温高压测试结果曲线.png".to_string());
+    let safe_name = PathBuf::from(&requested_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("高温高压测试结果曲线.png")
+        .to_string();
+    if !safe_name.to_ascii_lowercase().ends_with(".png") {
+        return Err("曲线图片文件名必须使用 PNG 扩展名".to_string());
+    }
+    let image_path = export_path.join(safe_name);
+    fs::write(&image_path, image_bytes)
+        .map_err(|e| format!("写入温度/压力测试曲线图失败: {}", e))?;
 
     Ok(serde_json::json!({
         "image_path": image_path.to_string_lossy(),
@@ -1139,6 +1380,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn incremental_journal_reader_returns_only_complete_records() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("tmp")
+            .join(format!("high-temp-pressure-journal-test-{}", suffix));
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(
+            output_dir.join("ocr_records.ndjson"),
+            "{\"record_index\":1}\n{\"record_index\":2}\n{\"record_index\":3",
+        )
+        .unwrap();
+
+        let result = read_journal_records(&output_dir, 0, 100).unwrap();
+        let records = result["records"].as_array().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(result["next_index"], 2);
+        assert_eq!(records[0]["record_index"], 1);
+        assert_eq!(records[1]["record_index"], 2);
+
+        fs::write(
+            output_dir.join("ocr_records.ndjson"),
+            "{\"record_index\":1,\"time_sec\":0.0,\"screen_detected\":true,\"measurements\":[]}\n{\"record_index\":2,\"time_sec\":0.5,\"screen_detected\":false,\"measurements\":[]}\n",
+        )
+        .unwrap();
+        let readings_path = output_dir.join("ocr_readings_0.5s.json");
+        fs::write(&readings_path, "{}").unwrap();
+        let summary = load_report_record_summary(&readings_path).unwrap();
+        assert_eq!(summary.record_count, 2);
+        assert_eq!(summary.detected_count, 1);
+        assert_eq!(summary.first_time, "0.0");
+        assert_eq!(summary.last_time, "0.5");
+        assert_eq!(summary.preview.len(), 2);
+
+        fs::remove_dir_all(output_dir).unwrap();
+    }
+
+    #[test]
     fn high_temp_pressure_pdf_report_is_written_as_pdf() {
         let output_dir = std::env::current_dir()
             .unwrap()
@@ -1146,7 +1429,7 @@ mod tests {
             .join("tmp")
             .join("high-temp-pressure-report-test");
         fs::create_dir_all(&output_dir).unwrap();
-        let json_path = output_dir.join("video_readings_0.5s.json");
+        let json_path = output_dir.join("ocr_readings_0.5s.json");
         let pdf_path = output_dir.join("高温高压测试报告.pdf");
         fs::write(
             &json_path,

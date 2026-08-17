@@ -5,7 +5,9 @@ import { readFile, stat } from '@tauri-apps/plugin-fs'
 import { useConfig } from '@/composables/useConfig'
 import type { ReportFile, ReportFileId, ReportProcessStep } from '../types'
 import {
+  createVibrationTableReportWithFiles,
   createVibrationTablePreExperiment,
+  type VibrationTableReportPayload,
   type VibrationTablePreExperimentPayload,
   type VibrationTablePreExperimentUploadFile,
 } from '@/services/vibration-table-report-api'
@@ -19,19 +21,26 @@ interface UseVibrationReportOptions {
   ensureAuth?: () => Promise<boolean>
   getAuthHeaders?: () => Record<string, string>
   getPreExperimentPayload?: (exportDir: string) => VibrationTablePreExperimentPayload | null
+  getFormalReportPayload?: (
+    clientSubmitId: string,
+    softwareReportName: string
+  ) => VibrationTableReportPayload | null
   onComplete?: () => void
 }
 
 const createReportFiles = (): ReportFile[] => [
-  { id: 'screenshots', name: 'chart_screenshots', status: '待确认', done: false },
-  { id: 'json', name: 'top_readings_0.5s.json', status: '待确认', done: false },
+  { id: 'softwareReport', name: '振动软件报告.docx', status: '待选择', done: false },
+  { id: 'curve', name: '振动测试曲线.png', status: '已保存到本机 ✓', done: true },
+  { id: 'screenshot', name: '振动软件页面截图.jpg', status: '已保存到本机 ✓', done: true },
+  { id: 'json', name: 'ocr_readings_0.5s.json', status: '已保存到本机 ✓', done: true },
+  { id: 'csv', name: 'ocr_readings.csv', status: '已保存到本机 ✓', done: true },
 ]
 
 const createReportProcessSteps = (): ReportProcessStep[] => [
-  { id: 1, text: '确认第三方报告文件...', status: 'pending' },
-  { id: 2, text: '整理测试结果到工单文件夹...', status: 'pending' },
-  { id: 3, text: '备份报告到历史文件夹...', status: 'pending' },
-  { id: 4, text: '上传工单全部文件到管理服务器...', status: 'pending' },
+  { id: 1, text: '确认共享文件夹中的振动软件报告...', status: 'pending' },
+  { id: 2, text: '确认曲线、页面截图和采样数据已在本机落盘...', status: 'pending' },
+  { id: 3, text: '整理本地测试结果目录...', status: 'pending' },
+  { id: 4, text: '仅上传振动软件报告到管理服务器...', status: 'pending' },
   { id: 5, text: '上传完成，进入关机检查...', status: 'pending' },
 ]
 
@@ -70,6 +79,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
   const selectedThirdPartyReportSize = ref(0)
   const selectedThirdPartyReportModifiedAt = ref('')
   const selectedThirdPartyReportBlob = ref<Blob | null>(null)
+  const formalClientSubmitId = ref('')
 
   const sharedReportDir = computed(() => normalizeSharedReportDir(String(config.value.vibrationSharedReportDir || '')))
   const thirdPartyReportReady = computed(() =>
@@ -95,6 +105,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     reportProcessSteps.value = []
     fileGenRunning.value = false
     reportProcessing.value = false
+    formalClientSubmitId.value = ''
     clearThirdPartyReport()
   }
 
@@ -133,6 +144,12 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     selectedThirdPartyReportSize.value = 0
     selectedThirdPartyReportModifiedAt.value = ''
     selectedThirdPartyReportBlob.value = null
+    const softwareReport = reportFiles.value.find(file => file.id === 'softwareReport')
+    if (softwareReport) {
+      softwareReport.name = '振动软件报告.docx'
+      softwareReport.status = '待选择'
+      softwareReport.done = false
+    }
   }
 
   async function ensureSharedReportDirAccessible(dir: string) {
@@ -186,11 +203,62 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
       selectedThirdPartyReportSize.value = info.size || bytes.byteLength
       selectedThirdPartyReportModifiedAt.value = info.mtime ? info.mtime.toLocaleString() : ''
       selectedThirdPartyReportBlob.value = new Blob([bytes], { type: getWordMimeType(fileName) })
+      const softwareReport = reportFiles.value.find(file => file.id === 'softwareReport')
+      if (softwareReport) {
+        softwareReport.name = fileName
+        softwareReport.status = '已选择'
+      }
       ElMessage.success(`已选择第三方报告：${fileName}`)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       ElMessage.error(`读取第三方报告失败：${message}`)
     }
+  }
+
+  function createFormalClientSubmitId() {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      return `vib-report-${crypto.randomUUID()}`
+    }
+    return `vib-report-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  function ensureFormalClientSubmitId() {
+    if (!formalClientSubmitId.value) formalClientSubmitId.value = createFormalClientSubmitId()
+    return formalClientSubmitId.value
+  }
+
+  async function uploadFormalReportIfNeeded() {
+    if (options.getTestMode?.() !== 'formal') return
+    if (!options.getFormalReportPayload) throw new Error('未配置振动台正式报告数据')
+
+    const authOk = options.ensureAuth ? await options.ensureAuth() : true
+    if (!authOk) throw new Error('未登录或登录已失效，无法上传正式报告')
+
+    const payload = options.getFormalReportPayload(
+      ensureFormalClientSubmitId(),
+      selectedThirdPartyReportName.value
+    )
+    if (!payload) throw new Error('缺少振动台正式报告关联工单或设备信息')
+
+    updateFileStatus('softwareReport', '正在上传...')
+    const response = await createVibrationTableReportWithFiles(
+      payload,
+      [{
+        fieldName: 'software_report',
+        fileName: selectedThirdPartyReportName.value,
+        blob: selectedThirdPartyReportBlob.value as Blob,
+      }],
+      options.getAuthHeaders?.()
+    )
+    if (!response.success || !response.data || response.data.code !== 0) {
+      throw new Error(response.data?.msg || response.error || '振动台正式报告上传失败')
+    }
+
+    markFileDone('softwareReport')
+    const reportCount = Array.isArray((response.data.data as any)?.reports)
+      ? (response.data.data as any).reports.length
+      : 1
+    ElMessage.success(`共享报告已关联 ${reportCount} 台设备并进入待审核`)
   }
 
   async function getThirdPartyReportUploadFile(): Promise<VibrationTablePreExperimentUploadFile> {
@@ -218,23 +286,7 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
       throw new Error('未找到振动台工单ID，无法上传预实验数据')
     }
 
-    const files: VibrationTablePreExperimentUploadFile[] = [
-      {
-        fieldName: 'csv_file',
-        fileName: 'experiment.csv',
-        blob: new Blob([options.getCsvContent()], { type: 'text/csv;charset=utf-8' }),
-      },
-      await getThirdPartyReportUploadFile(),
-    ]
-
-    const captureBlob = await options.getLatestCaptureBlob()
-    if (captureBlob) {
-      files.push({
-        fieldName: 'capture_image',
-        fileName: 'capture.jpg',
-        blob: captureBlob,
-      })
-    }
+    const files: VibrationTablePreExperimentUploadFile[] = [await getThirdPartyReportUploadFile()]
 
     const res = await createVibrationTablePreExperiment(
       payload,
@@ -245,16 +297,22 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
       throw new Error(res.data?.msg || res.error || '预实验数据上传失败')
     }
     const label = res.data.data?.experiment_no ? `第 ${res.data.data.experiment_no} 次` : ''
+    markFileDone('softwareReport')
     ElMessage.success(`预实验数据已上传管理端${label ? `（${label}预实验）` : ''}`)
   }
 
   async function finalizeReportOutput() {
     ensureExportDir()
-    updateFileStatus('screenshots', '已输出')
     updateFileStatus('json', '已输出')
-    markFileDone('screenshots')
+    updateFileStatus('csv', '已输出')
+    updateFileStatus('curve', '已输出')
+    updateFileStatus('screenshot', '已输出')
     markFileDone('json')
+    markFileDone('csv')
+    markFileDone('curve')
+    markFileDone('screenshot')
     await uploadPreExperimentIfNeeded()
+    await uploadFormalReportIfNeeded()
     if (exportDir.value) ElMessage.success(`报告输出已保留 ${exportDir.value}`)
   }
 

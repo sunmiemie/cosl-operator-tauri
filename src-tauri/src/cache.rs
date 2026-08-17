@@ -1,8 +1,8 @@
 /**
  * 缓存管理模块
- * 
+ *
  * 提供工艺、临时工单、反馈记录、报告等数据的本地缓存功能
- * 
+ *
  * 缓存目录结构:
  * {app_data}/cache/
  *   ├── process/     - 工艺数据缓存
@@ -21,7 +21,7 @@ fn get_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("获取应用数据目录失败: {}", e))?;
-    
+
     Ok(app_data_dir.join("cache"))
 }
 
@@ -29,13 +29,12 @@ fn get_cache_root(app: &AppHandle) -> Result<PathBuf, String> {
 fn get_cache_dir(app: &AppHandle, cache_type: &str) -> Result<PathBuf, String> {
     let cache_root = get_cache_root(app)?;
     let cache_dir = cache_root.join(cache_type);
-    
+
     // 如果目录不存在，创建它
     if !cache_dir.exists() {
-        fs::create_dir_all(&cache_dir)
-            .map_err(|e| format!("创建缓存目录失败: {}", e))?;
+        fs::create_dir_all(&cache_dir).map_err(|e| format!("创建缓存目录失败: {}", e))?;
     }
-    
+
     Ok(cache_dir)
 }
 
@@ -56,42 +55,38 @@ pub fn cache_exists(app: AppHandle, cache_type: &str, id: &str) -> Result<bool, 
 #[tauri::command]
 pub fn read_cache(app: AppHandle, cache_type: &str, id: &str) -> Result<String, String> {
     let file_path = get_cache_file_path(&app, cache_type, id)?;
-    
+
     if !file_path.exists() {
         return Err(format!("缓存文件不存在: {}", id));
     }
-    
-    fs::read_to_string(&file_path)
-        .map_err(|e| format!("读取缓存文件失败: {}", e))
+
+    fs::read_to_string(&file_path).map_err(|e| format!("读取缓存文件失败: {}", e))
 }
 
 /// 写入缓存
 #[tauri::command]
 pub fn write_cache(app: AppHandle, cache_type: &str, id: &str, data: &str) -> Result<(), String> {
     let file_path = get_cache_file_path(&app, cache_type, id)?;
-    
+
     // 确保父目录存在
     if let Some(parent) = file_path.parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("创建缓存目录失败: {}", e))?;
+            fs::create_dir_all(parent).map_err(|e| format!("创建缓存目录失败: {}", e))?;
         }
     }
-    
-    fs::write(&file_path, data)
-        .map_err(|e| format!("写入缓存文件失败: {}", e))
+
+    fs::write(&file_path, data).map_err(|e| format!("写入缓存文件失败: {}", e))
 }
 
 /// 删除单个缓存文件
 #[tauri::command]
 pub fn delete_cache(app: AppHandle, cache_type: &str, id: &str) -> Result<(), String> {
     let file_path = get_cache_file_path(&app, cache_type, id)?;
-    
+
     if file_path.exists() {
-        fs::remove_file(&file_path)
-            .map_err(|e| format!("删除缓存文件失败: {}", e))?;
+        fs::remove_file(&file_path).map_err(|e| format!("删除缓存文件失败: {}", e))?;
     }
-    
+
     Ok(())
 }
 
@@ -99,22 +94,20 @@ pub fn delete_cache(app: AppHandle, cache_type: &str, id: &str) -> Result<(), St
 #[tauri::command]
 pub fn clear_cache(app: AppHandle, cache_type: &str) -> Result<(), String> {
     let cache_dir = get_cache_dir(&app, cache_type)?;
-    
+
     if cache_dir.exists() {
         // 删除目录下所有文件
-        for entry in fs::read_dir(&cache_dir)
-            .map_err(|e| format!("读取缓存目录失败: {}", e))?
+        for entry in fs::read_dir(&cache_dir).map_err(|e| format!("读取缓存目录失败: {}", e))?
         {
             let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
             let path = entry.path();
-            
+
             if path.is_file() {
-                fs::remove_file(&path)
-                    .map_err(|e| format!("删除文件失败: {}", e))?;
+                fs::remove_file(&path).map_err(|e| format!("删除文件失败: {}", e))?;
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -122,25 +115,24 @@ pub fn clear_cache(app: AppHandle, cache_type: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn get_cache_size(app: AppHandle, cache_type: &str) -> Result<f64, String> {
     let cache_dir = get_cache_dir(&app, cache_type)?;
-    
+
     if !cache_dir.exists() {
         return Ok(0.0);
     }
-    
+
     let mut total_size: u64 = 0;
-    
-    for entry in fs::read_dir(&cache_dir)
-        .map_err(|e| format!("读取缓存目录失败: {}", e))?
-    {
+
+    for entry in fs::read_dir(&cache_dir).map_err(|e| format!("读取缓存目录失败: {}", e))? {
         let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
-        let metadata = entry.metadata()
+        let metadata = entry
+            .metadata()
             .map_err(|e| format!("获取文件元数据失败: {}", e))?;
-        
+
         if metadata.is_file() {
             total_size += metadata.len();
         }
     }
-    
+
     // 转换为 MB，保留两位小数
     let size_mb = (total_size as f64) / (1024.0 * 1024.0);
     Ok((size_mb * 100.0).round() / 100.0)
@@ -150,7 +142,7 @@ pub fn get_cache_size(app: AppHandle, cache_type: &str) -> Result<f64, String> {
 #[tauri::command]
 pub fn get_all_cache_sizes(app: AppHandle) -> Result<CacheSizes, String> {
     let cache_types = vec!["process", "temp", "feedback", "report"];
-    
+
     let mut sizes = CacheSizes {
         process: 0.0,
         temp: 0.0,
@@ -158,7 +150,7 @@ pub fn get_all_cache_sizes(app: AppHandle) -> Result<CacheSizes, String> {
         report: 0.0,
         total: 0.0,
     };
-    
+
     for cache_type in cache_types {
         let size = get_cache_size(app.clone(), cache_type)?;
         match cache_type {
@@ -170,9 +162,9 @@ pub fn get_all_cache_sizes(app: AppHandle) -> Result<CacheSizes, String> {
         }
         sizes.total += size;
     }
-    
+
     sizes.total = (sizes.total * 100.0).round() / 100.0;
-    
+
     Ok(sizes)
 }
 
@@ -195,11 +187,11 @@ pub struct CacheSizes {
 #[tauri::command]
 pub fn clear_all_cache(app: AppHandle) -> Result<(), String> {
     let cache_types = vec!["process", "temp", "feedback", "report"];
-    
+
     for cache_type in cache_types {
         clear_cache(app.clone(), cache_type)?;
     }
-    
+
     Ok(())
 }
 
@@ -207,19 +199,17 @@ pub fn clear_all_cache(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn list_cache_ids(app: AppHandle, cache_type: &str) -> Result<Vec<String>, String> {
     let cache_dir = get_cache_dir(&app, cache_type)?;
-    
+
     if !cache_dir.exists() {
         return Ok(vec![]);
     }
-    
+
     let mut ids = Vec::new();
-    
-    for entry in fs::read_dir(&cache_dir)
-        .map_err(|e| format!("读取缓存目录失败: {}", e))?
-    {
+
+    for entry in fs::read_dir(&cache_dir).map_err(|e| format!("读取缓存目录失败: {}", e))? {
         let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
         let path = entry.path();
-        
+
         if path.is_file() {
             if let Some(file_name) = path.file_stem() {
                 if let Some(name) = file_name.to_str() {
@@ -228,6 +218,6 @@ pub fn list_cache_ids(app: AppHandle, cache_type: &str) -> Result<Vec<String>, S
             }
         }
     }
-    
+
     Ok(ids)
 }

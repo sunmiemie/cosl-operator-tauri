@@ -120,13 +120,20 @@ const router = createRouter({
 
 // Token 存储键
 const TOKEN_KEY = 'auth-token'
+const STORE_LOAD_TIMEOUT_MS = 8000
 
-// 获取 token（从 store 读取）
+// 获取 token（从 store 读取，带超时避免路由守卫永久挂起）
 async function getToken(): Promise<string | null> {
   try {
-    const store = await load('auth.json')
+    const store = await Promise.race([
+      load('auth.json'),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('auth store load timeout')), STORE_LOAD_TIMEOUT_MS)
+      }),
+    ])
     return await store.get<string>(TOKEN_KEY) || null
-  } catch {
+  } catch (error) {
+    console.warn('读取登录状态失败，将跳转登录页:', error)
     return null
   }
 }

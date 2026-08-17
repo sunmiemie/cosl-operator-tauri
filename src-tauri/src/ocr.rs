@@ -90,8 +90,8 @@ impl OcrDictionary {
 
     /// 从文件加载字典
     fn load_from_file(path: &std::path::Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("读取字典文件失败: {}", e))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("读取字典文件失败: {}", e))?;
 
         // 每行一个字符
         let chars: Vec<char> = content
@@ -205,8 +205,7 @@ fn preprocess_for_recognition(img: &DynamicImage) -> Array4<f32> {
     let gray = resized.to_luma8();
 
     // 创建输入张量 (1, 1, H, W) - 灰度图
-    let mut tensor: Array4<f32> =
-        Array4::zeros((1, 1, target_h as usize, target_w as usize));
+    let mut tensor: Array4<f32> = Array4::zeros((1, 1, target_h as usize, target_w as usize));
 
     for y in 0..target_h as usize {
         for x in 0..target_w as usize {
@@ -540,8 +539,7 @@ pub async fn ocr_recognize<R: Runtime>(
 
     // 解码 base64 图片
     let image_bytes = decode_base64_image(&image_data)?;
-    let img = image::load_from_memory(&image_bytes)
-        .map_err(|e| format!("解析图片失败: {}", e))?;
+    let img = image::load_from_memory(&image_bytes).map_err(|e| format!("解析图片失败: {}", e))?;
 
     // 获取配置的 ROI 区域
     let regions = state.regions.lock().clone();
@@ -601,8 +599,7 @@ pub async fn ocr_recognize_regions<R: Runtime>(
 
     // 解码 base64 图片
     let image_bytes = decode_base64_image(&image_data)?;
-    let img = image::load_from_memory(&image_bytes)
-        .map_err(|e| format!("解析图片失败: {}", e))?;
+    let img = image::load_from_memory(&image_bytes).map_err(|e| format!("解析图片失败: {}", e))?;
 
     // 处理每个区域
     let mut results = Vec::new();
@@ -834,8 +831,9 @@ fn recognize_region(
             if output_shape_vec.len() >= 2 {
                 let seq_len = output_shape_vec[output_shape_vec.len() - 2];
                 let vocab_size = output_shape_vec[output_shape_vec.len() - 1];
-                let output_array = ndarray::ArrayView3::from_shape((1, seq_len, vocab_size), output_data)
-                    .map_err(|e| format!("重塑识别输出失败: {}", e))?;
+                let output_array =
+                    ndarray::ArrayView3::from_shape((1, seq_len, vocab_size), output_data)
+                        .map_err(|e| format!("重塑识别输出失败: {}", e))?;
                 let dict = state.dictionary.lock();
                 ctc_decode(&output_array, &dict)
             } else {

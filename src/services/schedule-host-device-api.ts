@@ -11,11 +11,22 @@ export type ScheduleHostEquipment =
 export type ScheduleHostDeviceNamesResult = {
   success: boolean
   names: string[]
+  psiIdsByName: Record<string, string>
+  ambiguousNames: string[]
+  error?: string
+}
+
+export type ScheduleHostDevicePsiIdsResult = {
+  success: boolean
+  psiIdsByName: Record<string, string>
+  ambiguousNames: string[]
   error?: string
 }
 
 const EQUIPMENT_MODEL_KEYWORDS: Record<ScheduleHostEquipment, string[]> = {
-  'high-temp-pressure': ['高温高压井', '高温高压', '高压井'],
+  // 设备台账中的正式型号为 GWY-1500，实例名称才是“高温高压井”。
+  // 型号元数据存在时分类会优先使用型号，因此必须同时识别正式型号前缀。
+  'high-temp-pressure': ['高温高压井', '高温高压', '高压井', 'GWY'],
   'halt-hass': ['HALT-HASS', 'HALT', 'HASS'],
   'vibration-table': ['振动台', '冲击台'],
   'water-cycle': ['水循环'],
@@ -95,6 +106,38 @@ export function collectScheduleHostDeviceNames(rows: DeviceInstanceDTO[], equipm
   return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
 }
 
+export function collectScheduleHostDevicePsiIds(
+  rows: DeviceInstanceDTO[],
+  equipment: ScheduleHostEquipment
+) {
+  const groupedPsiIds = new Map<string, Set<string>>()
+  rows
+    .filter((row) => isScheduleHostDevice(row, equipment))
+    .forEach((row) => {
+      const name = getScheduleHostDeviceName(row)
+      const psiId = firstText(row.psi_id)
+      if (!name || !psiId) return
+      const psiIds = groupedPsiIds.get(name) ?? new Set<string>()
+      psiIds.add(psiId)
+      groupedPsiIds.set(name, psiIds)
+    })
+
+  const psiIdsByName: Record<string, string> = {}
+  const ambiguousNames: string[] = []
+  groupedPsiIds.forEach((psiIds, name) => {
+    if (psiIds.size === 1) {
+      psiIdsByName[name] = Array.from(psiIds)[0]
+      return
+    }
+    ambiguousNames.push(name)
+  })
+
+  return {
+    psiIdsByName,
+    ambiguousNames: ambiguousNames.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')),
+  }
+}
+
 export async function fetchScheduleHostDeviceNames(
   equipment: ScheduleHostEquipment,
   headers?: Record<string, string>
@@ -104,13 +147,37 @@ export async function fetchScheduleHostDeviceNames(
     return {
       success: false,
       names: [],
+      psiIdsByName: {},
+      ambiguousNames: [],
+      error: response.error || response.data?.msg || response.data?.message || '加载主机列表失败',
+    }
+  }
+
+  const rows = normalizeDeviceInstanceList(response.data.data)
+  return {
+    success: true,
+    names: collectScheduleHostDeviceNames(rows, equipment),
+    ...collectScheduleHostDevicePsiIds(rows, equipment),
+  }
+}
+
+export async function fetchScheduleHostDevicePsiIds(
+  equipment: ScheduleHostEquipment,
+  headers?: Record<string, string>
+): Promise<ScheduleHostDevicePsiIdsResult> {
+  const response = await listDeviceInstances({ currentPage: 1, size: 2000 }, headers)
+  if (!response.success || !response.data || Number(response.data.code) !== 0) {
+    return {
+      success: false,
+      psiIdsByName: {},
+      ambiguousNames: [],
       error: response.error || response.data?.msg || response.data?.message || '加载主机列表失败',
     }
   }
 
   return {
     success: true,
-    names: collectScheduleHostDeviceNames(
+    ...collectScheduleHostDevicePsiIds(
       normalizeDeviceInstanceList(response.data.data),
       equipment
     ),

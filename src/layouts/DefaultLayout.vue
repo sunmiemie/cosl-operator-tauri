@@ -54,8 +54,10 @@ onUnmounted(() => {
           <!-- 页面内容插槽 -->
           <router-view v-slot="{ Component, route }">
             <transition name="fade-slide" mode="out-in">
-              <!-- 使用 route.fullPath 作为 key，确保路由变化时重新创建组件 -->
-              <component :is="Component" :key="route.fullPath" />
+              <!-- 振动台页面保留实例，切换到其他模块时 OCR 继续采集且页面数据不丢失。 -->
+              <keep-alive include="VibrationPage">
+                <component :is="Component" :key="route.fullPath" />
+              </keep-alive>
             </transition>
           </router-view>
         </div>

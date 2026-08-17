@@ -24,6 +24,8 @@ const props = defineProps<{
   calStep: 'amp' | 'dur'
   liveLevel: string
   liveFreq: string
+  liveInputLevel: string
+  liveDrive: string
   vibDataCount: number
   formattedDuration: string
   isRunning: boolean
@@ -34,11 +36,10 @@ const props = defineProps<{
   liveAy: string
   liveAz: string
   testMode: 'formal' | 'pre'
-  videoReady: boolean
-  backendProcessingRequired: boolean
-  videoFileName: string
-  videoUrl: string
-  videoDurationText: string
+  captureDeviceReady: boolean
+  captureDeviceName: string
+  deviceRefreshing: boolean
+  ocrReady: boolean
   sampleIntervalSeconds: number
   captureStatusText: string
   captureProgressPct: number
@@ -68,9 +69,7 @@ const emit = defineEmits<{
   'go-prev-stage': []
   'go-next-stage': []
   'set-cal-step': [step: 'amp' | 'dur']
-  'select-video': []
-  'import-video-path': [path: string]
-  'clear-video': []
+  'refresh-capture-devices': []
   'start-vib-test': []
   'pause-vib-test': []
   'resume-vib-test': []
@@ -86,7 +85,6 @@ const emit = defineEmits<{
   'finish-shutdown': []
 }>()
 
-const uploadDragging = ref(false)
 const woDetailOpen = ref(false)
 const detailModuleCount = 6
 
@@ -146,6 +144,14 @@ const maskPhone = (phone?: string) => {
 
 const durationText = (duration?: number) => duration ? `${duration} 分钟` : '-'
 
+const reportFileDescription = (file: ReportFile) => {
+  if (file.id === 'softwareReport') return '从挂载共享文件夹手动选择的振动软件报告'
+  if (file.id === 'curve') return '测试结束自动生成，仅在本机保留'
+  if (file.id === 'screenshot') return '采集卡最终页面截图，仅在本机保留'
+  if (file.id === 'csv') return '可信识别值表格，仅在本机保留'
+  return '0.5 秒 OCR 采样明细，仅在本机保留'
+}
+
 const compactOrderRows = () => {
   const wo = props.currentWorkOrder
   if (!wo) return []
@@ -170,28 +176,6 @@ const closeWODetail = () => {
   woDetailOpen.value = false
 }
 
-function handleUploadDragOver(event: DragEvent) {
-  event.preventDefault()
-  uploadDragging.value = true
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
-}
-
-function handleUploadDragLeave(event: DragEvent) {
-  event.preventDefault()
-  uploadDragging.value = false
-}
-
-function handleUploadDrop(event: DragEvent) {
-  event.preventDefault()
-  uploadDragging.value = false
-  const file = event.dataTransfer?.files?.[0] as File & { path?: string }
-  const droppedPath = String(file?.path || '').trim()
-  if (droppedPath) {
-    emit('import-video-path', droppedPath)
-    return
-  }
-  emit('select-video')
-}
 </script>
 
 <template>
@@ -316,56 +300,47 @@ function handleUploadDrop(event: DragEvent) {
           <div class="cal-main">
             <div class="cal-title">振级校验</div>
             <div class="video-upload-card">
-              <div v-if="videoReady" class="video-upload-toolbar">
-                <button class="btn btn-secondary" type="button" @click="emit('clear-video')">清空视频</button>
+              <div class="video-upload-toolbar">
+                <span class="status-pill" :class="captureDeviceReady ? 'done' : 'pending'">
+                  {{ captureDeviceReady ? '采集卡已连接' : '未发现采集卡' }}
+                </span>
+                <button
+                  class="btn btn-secondary"
+                  type="button"
+                  :disabled="deviceRefreshing"
+                  @click="emit('refresh-capture-devices')"
+                >
+                  {{ deviceRefreshing ? '正在搜索...' : '刷新采集卡' }}
+                </button>
               </div>
-              <div v-if="videoReady" class="video-preview-shell">
-                <div v-if="backendProcessingRequired" class="upload-empty-state">
-                  <Icon icon="mdi:cog-transfer-outline" class="upload-empty-icon" />
-                  <div class="upload-empty-title">当前 `.wmv` 将由 Python 脚本实时处理</div>
-                  <div class="upload-empty-text">该文件无法在页面内直接预览，但点击开始图像采集后会自动切换为项目内 Python 脚本实时抽帧模式。</div>
+              <div class="video-preview-shell">
+                <div class="upload-empty-state">
+                  <Icon :icon="captureDeviceReady ? 'mdi:video-input-component' : 'mdi:video-input-component-outline'" class="upload-empty-icon" />
+                  <div class="upload-empty-title">
+                    {{ captureDeviceReady ? captureDeviceName : '请连接振动台采集卡' }}
+                  </div>
+                  <div class="upload-empty-text">
+                    系统通过采集卡实时读取振动台控制界面，并使用已标定模板识别 7 个参数，不读取本地视频文件。
+                  </div>
                 </div>
-                <video v-else :src="videoUrl" class="video-preview" controls preload="metadata"></video>
                 <div class="video-meta-grid">
-                  <div class="meta-card">
-                    <span class="meta-label">视频文件</span>
-                    <span class="meta-value">{{ videoFileName }}</span>
-                  </div>
-                  <div class="meta-card">
-                    <span class="meta-label">视频时长</span>
-                    <span class="meta-value">{{ videoDurationText }}</span>
-                  </div>
-                  <div class="meta-card">
-                    <span class="meta-label">采样间隔</span>
-                    <span class="meta-value">{{ sampleIntervalSeconds }} 秒</span>
-                  </div>
+                  <div class="meta-card"><span class="meta-label">画面规格</span><span class="meta-value">1280 × 1024 / 30 FPS</span></div>
+                  <div class="meta-card"><span class="meta-label">采样间隔</span><span class="meta-value">{{ sampleIntervalSeconds }} 秒</span></div>
+                  <div class="meta-card"><span class="meta-label">置信度门槛</span><span class="meta-value">99.95%</span></div>
                 </div>
-              </div>
-              <div
-                v-else
-                class="upload-empty-state upload-dropzone"
-                :class="{ 'is-dragging': uploadDragging }"
-                @click="emit('select-video')"
-                @dragover="handleUploadDragOver"
-                @dragleave="handleUploadDragLeave"
-                @drop="handleUploadDrop"
-              >
-                <Icon icon="mdi:file-video-outline" class="upload-empty-icon" />
-                <div class="upload-empty-title">点击或拖动上传振动台 `.wmv` 试验视频</div>
-                <div class="upload-empty-text">开始试验后通过 `.wmv` 录屏进行图像采集，系统会在测试阶段按固定时间间隔抽帧并输出实验数据。</div>
               </div>
             </div>
             <div class="alert info mt-4">
               <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">请上传本次振动试验 `.wmv` 录屏视频，并确认视频中包含振动台主控界面。进入测试阶段后系统会按固定间隔完成图像采集。</div>
+              <div class="alert-text">请确认振动台主控界面保持在已标定页面。测试开始后系统将持续从采集卡实时识别。</div>
             </div>
             <div class="alert warning mt-2">
               <Icon icon="mdi:alert" class="alert-icon" />
-              <div class="alert-text"><strong>重要：</strong>仅支持 `.wmv` 视频，且需完整覆盖试验过程并包含主要参数显示区域，否则会影响后续实验数据输出。</div>
+              <div class="alert-text"><strong>重要：</strong>画面未检测到或置信度不足 99.95% 时不会更新业务数据，页面仅保留上一可信值并标记为历史值。</div>
             </div>
             <div class="btn-row mt-4">
               <button class="cancel-btn" @click="emit('go-prev-stage')">上一步</button>
-              <button class="next-btn" :disabled="!videoReady" style="margin-top:auto; align-self:flex-end" @click="emit('set-cal-step', 'dur')">下一步：时长校验</button>
+              <button class="next-btn" :disabled="!captureDeviceReady" style="margin-top:auto; align-self:flex-end" @click="emit('set-cal-step', 'dur')">下一步：时长校验</button>
             </div>
           </div>
           <div class="cal-side">
@@ -401,17 +376,17 @@ function handleUploadDrop(event: DragEvent) {
             <div class="cal-title">振动时长校验</div>
             <div class="video-upload-card compact">
               <div class="video-status-row">
-                <span class="status-pill" :class="videoReady ? 'done' : 'pending'">{{ videoReady ? '视频已就绪' : '未上传视频' }}</span>
-                <span class="video-status-text">{{ videoReady ? `${videoFileName} · ${videoDurationText}` : '请返回上一步上传 `.wmv` 试验视频' }}</span>
+                <span class="status-pill" :class="captureDeviceReady ? 'done' : 'pending'">{{ captureDeviceReady ? '采集卡已就绪' : '采集卡未连接' }}</span>
+                <span class="video-status-text">{{ captureDeviceReady ? captureDeviceName : '请返回上一步刷新采集卡' }}</span>
               </div>
               <div class="alert info no-margin">
-                <Icon icon="mdi:movie-open-play" class="alert-icon blue" />
-                <div class="alert-text">测试阶段将基于该视频进行图像抽帧，并输出采样记录、图像采集结果和实验汇总数据。</div>
+                <Icon icon="mdi:timer-outline" class="alert-icon blue" />
+                <div class="alert-text">历经时间和剩余时间直接读取振动台画面，测试结束由操作员手动确认，不按客户端倒计时自动结束。</div>
               </div>
             </div>
             <div class="alert info mt-4">
               <Icon icon="mdi:information" class="alert-icon blue" />
-              <div class="alert-text">请确认视频试验时长与工单要求一致，完成校验后进入测试阶段开始图像采集。</div>
+              <div class="alert-text">请确认工单要求时长和振动台设置一致，完成校验后进入实时 OCR 测试阶段。</div>
             </div>
             <div class="alert warning mt-2">
               <Icon icon="mdi:alert" class="alert-icon" />
@@ -419,7 +394,7 @@ function handleUploadDrop(event: DragEvent) {
             </div>
             <div class="btn-row mt-4">
               <button class="cancel-btn" @click="emit('set-cal-step', 'amp')">上一步</button>
-              <button class="next-btn" :disabled="!videoReady" @click="emit('go-next-stage')">完成校验，进入振动测试</button>
+              <button class="next-btn" :disabled="!captureDeviceReady" @click="emit('go-next-stage')">完成校验，进入振动测试</button>
             </div>
           </div>
           <div class="cal-side">
@@ -459,18 +434,22 @@ function handleUploadDrop(event: DragEvent) {
       <div v-else-if="stage === 'testing'" class="panel-card test-panel-full testing-panel">
         <div class="status-grid">
           <div class="status-box">
-            <div class="status-header">试验状态</div>
-            <div class="status-row"><span class="label">响应</span><span class="value orange">{{ liveLevel }}</span></div>
-            <div class="status-row mt-1"><span class="label">目标</span><span class="value cyan">{{ liveFreq }}</span></div>
+            <div class="status-header">实时识别参数</div>
+            <div class="status-row"><span class="label">目标</span><span class="value cyan">{{ liveFreq }}</span></div>
+            <div class="status-row mt-1"><span class="label">量级</span><span class="value white">{{ liveInputLevel }}</span></div>
+            <div class="status-row mt-1"><span class="label">响应</span><span class="value orange">{{ liveLevel }}</span></div>
           </div>
           <div class="status-box">
-            <div class="status-header">图像采集</div>
-            <div class="status-row"><span class="label">已采集</span><span class="value green">{{ vibDataCount }} 条</span></div>
-            <div class="status-row mt-1"><span class="label">历经时间</span><span class="value white">{{ formattedDuration }}</span></div>
+            <div class="status-header">驱动与量级</div>
+            <div class="status-row"><span class="label">驱动</span><span class="value green">{{ liveDrive }}</span></div>
+            <div class="status-row mt-1"><span class="label">右侧量级</span><span class="value white">{{ liveAz }}</span></div>
+            <div class="status-row mt-1"><span class="label">OCR状态</span><span class="badge" :class="ocrReady ? 'badge-green' : 'badge-gray'">{{ ocrReady ? '● 已就绪' : '● 初始化中' }}</span></div>
           </div>
           <div class="status-box">
-            <div class="status-header">数据输出</div>
-            <div class="status-row"><span class="label">采集状态</span><span class="badge" :class="isRunning ? 'badge-green' : 'badge-gray'">{{ isRunning ? '● 采集中' : analysisCompleted ? '● 已完成' : '● 未开始' }}</span></div>
+            <div class="status-header">采集进度</div>
+            <div class="status-row"><span class="label">可信采样</span><span class="value green">{{ vibDataCount }} 条</span></div>
+            <div class="status-row mt-1"><span class="label">历经时间</span><span class="value white">{{ liveAx || formattedDuration }}</span></div>
+            <div class="status-row mt-1"><span class="label">剩余时间</span><span class="value white">{{ liveAy }}</span></div>
             <div class="file-info">{{ liveFileName }}</div>
           </div>
         </div>
@@ -478,21 +457,20 @@ function handleUploadDrop(event: DragEvent) {
         <div class="test-layout">
           <div class="card chart-card">
             <div class="card-header">
-              <h3 class="card-title">视频图像采集预览</h3>
+              <h3 class="card-title">采集卡实时画面</h3>
               <div class="chart-legend"><span class="cyan">{{ captureStatusText }}</span></div>
             </div>
             <div class="chart-body capture-preview-body">
               <img v-if="latestCaptureUrl" :src="latestCaptureUrl" class="capture-preview-image" alt="图像采集预览" />
-              <div v-else-if="videoReady && backendProcessingRequired" class="capture-empty-state">
+              <div v-else-if="captureDeviceReady" class="capture-empty-state">
                 <Icon icon="mdi:cog-transfer-outline" class="upload-empty-icon" />
-                <div>当前 `.wmv` 由 Python 脚本读取，开始采集后实时显示结果图</div>
+                <div>开始测试后将显示采集卡当前画面与 OCR 识别状态</div>
               </div>
-              <video v-else-if="videoReady" :src="videoUrl" class="capture-preview-image" controls preload="metadata"></video>
               <div v-else class="capture-empty-state">
-                <Icon icon="mdi:file-video-outline" class="upload-empty-icon" />
-                <div>请先上传 `.wmv` 试验视频</div>
+                <Icon icon="mdi:video-input-component-outline" class="upload-empty-icon" />
+                <div>未找到振动台采集卡</div>
               </div>
-              <div class="camera-label">图像采集进度 {{ captureProgressPct }}%</div>
+              <div class="camera-label">OCR 就绪度 {{ captureProgressPct }}%</div>
             </div>
           </div>
 
@@ -557,14 +535,14 @@ function handleUploadDrop(event: DragEvent) {
               <div class="info-body">
                 <div v-if="analysisSummary" class="video-info-stack summary-stack">
                   <div class="info-line"><span>采样记录</span><strong>{{ analysisSummary.recordCount }} 条</strong></div>
-                  <div class="info-line"><span>有效图像</span><strong>{{ analysisSummary.screenDetectedCount }} 张</strong></div>
+                  <div class="info-line"><span>可信采样</span><strong>{{ analysisSummary.acceptedRecordCount }} 条</strong></div>
                   <div class="info-line"><span>平均响应</span><strong>{{ analysisSummary.avgResponse }}</strong></div>
                   <div class="info-line"><span>最大驱动</span><strong>{{ analysisSummary.maxDrive }}</strong></div>
                 </div>
                 <div class="preview-record-list" v-if="analysisPreviewRecords.length">
                   <div v-for="record in analysisPreviewRecords" :key="record.timeSec" class="preview-record-item">
                     <span>{{ record.values.elapsedTime.raw }}</span>
-                    <strong>{{ record.values.response.raw }} {{ record.values.response.unit }}</strong>
+                    <strong>{{ record.values.response.raw || '-' }}</strong>
                   </div>
                 </div>
               </div>
@@ -573,12 +551,12 @@ function handleUploadDrop(event: DragEvent) {
         </div>
 
         <div class="test-controls">
-          <button class="test-btn start" v-if="!sessionStarted" :disabled="!videoReady || isFinalizing" @click="emit('start-vib-test')">开始图像采集</button>
+          <button class="test-btn start" v-if="!sessionStarted" :disabled="!captureDeviceReady || isFinalizing" @click="emit('start-vib-test')">开始OCR采集</button>
           <button class="test-btn pause" v-else-if="isRunning" :disabled="isFinalizing" @click="emit('pause-vib-test')">暂停采集</button>
           <button class="test-btn pause" v-else-if="isPaused" :disabled="isFinalizing" @click="emit('resume-vib-test')">继续采集</button>
           <button class="test-btn pause" v-else :disabled="isFinalizing" @click="emit('resume-vib-test')">{{ analysisCompleted ? '重新采集' : '开始图像采集' }}</button>
           <button class="test-btn stop" :disabled="isFinalizing" @click="emit('open-abort-warning')">⏹ 测试中止</button>
-          <button class="test-btn secondary" v-if="sessionStarted && !isRunning" :disabled="isFinalizing" @click="emit('select-video')">重新上传视频</button>
+          <button class="test-btn secondary" v-if="!isRunning" :disabled="isFinalizing || deviceRefreshing" @click="emit('refresh-capture-devices')">重新连接采集卡</button>
           <button class="test-btn end" :disabled="!vibDataCount || isFinalizing" @click="emit('end-vib-test')">{{ isFinalizing ? '正在处理...' : testMode === 'pre' ? '预试验结束' : '测试结束' }}</button>
           <button class="test-btn end" v-if="testMode === 'pre'" :disabled="isFinalizing" @click="emit('convert-to-formal')">转入正式工单</button>
         </div>
@@ -590,14 +568,14 @@ function handleUploadDrop(event: DragEvent) {
           <div class="report-process-card report-process-head">
             <div>
               <div class="report-process-title">测试报告处理</div>
-              <div class="report-process-desc">报告文件来源：共享文件夹中的第三方 Word 报告。请选择本次实验对应的 .doc 或 .docx 文件后上传。</div>
+              <div class="report-process-desc">本地已保存曲线、页面截图、JSON 和 CSV；请选择共享文件夹中的第三方 Word 报告上传。</div>
             </div>
             <div class="report-progress-pill">{{ reportProgress }}%</div>
           </div>
 
           <div v-if="analysisSummary" class="report-summary-grid report-summary-inline">
             <div class="meta-card"><span class="meta-label">采样记录</span><span class="meta-value">{{ analysisSummary.recordCount }} 条</span></div>
-            <div class="meta-card"><span class="meta-label">有效图像</span><span class="meta-value">{{ analysisSummary.screenDetectedCount }} 张</span></div>
+            <div class="meta-card"><span class="meta-label">可信采样</span><span class="meta-value">{{ analysisSummary.acceptedRecordCount }} 条</span></div>
             <div class="meta-card"><span class="meta-label">平均响应</span><span class="meta-value">{{ analysisSummary.avgResponse }}</span></div>
             <div class="meta-card"><span class="meta-label">最大驱动</span><span class="meta-value">{{ analysisSummary.maxDrive }}</span></div>
           </div>
@@ -606,7 +584,7 @@ function handleUploadDrop(event: DragEvent) {
             <div class="report-step-title">自动处理流程</div>
             <div class="alert info report-alert">
               <Icon icon="mdi:folder-sync-outline" class="alert-icon blue" />
-              <div class="alert-text">系统会保留本地采集结果，并将选中的第三方 Word 报告作为正式报告附件上传。</div>
+              <div class="alert-text">曲线、页面截图、JSON 和 CSV 仅在本机保留；服务端只接收选中的第三方 Word 报告。</div>
             </div>
             <div class="third-party-report">
               <div class="third-party-report-main">
@@ -662,7 +640,7 @@ function handleUploadDrop(event: DragEvent) {
             <div v-for="file in reportFiles" :key="file.id" class="report-output-row">
               <div>
                 <div class="report-output-name">{{ file.name }}</div>
-                <div class="report-output-desc">{{ file.id === 'screenshots' ? '图表截图目录' : 'Top readings 数据文件' }}</div>
+                <div class="report-output-desc">{{ reportFileDescription(file) }}</div>
               </div>
               <span class="report-output-status" :class="{ done: file.done }">{{ file.status }}</span>
             </div>

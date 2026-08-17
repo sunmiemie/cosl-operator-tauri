@@ -50,7 +50,8 @@ pub fn get_camera_list() -> Vec<CameraInfo> {
 
     // 尝试枚举前 10 个摄像头索引
     for i in 0..10 {
-        let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+        let requested =
+            RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
         match Camera::new(CameraIndex::Index(i), requested) {
             Ok(cam) => {
                 cameras.push(CameraInfo {
@@ -85,7 +86,8 @@ pub fn open_camera(index: u32) -> Result<bool, String> {
     }
 
     // 创建摄像头请求格式
-    let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+    let requested =
+        RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
 
     // 打开摄像头
     match Camera::new(CameraIndex::Index(index), requested) {
@@ -256,15 +258,19 @@ pub fn concat_images(images: Vec<String>) -> Result<String, String> {
             .map_err(|e| format!("解码图片 {} base64 失败: {}", i, e))?;
 
         // 加载图片
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("加载图片 {} 失败: {}", i, e))?;
+        let img =
+            image::load_from_memory(&bytes).map_err(|e| format!("加载图片 {} 失败: {}", i, e))?;
 
         decoded_images.push(img);
     }
 
     // 计算拼接后的尺寸
     let total_width: u32 = decoded_images.iter().map(|img| img.width()).sum();
-    let max_height: u32 = decoded_images.iter().map(|img| img.height()).max().unwrap_or(0);
+    let max_height: u32 = decoded_images
+        .iter()
+        .map(|img| img.height())
+        .max()
+        .unwrap_or(0);
 
     // 创建新的画布
     let mut canvas = image::RgbaImage::new(total_width, max_height);
@@ -295,7 +301,13 @@ pub fn concat_images(images: Vec<String>) -> Result<String, String> {
 
 /// 裁剪图片的指定区域
 #[tauri::command]
-pub fn crop_image(image_data: String, x: u32, y: u32, width: u32, height: u32) -> Result<String, String> {
+pub fn crop_image(
+    image_data: String,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<String, String> {
     // 移除 data URL 前缀
     let base64_data = image_data
         .strip_prefix("data:image/png;base64,")
@@ -309,8 +321,7 @@ pub fn crop_image(image_data: String, x: u32, y: u32, width: u32, height: u32) -
         .map_err(|e| format!("解码 base64 失败: {}", e))?;
 
     // 加载图片
-    let img = image::load_from_memory(&bytes)
-        .map_err(|e| format!("加载图片失败: {}", e))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("加载图片失败: {}", e))?;
 
     // 验证裁剪区域
     if x + width > img.width() || y + height > img.height() {

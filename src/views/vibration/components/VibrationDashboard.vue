@@ -87,11 +87,8 @@ onBeforeUnmount(() => {
   ro = null
 })
 
-const maxLanesBeforeExpand = 2
-const widthFactor = computed(() => Math.max(1, Math.ceil((props.maxLaneCount || 1) / maxLanesBeforeExpand)))
 const gridInnerWidth = computed(() => {
-  const base = Math.max(0, gridViewportWidth.value - timeColWidth)
-  return timeColWidth + base * widthFactor.value
+  return Math.max(0, gridViewportWidth.value)
 })
 
 const scheduledOrderIdSet = computed(() => {
@@ -587,9 +584,10 @@ const getScheduledStyle = (item: any) => {
   min-width: 460px;
 }
 
-.grid-scroll { flex: 1; overflow: auto; }
+.main-content { min-width: 0; }
+.grid-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; }
 .grid-body { position: relative; overflow: hidden; }
-.grid-inner { position: relative; }
+.grid-inner { position: relative; min-width: 0; }
 .events-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .grid-row { display: grid; grid-template-columns: 60px repeat(7, 1fr); border-bottom: 1px solid var(--color-border); min-height: 44px; }
 .time-column-header { width: auto; }

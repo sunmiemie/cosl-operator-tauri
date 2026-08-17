@@ -59,6 +59,8 @@ export function useVibrationSchedule() {
   const workOrders = ref<WorkOrder[]>([])
   const workOrdersLoading = ref(false)
   const orderStatusMutating = ref(false)
+  const scheduleOperationLoading = ref(false)
+  const scheduleOperationText = ref('')
 
   const visibleOrderStatuses = [1, 2]
 
@@ -71,7 +73,7 @@ export function useVibrationSchedule() {
       []
     const list = Array.isArray(rawList) ? rawList : rawList ? [rawList] : []
     if (list.length) {
-      return list.map((item, index) => {
+      return list.flatMap((item, index) => {
         const dbId = item.id ?? item.instrument_id ?? item.instrumentId
         const name =
           item.instrument_name ||
@@ -80,7 +82,7 @@ export function useVibrationSchedule() {
           item.device_name ||
           dto.device_name ||
           `仪器${index + 1}`
-        const sn =
+        const rawSn =
           item.instrument_sn ||
           item.instrumentSn ||
           item.sn_numbers ||
@@ -89,21 +91,31 @@ export function useVibrationSchedule() {
           item.deviceNumber ||
           item.code ||
           `${dto.order_no}-${index + 1}`
-        return {
-          id: `vib-ins-${dto.id}-${dbId ?? sn ?? index}`,
-          dbId,
-          name,
-          sn,
-          model: item.model,
-          remark: item.remark,
-          quantity: item.quantity,
-          weight: item.weight,
-          length: item.length,
-          maxDiameter: item.max_diameter,
-          status: item.instrument_status ?? item.status,
-          statusText: item.status_text || item.statusText,
-          completed: item.is_completed === true || item.instrument_status === 2,
-        }
+        const progressBySn = new Map(
+          (item.instrument_progress || []).map((progress) => [progress.instrument_sn, progress])
+        )
+        const sns = String(rawSn).split(/[,，/、;；\s]+/).map(sn => sn.trim()).filter(Boolean)
+        return (sns.length ? sns : [String(rawSn)]).map((sn) => {
+          const progress = progressBySn.get(sn)
+          return {
+            id: `vib-ins-${dto.id}-${dbId ?? index}-${sn}`,
+            dbId,
+            name,
+            sn,
+            model: item.model,
+            remark: item.remark,
+            quantity: 1,
+            weight: item.weight,
+            length: item.length,
+            maxDiameter: item.max_diameter,
+            status: progress?.instrument_status ?? item.instrument_status ?? item.status,
+            statusText: item.status_text || item.statusText,
+            completed: progress?.is_completed === true || item.is_completed === true || item.instrument_status === 2,
+            attemptNo: progress?.attempt_no ?? item.attempt_no ?? 1,
+            currentReportId: progress?.current_report_id ?? item.current_report_id,
+            currentReportStatus: progress?.current_report_status ?? item.current_report_status,
+          }
+        })
       })
     }
 
@@ -126,7 +138,11 @@ export function useVibrationSchedule() {
             const scheduledStartAt = segment?.scheduled_start_at || ''
             const scheduledEndAt = segment?.scheduled_end_at || ''
             if (!scheduledStartAt || !scheduledEndAt) return null
-            return { scheduledStartAt, scheduledEndAt }
+            return {
+              scheduledStartAt,
+              scheduledEndAt,
+              useDevice: segment?.use_device?.trim() || segment?.useDevice?.trim() || '',
+            }
           })
           .filter(Boolean) as WorkOrderScheduleSegment[]
       : []
@@ -177,6 +193,7 @@ export function useVibrationSchedule() {
   }
 
   async function refreshWorkOrders() {
+    if (workOrdersLoading.value) return
     workOrdersLoading.value = true
     try {
       await refreshHostDeviceNames()
@@ -213,6 +230,7 @@ export function useVibrationSchedule() {
       selectedScheduledOrderIds.value = selectedScheduledOrderIds.value
         .filter(id => byId.has(id))
         .filter(id => isScheduledOrderVisibleInActiveHost(id))
+        .slice(-1)
     } catch (e) {
       console.error('refreshWorkOrders error:', e)
     } finally {
@@ -272,6 +290,7 @@ export function useVibrationSchedule() {
     dateStr: string
     startTimeKey: string
     span: number
+    hostDeviceName: string
   }
 
   const scheduledEvents = ref<Record<string, ScheduledEvent[]>>({})
@@ -360,6 +379,7 @@ export function useVibrationSchedule() {
           dateStr: fmtDate(start),
           startTimeKey,
           span,
+          hostDeviceName: segment.useDevice?.trim() || '',
         }
       })
       .filter(Boolean) as ScheduledEvent[]
@@ -413,6 +433,7 @@ export function useVibrationSchedule() {
     endAtHour: string
     scheduledStartAt: string
     scheduledEndAt: string
+    useDevice: string
   }
 
   type ScheduleChangePayload = {
@@ -428,6 +449,7 @@ export function useVibrationSchedule() {
     scheduleSegments: Array<{
       scheduled_start_at: string
       scheduled_end_at: string
+      use_device: string
     }>
     segments: ScheduleChangeSegment[]
   }
@@ -453,6 +475,7 @@ export function useVibrationSchedule() {
           endAtHour: `${ev.dateStr} ${endHh}`,
           scheduledStartAt: `${ev.dateStr} ${startHh}:00:00`,
           scheduledEndAt: `${ev.dateStr} ${endHh}:00:00`,
+          useDevice: ev.hostDeviceName?.trim() || activeHostDeviceName.value.trim(),
         }
       })
       .filter((segment): segment is ScheduleChangeSegment => !!segment)
@@ -479,16 +502,30 @@ export function useVibrationSchedule() {
       scheduleSegments: sorted.map((item) => ({
         scheduled_start_at: item.scheduledStartAt,
         scheduled_end_at: item.scheduledEndAt,
+        use_device: item.useDevice,
       })),
       segments: sorted,
     }
   }
 
-  async function persistScheduledEvent(orderId: string, fallback?: ScheduledEvent[]) {
+  async function persistScheduledEvent(
+    orderId: string,
+    fallback?: ScheduledEvent[],
+    operationText = '正在保存排程...'
+  ) {
     const order = getOrderById(orderId)
     const schedule = getScheduleChangePayload(orderId)
     if (!order?.dbId) return true
+    if (scheduleOperationLoading.value) return false
+    const scheduleHostDeviceName = schedule?.scheduleSegments[0]?.use_device || activeHostDeviceName.value.trim()
+    if (schedule && !scheduleHostDeviceName) {
+      if (fallback !== undefined) setOrderEvents(orderId, fallback)
+      ElMessage.warning('请先选择振动台后再保存排程')
+      return false
+    }
 
+    scheduleOperationLoading.value = true
+    scheduleOperationText.value = operationText
     markPendingSchedule(orderId, getOrderEvents(orderId))
     try {
       const authOk = await initAuth()
@@ -503,6 +540,7 @@ export function useVibrationSchedule() {
             {
               scheduled_start_at: schedule.scheduledStartAt,
               scheduled_end_at: schedule.scheduledEndAt,
+              use_device: scheduleHostDeviceName,
               schedule_segments: schedule.scheduleSegments,
             },
             getAuthHeaders()
@@ -522,6 +560,8 @@ export function useVibrationSchedule() {
       return true
     } finally {
       clearPendingSchedule(orderId)
+      scheduleOperationLoading.value = false
+      scheduleOperationText.value = ''
     }
   }
 
@@ -550,13 +590,15 @@ export function useVibrationSchedule() {
     hostDeviceName: string
   }
 
-  function getOrderHostDeviceName(order?: WorkOrder) {
-    return order?.device?.trim() || '-'
+  function getScheduledEventHostDeviceName(ev: ScheduledEvent) {
+    const explicitHostDeviceName = ev.hostDeviceName?.trim()
+    if (explicitHostDeviceName) return explicitHostDeviceName
+    return hostDeviceTabs.value[0] || activeHostDeviceName.value.trim() || ''
   }
 
   function doesScheduledEventMatchActiveHostDevice(ev: ScheduledEvent, activeScheduleHostName: string) {
     if (!activeScheduleHostName) return true
-    return getOrderHostDeviceName(getOrderById(ev.orderId)) === activeScheduleHostName
+    return getScheduledEventHostDeviceName(ev) === activeScheduleHostName
   }
 
   function isScheduledOrderVisibleInActiveHost(orderId: string) {
@@ -566,7 +608,9 @@ export function useVibrationSchedule() {
   }
 
   function pruneSelectedScheduledOrderIdsForActiveHost() {
-    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value.filter((id) => isScheduledOrderVisibleInActiveHost(id))
+    selectedScheduledOrderIds.value = selectedScheduledOrderIds.value
+      .filter((id) => isScheduledOrderVisibleInActiveHost(id))
+      .slice(-1)
   }
 
   const scheduledLayoutItems = computed<ScheduledLayoutItem[]>(() => {
@@ -628,7 +672,7 @@ export function useVibrationSchedule() {
           lane: laneByEventId[x.ev.eventId] ?? 0,
           laneCount: Math.max(1, laneCount),
           cellKey,
-          hostDeviceName: getOrderHostDeviceName(getOrderById(x.ev.orderId)),
+          hostDeviceName: getScheduledEventHostDeviceName(x.ev),
         })
       })
     })
@@ -853,6 +897,8 @@ export function useVibrationSchedule() {
   }
 
   function getVisibleOrderInstruments(order: WorkOrder) {
+    // 工单仍处于测试中时允许选择已完成设备重测；服务端会为该 SN 开启新轮次。
+    if (order.status === 2) return order.instruments
     return order.instruments.filter((instrument) => !isInstrumentCompleted(order, instrument))
   }
 
@@ -876,22 +922,10 @@ export function useVibrationSchedule() {
     if (val) calBase.value = getMonday(new Date(val))
   }
 
-  function loadPresetSchedule() {
-    const base = calBase.value
-    const scheduled = new Set(Object.keys(scheduledEvents.value))
-    const presets = workOrders.value
-      .slice(0, 3)
-      .filter((order) => !scheduled.has(order.id))
-      .map((order, index) => ({
-        d: index,
-        t: ['0800', '1000', '1400'][index] || '0800',
-        id: order.id,
-      }))
-
-    presets.forEach((preset) => {
-      const dateStr = fmtDate(addDays(base, preset.d))
-      void scheduleOrder(preset.id, dateStr, preset.t, false)
-    })
+  async function loadPresetSchedule() {
+    if (scheduleOperationLoading.value || workOrdersLoading.value) return
+    await refreshWorkOrders()
+    ElMessage.success('本周排程已刷新')
   }
 
   function handleDragStart(e: DragEvent, order: WorkOrder) {
@@ -918,8 +952,20 @@ export function useVibrationSchedule() {
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
   }
 
-  async function scheduleOrder(orderId: string, dateStr: string, timeKey: string, isPast: boolean) {
+  async function scheduleOrder(
+    orderId: string,
+    dateStr: string,
+    timeKey: string,
+    isPast: boolean,
+    operationText = '正在保存排程...'
+  ) {
+    if (scheduleOperationLoading.value) return
     if (isPast) return
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim()
+    if (!scheduleHostDeviceName) {
+      ElMessage.warning('请先选择振动台后再排程')
+      return
+    }
     const lastKey = timeSlots.value[timeSlots.value.length - 1]?.key
     if (timeKey === lastKey) return
     const currentEvents = getOrderEvents(orderId)
@@ -938,6 +984,7 @@ export function useVibrationSchedule() {
         dateStr,
         startTimeKey: timeKey,
         span: Math.min(span, maxSpan),
+        hostDeviceName: scheduleHostDeviceName,
       },
     ])
     selectedScheduledOrderIds.value = [orderId]
@@ -946,7 +993,7 @@ export function useVibrationSchedule() {
       draggedOrder.value = null
     }
     try {
-      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
+      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [], operationText)
       if (!saved) {
         scheduledEvents.value = previousEvents
         selectedScheduledOrderIds.value = previousSelected
@@ -968,6 +1015,7 @@ export function useVibrationSchedule() {
   }
 
   async function handleUnschedule(_cellKey: string, orderId: string, eventId: string) {
+    if (scheduleOperationLoading.value) return
     const previousEvents = cloneScheduledEventMap()
     const previousSelected = [...selectedScheduledOrderIds.value]
     const wasSelected = selectedScheduledOrderIds.value.includes(orderId)
@@ -987,7 +1035,7 @@ export function useVibrationSchedule() {
     }
 
     try {
-      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
+      const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [], '正在取消排程...')
       if (!saved) {
         rollback()
         return
@@ -1006,7 +1054,7 @@ export function useVibrationSchedule() {
 
   function selectScheduledOrder(orderId: string) {
     const arr = selectedScheduledOrderIds.value
-    selectedScheduledOrderIds.value = arr.includes(orderId) ? arr.filter(id => id !== orderId) : [...arr, orderId]
+    selectedScheduledOrderIds.value = arr.includes(orderId) ? [] : [orderId]
   }
 
   const getEvent = (eventId: string) => findEventById(eventId)?.event
@@ -1123,6 +1171,8 @@ export function useVibrationSchedule() {
     searchKeyword,
     workOrdersLoading,
     orderStatusMutating,
+    scheduleOperationLoading,
+    scheduleOperationText,
     refreshWorkOrders,
     selectedScheduledOrderIds,
     activeHostDeviceName,

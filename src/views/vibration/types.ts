@@ -49,6 +49,7 @@ export interface WorkOrder {
 export interface WorkOrderScheduleSegment {
   scheduledStartAt: string
   scheduledEndAt: string
+  useDevice?: string
 }
 
 export interface VibrationInstrument {
@@ -65,6 +66,9 @@ export interface VibrationInstrument {
   status?: number
   statusText?: string
   completed?: boolean
+  attemptNo?: number
+  currentReportId?: number | null
+  currentReportStatus?: number | null
 }
 
 export interface DevCheckItem {
@@ -102,7 +106,7 @@ export interface TimeSlot {
   isHalf: boolean
 }
 
-export type ReportFileId = 'screenshots' | 'json'
+export type ReportFileId = 'softwareReport' | 'curve' | 'screenshot' | 'json' | 'csv'
 
 export interface ReportFile {
   id: ReportFileId
@@ -122,13 +126,18 @@ export interface ReportProcessStep {
 export interface VibrationCaptureFieldValue {
   raw: string
   value: number | null
-  unit: string
+  confidence: number | null
+  status: string
+  reason: string | null
+  acceptedAt: string | null
+  stale: boolean
 }
 
 export interface VibrationCaptureRecord {
   timeSec: number
+  capturedAt: string | null
   screenDetected: boolean
-  chartScreenshotUrl: string
+  previewUrl: string
   values: {
     target: VibrationCaptureFieldValue
     level: VibrationCaptureFieldValue
@@ -136,16 +145,26 @@ export interface VibrationCaptureRecord {
     drive: VibrationCaptureFieldValue
     elapsedTime: VibrationCaptureFieldValue
     remainingTime: VibrationCaptureFieldValue
+    rightLevel: VibrationCaptureFieldValue
   }
 }
 
 export interface VibrationAnalysisSummary {
-  sourceVideoName: string
+  sourceCapture: string
   sampleIntervalSeconds: number
   durationSeconds: number
   recordCount: number
   screenDetectedCount: number
+  acceptedRecordCount: number
   avgResponse: number
   maxDrive: number
   lastElapsedTime: string
+  lastRemainingTime: string
+}
+
+export interface VibrationOcrDevice {
+  index: number
+  name: string
+  device: string
+  available: boolean
 }

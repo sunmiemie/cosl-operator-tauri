@@ -26,6 +26,18 @@ export type VibrationTableOrderInstrumentDTO = {
   length?: string
   max_diameter?: string
   is_completed?: boolean
+  attempt_no?: number
+  current_report_id?: number | null
+  current_report_status?: number | null
+  instrument_progress?: Array<{
+    instrument_sn: string
+    instrument_status: number
+    is_completed: boolean
+    completed_at?: string | null
+    attempt_no?: number
+    current_report_id?: number | null
+    current_report_status?: number | null
+  }>
 }
 
 export type VibrationTableOrderDTO = {
@@ -70,6 +82,8 @@ export type VibrationTableOrderDTO = {
   schedule_segments?: Array<{
     scheduled_start_at?: string | null
     scheduled_end_at?: string | null
+    use_device?: string | null
+    useDevice?: string | null
   }>
   instruments?: VibrationTableOrderInstrumentDTO[]
   order_instruments?: VibrationTableOrderInstrumentDTO[]
@@ -128,7 +142,9 @@ export type VibrationTableOrderStatusMutationResponse = {
 
 export type ChangeVibrationTableOrderStatusOptions = {
   runningInstrumentIds?: Array<number | string>
+  runningInstrumentSns?: string[]
   completedInstrumentIds?: Array<number | string>
+  completedInstrumentSns?: string[]
 }
 
 export type UpdateVibrationTableOrderBody = Partial<
@@ -165,7 +181,9 @@ export async function changeVibrationTableOrderStatus(
     {
       status,
       running_instrument_ids: options.runningInstrumentIds,
+      running_instrument_sns: options.runningInstrumentSns,
       completed_instrument_ids: options.completedInstrumentIds,
+      completed_instrument_sns: options.completedInstrumentSns,
     },
     headers
   )
@@ -174,9 +192,11 @@ export async function changeVibrationTableOrderStatus(
 export type VibrationTableOrderScheduleBody = {
   scheduled_start_at?: string
   scheduled_end_at?: string
+  use_device?: string
   schedule_segments?: Array<{
     scheduled_start_at: string
     scheduled_end_at: string
+    use_device?: string
   }>
 }
 

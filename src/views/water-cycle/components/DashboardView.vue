@@ -17,7 +17,7 @@ const { initAuth, getAuthHeaders } = useAuth()
 
 // 引入抽象出的排程逻辑
 const {
-  searchKeyword, scheduledOrders, scheduledLayoutItems, maxLaneCount, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, activeHostDeviceName, hostDeviceTabs, currentWeekDays, weekLabel, timeSlots, calBase,
+  searchKeyword, scheduledOrders, scheduledLayoutItems, slotHeightPx, isDragging, isResizing, resizingOrderId, getEvent, startResize, startResizeTop, selectedScheduledOrderIds, activeHostDeviceName, hostDeviceTabs, currentWeekDays, weekLabel, timeSlots, calBase,
   unscheduledOrders, getOrderById, selectedScheduledOrders, fmtDate, prevWeek, nextWeek, getCellKey, getMonday,
   handleDragStart, handleDragEnd, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, handleUnschedule, selectScheduledOrder, scheduleOrder,
   workOrdersLoading, refreshWorkOrders, getScheduleText, getScheduleChangePayload,
@@ -45,11 +45,8 @@ const handleVisibilityChange = () => {
   refreshWorkOrders()
 }
 
-const maxLanesBeforeExpand = 2
-const widthFactor = computed(() => Math.max(1, Math.ceil((maxLaneCount.value || 1) / maxLanesBeforeExpand)))
 const gridInnerWidth = computed(() => {
-  const base = Math.max(0, gridViewportWidth.value - timeColWidth)
-  return timeColWidth + base * widthFactor.value
+  return Math.max(0, gridViewportWidth.value)
 })
 
 const scheduledOrderIdSet = computed(() => {
@@ -660,7 +657,7 @@ async function onStartupComplete() {
 <style scoped>
 .layout-container { display:flex; flex:1; min-height:0; gap:16px; overflow:hidden; }
 .sidebar { width:520px; min-width:480px; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
-.main-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; }
+.main-content { flex:1 1 0; min-width:0; display:flex; flex-direction:column; overflow:hidden; background:var(--color-bg-secondary); border:1px solid var(--color-border); border-radius:12px; }
 .panel-header { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 18px; border-bottom:1px solid var(--color-border); font-size:15px; font-weight:600; color:var(--color-text-primary); background:var(--color-bg-secondary); flex-shrink:0; }
 .sidebar .panel-header .header-title { display:flex; align-items:center; gap:8px; font-size:.875rem; font-weight:500; }
 .header-actions { display:flex; align-items:center; gap:10px; }
@@ -742,7 +739,7 @@ async function onStartupComplete() {
 .dot.pending { background:var(--color-border); }
 .dot.occupied { background:var(--color-accent-blue); }
 .calendar-grid { flex:1; display:flex; flex-direction:column; border-top:1px solid var(--color-border); border-bottom:1px solid var(--color-border); background:var(--color-bg-primary); overflow:hidden; }
-.grid-scroll { flex:1; overflow:auto; }
+.grid-scroll { flex:1; overflow-y:auto; overflow-x:hidden; min-width:0; }
 .grid-header-row { display:grid; grid-template-columns:60px repeat(7,1fr); border-bottom:1px solid var(--color-border); background:var(--color-bg-tertiary); position:sticky; top:0; z-index:20; }
 .time-column-header { padding:12px; text-align:center; border-right:1px solid var(--color-border); font-weight:600; font-size:12px; color:var(--color-text-secondary); }
 .day-header { padding:8px; text-align:center; border-right:1px solid var(--color-border); }
@@ -752,7 +749,7 @@ async function onStartupComplete() {
 .day-num.is-weekend { color:#ef4444; }
 .day-name { font-size:11px; color:var(--color-text-secondary); margin-top:2px; }
 .grid-body { position:relative; }
-.grid-inner { position:relative; }
+.grid-inner { position:relative; min-width:0; }
 .events-overlay { position:absolute; inset:0; pointer-events:none; z-index:5; }
 .grid-row { display:grid; grid-template-columns:60px repeat(7,1fr); border-bottom:1px solid var(--color-border); min-height:44px; }
 .grid-row.is-half { border-bottom:1px dashed var(--color-border); }

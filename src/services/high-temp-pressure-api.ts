@@ -61,10 +61,16 @@ export interface HighTempPressureOrderInstrumentDTO {
     scheduled_start_at?: string | null
     scheduled_end_at?: string | null
     use_device?: string | null
+    useDevice?: string | null
+    equipment_id?: string | number | null
+    equipmentId?: string | number | null
   }>
   instrument_status?: number
   is_completed?: boolean
   completed_at?: string | null
+  attempt_no?: number
+  current_report_id?: number | null
+  current_report_status?: number | null
 }
 
 export interface HighTempPressureOrderListResponse {
@@ -75,6 +81,12 @@ export interface HighTempPressureOrderListResponse {
     page: number
     pageSize: number
   }
+  msg?: string
+}
+
+export interface HighTempPressureOrderDetailResponse {
+  code: number
+  data: HighTempPressureOrderDTO
   msg?: string
 }
 
@@ -112,6 +124,10 @@ export interface CancelHighTempPressureOrderPayload {
   instrument_sns?: string[]
 }
 
+export interface RetestHighTempPressureOrderPayload {
+  instrument_sns: string[]
+}
+
 export async function listHighTempPressureOrders(
   params: ListHighTempPressureOrdersParams,
   headers?: Record<string, string>
@@ -126,6 +142,16 @@ export async function listHighTempPressureOrders(
     '/test/high-temp-pressure/order/list/',
     headers,
     query
+  )
+}
+
+export async function getHighTempPressureOrder(
+  orderId: number,
+  headers?: Record<string, string>
+): Promise<ApiResponse<HighTempPressureOrderDetailResponse>> {
+  return http.get<HighTempPressureOrderDetailResponse>(
+    `/test/high-temp-pressure/order/detail/${orderId}/`,
+    headers
   )
 }
 
@@ -169,17 +195,38 @@ export type HighTempPressureInstrumentScheduleBody = {
   scheduled_start_at?: string
   scheduled_end_at?: string
   use_device?: string
+  equipment_id?: string
   schedule_segments?: Array<{
     scheduled_start_at: string
     scheduled_end_at: string
     use_device?: string
+    equipment_id?: string
   }>
+}
+
+export async function retestHighTempPressureOrder(
+  orderId: number,
+  payload: RetestHighTempPressureOrderPayload,
+  headers?: Record<string, string>
+): Promise<ApiResponse<MutationResponse>> {
+  return http.post<MutationResponse>(
+    `/test/high-temp-pressure/order/retest/${orderId}/`,
+    payload,
+    headers
+  )
 }
 
 export type HighTempPressureInstrumentScheduleResponse = {
   code: number
   msg?: string
-  data?: HighTempPressureOrderInstrumentDTO & { order_id?: number }
+  data?: HighTempPressureOrderInstrumentDTO & {
+    order_id?: number
+    assistantSync?: {
+      success?: boolean
+      error?: string
+      list?: Array<{ error?: string; reason?: string }>
+    }
+  }
 }
 
 export async function saveHighTempPressureInstrumentSchedule(
