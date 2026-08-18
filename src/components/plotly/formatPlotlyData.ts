@@ -73,11 +73,11 @@ export function formatPlotlyData(
         ...d,
         marker: {
           ...d.marker,
-          color: accentColor,
+          color: d.marker?.color ?? accentColor,
         },
         line: {
           ...d.line,
-          color: accentColor,
+          color: d.line?.color ?? accentColor,
         },
       }
     }
