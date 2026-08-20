@@ -28,6 +28,7 @@ export interface SimulatedWellReportTemplateDetail {
   match_instruments: any[]
   test_items: any[]
   evaluation_standards: any[]
+  transfer_data_records: any[]
   updated_at: string
 }
 

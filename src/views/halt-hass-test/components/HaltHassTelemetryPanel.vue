@@ -10,14 +10,6 @@ import {
   watch,
 } from 'vue'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { CanvasRenderer } from 'echarts/renderers'
-import {
-  GridComponent,
-  LegendComponent,
-  TooltipComponent,
-} from 'echarts/components'
 import { Icon } from '@iconify/vue'
 import { ElDialog } from 'element-plus'
 
@@ -29,15 +21,7 @@ import {
 import type { HassHardwarePreflightResponse } from '@/services/flojoy-api'
 import { parseHassMqttTelemetry } from '@/services/hass-mqtt-telemetry'
 import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
-
-
-use([
-  CanvasRenderer,
-  LineChart,
-  GridComponent,
-  LegendComponent,
-  TooltipComponent,
-])
+import '@/utils/echarts'
 
 const props = defineProps<{
   processJson: HaltHassProcessJson | null

@@ -45,6 +45,8 @@ export interface SimulatedWellOrderDTO {
   sanxin_tester_item_1?: string | null
   sanxin_tester_item_2?: string | null
   sanxin_is_sanxin?: boolean | number | string | null
+  /** 1：研究院工单；0：非研究院工单。 */
+  order_type?: 0 | 1 | number | string | null
   status: number
   status_text?: string
   created_at: string

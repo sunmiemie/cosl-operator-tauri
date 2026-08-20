@@ -2,15 +2,23 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/plugin-dialog'
+import { readFile } from '@tauri-apps/plugin-fs'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { useAuth } from '@/composables/useAuth'
 import {
   createSimulatedWellReport,
-  createSimulatedWellReportWithFiles,
+  createSimulatedWellReportWithLargeFiles,
+  cancelSimulatedWellLargeUpload,
   deleteSimulatedWellReport,
+  getSimulatedWellReportDetail,
   listSimulatedWellReports,
   updateSimulatedWellReport,
   updateSimulatedWellReportWithSignature,
-  type SimulatedWellReportItem
+  type SimulatedWellReportItem,
+  type SimulatedWellLocalUploadFile
 } from '@/services/simulated-well-report-api'
 import { getMySignature, getSignatureImage } from '@/services/signature-api'
 import { http } from '@/services/http'
@@ -49,6 +57,7 @@ type ReportAttachment = {
   name?: string
   file_name?: string
   file_url?: string
+  local_path?: string
   content_type?: string
   size?: number
 }
@@ -61,9 +70,19 @@ type ReportOperationDevice = {
   deviceName: string
   sn: string
   template: string
+  orderType: 0 | 1
 }
-
-const COMPOUND_TYPES = ['depth-group', 'range-radio', 'multi-input-row', 'sampling-group', 'card-group']
+type LocalUploadFile = Omit<SimulatedWellLocalUploadFile, 'kind'>
+type UploadProgressEvent = {
+  uploadId: string
+  fileName: string
+  fileUploaded: number
+  fileTotal: number
+  uploaded: number
+  total: number
+  bytesPerSecond: number
+}
+const COMPOUND_TYPES = ['single-input', 'depth-group', 'range-radio', 'multi-input-row', 'sampling-group', 'card-group']
 const REPORT_STATUS_MAP: Record<number, string> = {
   0: '待审核',
   1: '已审核通过',
@@ -87,26 +106,37 @@ const templateMessage = ref('')
 const editingReport = ref<(SimulatedWellReportItem & { meta: ReportMeta }) | null>(null)
 const previewReport = ref<(SimulatedWellReportItem & { meta: ReportMeta }) | null>(null)
 const previewAttachment = ref<{ title: string; url: string; isImage: boolean } | null>(null)
+const openingAttachment = ref<ReportAttachment | null>(null)
 
 const operationDate = ref(new Date().toISOString().slice(0, 10))
 const conclusion = ref<'qualified' | 'unqualified'>('qualified')
 const note = ref('')
 const noteEn = ref('')
 const curveChartNo = ref('')
-const curveFiles = ref<File[]>([])
-const reportFiles = ref<File[]>([])
-const operatorSignatureFile = ref<File | null>(null)
+const curveFiles = ref<LocalUploadFile[]>([])
+const reportFiles = ref<LocalUploadFile[]>([])
+const operatorSignatureFile = ref<LocalUploadFile | null>(null)
 const operatorSignaturePreviewUrl = ref('')
 const operatorSignatureObjectUrl = ref('')
 const operatorSignatureSource = ref<'saved' | 'report' | 'local' | ''>('')
 const operatorSignatureLoading = ref(false)
+const activeUploadId = ref('')
+const uploadPhase = ref<'idle' | 'uploading' | 'saving'>('idle')
+const uploadCancelRequested = ref(false)
+const uploadProgress = reactive({ fileName: '', uploaded: 0, total: 0, speed: 0 })
+let uploadProgressUnlisten: (() => void) | null = null
 const reportNextStepVisible = ref(false)
 const reportNextStepRemaining = ref(0)
 const autoStartedWorkNo = ref('')
 const testItemValues = reactive<Record<string, any>>({})
 const evaluationValues = reactive<Record<string, any>>({})
+const transferDataValues = reactive<Record<string, any>>({})
 
 const { initAuth, getAuthHeaders, userInfo } = useAuth()
+
+function normalizeOrderType(value: unknown): 0 | 1 {
+  return Number(value) === 1 ? 1 : 0
+}
 
 function normalizeCode(value: unknown) {
   return String(value || '')
@@ -203,6 +233,28 @@ function getReportAttachments(report: SimulatedWellReportItem | null | undefined
   return Array.isArray(report?.attachments) ? report!.attachments as ReportAttachment[] : []
 }
 
+function isCurveAttachment(attachment: ReportAttachment) {
+  const type = String(attachment.type || '').toLowerCase()
+  const field = String(attachment.field || '').toLowerCase()
+  return type.startsWith('curve') || field.startsWith('curve')
+}
+
+function curveAttachments(report: SimulatedWellReportItem | null | undefined) {
+  return getReportAttachments(report).filter(isCurveAttachment)
+}
+
+function otherAttachments(report: SimulatedWellReportItem | null | undefined) {
+  return getReportAttachments(report).filter((attachment) => !isCurveAttachment(attachment))
+}
+
+function attachmentTitle(attachment: ReportAttachment) {
+  return String(attachment.name || attachment.file_name || attachment.type || attachment.field || '附件')
+}
+
+function attachmentPath(attachment: ReportAttachment) {
+  return String(attachment.file_url || attachment.local_path || '').trim() || '-'
+}
+
 function resolveFileUrl(url?: string) {
   const raw = String(url || '').trim()
   if (!raw) return ''
@@ -219,7 +271,7 @@ function isImageAttachment(attachment: ReportAttachment) {
 
 function attachmentDisplayType(attachment: ReportAttachment) {
   const type = String(attachment.type || attachment.field || '').toLowerCase()
-  return type.startsWith('curve') ? '原始文件' : isImageAttachment(attachment) ? '图片' : '文件'
+  return type.startsWith('curve') ? '原始文件' : type.includes('report') ? '报告文件' : '附件'
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -275,10 +327,9 @@ async function loadCurrentUserSignature() {
   }
 }
 
-function validateOperatorSignatureFile(file: File) {
-  const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp']
+function validateOperatorSignatureFile(file: LocalUploadFile) {
   const allowedExtension = /\.(png|jpe?g|webp)$/i.test(file.name)
-  if (!allowedTypes.includes(file.type.toLowerCase()) || !allowedExtension) {
+  if (!allowedExtension) {
     return '电子签名仅支持 PNG、JPG、JPEG、WEBP 格式'
   }
   if (!file.size) return '电子签名图片不能为空'
@@ -286,11 +337,22 @@ function validateOperatorSignatureFile(file: File) {
   return ''
 }
 
-function handleOperatorSignatureChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
+async function inspectLocalFiles(paths: string[]) {
+  return invoke<LocalUploadFile[]>('get_simulated_well_upload_files', { paths })
+}
+
+function contentTypeForName(name: string) {
+  if (/\.pdf$/i.test(name)) return 'application/pdf'
+  if (/\.png$/i.test(name)) return 'image/png'
+  if (/\.jpe?g$/i.test(name)) return 'image/jpeg'
+  if (/\.webp$/i.test(name)) return 'image/webp'
+  return 'application/octet-stream'
+}
+
+async function selectOperatorSignature() {
+  const selected = await open({ multiple: false, filters: [{ name: '签名图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
+  if (!selected) return
+  const [file] = await inspectLocalFiles([selected])
   const error = validateOperatorSignatureFile(file)
   if (error) {
     ElMessage.warning(error)
@@ -298,11 +360,43 @@ function handleOperatorSignatureChange(event: Event) {
   }
 
   revokeOperatorSignatureObjectUrl()
-  const objectUrl = URL.createObjectURL(file)
+  const bytes = await readFile(file.path)
+  const objectUrl = URL.createObjectURL(new Blob([bytes], { type: contentTypeForName(file.name) }))
   operatorSignatureObjectUrl.value = objectUrl
   operatorSignaturePreviewUrl.value = objectUrl
   operatorSignatureFile.value = file
   operatorSignatureSource.value = 'local'
+}
+
+async function selectCurveFiles() {
+  const selected = await open({ multiple: true })
+  if (!selected) return
+  const paths = Array.isArray(selected) ? selected : [selected]
+  const files = await inspectLocalFiles(paths)
+  const tooLarge = files.find((file) => file.size > 20 * 1024 ** 3)
+  if (tooLarge) {
+    ElMessage.warning(`原始文件 ${tooLarge.name} 超过 20 GiB 上限`)
+    return
+  }
+  curveFiles.value = files.map((file) => ({ ...file, contentType: contentTypeForName(file.name) }))
+}
+
+async function selectReportFile() {
+  const selected = await open({ multiple: false, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+  if (!selected) return
+  const [file] = await inspectLocalFiles([selected])
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    ElMessage.error('测试报告文件仅支持 PDF')
+    return
+  }
+  reportFiles.value = [{ ...file, contentType: 'application/pdf' }]
+}
+
+function formatFileSize(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`
 }
 
 function extractStructuredStringValue(text: string, key: string) {
@@ -377,7 +471,36 @@ type ReadonlyReportRow = {
   value: string
 }
 
-function displayReadonlyReportValue(value: unknown, empty = '未填写') {
+function getTransferColumns(field: any): any[] {
+  const normalized = normalizeField(field)
+  return normalized && typeof normalized === 'object' && Array.isArray(normalized.columns)
+    ? normalized.columns
+    : []
+}
+
+function getTransferDataLabel(field: any, fieldIndex: number, column: any, columnIndex: number) {
+  const label = `${getFieldLabel(field, '')}${getFieldLabel(column, '')}`
+  return label || `转样数据${fieldIndex + 1}子字段${columnIndex + 1}`
+}
+
+function getTransferDataLabelEn(field: any, column: any) {
+  return [getFieldLabelEn(field), getFieldLabelEn(column)].filter(Boolean).join(' ')
+}
+
+function buildReadonlyTransferDataRows(fields: unknown, values: unknown): ReadonlyReportRow[] {
+  if (!Array.isArray(fields)) return []
+  const valueMap = values && typeof values === 'object' ? values as Record<string, unknown> : {}
+
+  return fields.flatMap((field, fieldIndex) => {
+    if (getFieldType(field) !== 'single-row-multi-column') return []
+    return getTransferColumns(field).map((column, columnIndex) => ({
+      label: getTransferDataLabel(field, fieldIndex, column, columnIndex),
+      value: displayValueWithUnit(valueMap[fieldKey('transfer', fieldIndex, `c${columnIndex}`)], column?.unit),
+    }))
+  })
+}
+
+function displayReadonlyReportValue(value: unknown, empty = '') {
   if (value === undefined || value === null || value === '') return empty
   const statusText: Record<string, string> = {
     normal: '正常',
@@ -388,6 +511,23 @@ function displayReadonlyReportValue(value: unknown, empty = '未填写') {
   if (typeof value === 'string') return statusText[value] || value
   if (typeof value === 'boolean') return value ? '是' : '否'
   return String(value)
+}
+
+function displayRangeRadioResult(value: unknown) {
+  if (value === 'abnormal' || value === '异常' || value === '不正常') return '不正常'
+  return displayReadonlyReportValue(value)
+}
+
+function displayNumberWithUnit(value: unknown, unit: unknown) {
+  const numberValue = displayReadonlyReportValue(value)
+  if (value === undefined || value === null || value === '') return numberValue
+  return `${numberValue}${String(unit || '').trim()}`
+}
+
+function displayValueWithUnit(value: unknown, unit: unknown) {
+  const text = displayReadonlyReportValue(value)
+  if (text === '') return ''
+  return `${text}${String(unit || '').trim()}`
 }
 
 function positiveFieldCount(value: unknown, fallback: number) {
@@ -407,16 +547,27 @@ function buildReadonlyReportRows(fields: unknown, values: unknown, prefix: strin
     const type = getFieldType(rawField)
 
     if (!COMPOUND_TYPES.includes(type)) {
+      if (type === 'number') return { label, value: displayNumberWithUnit(valueMap[key], definition.unit) }
       return { label, value: displayReadonlyReportValue(valueMap[key]) }
+    }
+
+    if (type === 'single-input') {
+      const rawInputValue = valueMap[key]
+      const inputValue = displayReadonlyReportValue(rawInputValue)
+      const unit = String(definition.unit || '').trim()
+      return {
+        label: `${label}：${inputValue ? `${inputValue}${unit}` : ''}`,
+        value: displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'result')]),
+      }
     }
 
     if (type === 'depth-group') {
       const unit = displayReadonlyReportValue(definition.unit, 'm')
       const points = Array.from({ length: positiveFieldCount(definition.pointCount, 4) }, (_, pointIndex) => {
         const point = pointIndex + 1
-        const depth = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `p${point}`)])
+        const depth = displayValueWithUnit(valueMap[fieldKey(prefix, index, `p${point}`)], unit)
         const result = valueMap[fieldKey(prefix, index, `p${point}_result`)]
-        return `第${point}点：${depth}${unit}${result === undefined || result === null || result === '' ? '' : `，${displayReadonlyReportValue(result)}`}`
+        return `第${point}点：${depth}${result === undefined || result === null || result === '' ? '' : `，${displayReadonlyReportValue(result)}`}`
       })
       return { label, value: points.join('；') }
     }
@@ -424,8 +575,11 @@ function buildReadonlyReportRows(fields: unknown, values: unknown, prefix: strin
     if (type === 'range-radio') {
       const start = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'from')])
       const end = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'to')])
-      const result = displayReadonlyReportValue(valueMap[fieldKey(prefix, index, 'result')])
-      return { label, value: `${start} ~ ${end}；${result}` }
+      const unit = String(definition.unit || '').trim()
+      return {
+        label: `${label}：${start || end ? `${start} ~ ${end}${unit}` : ''}`,
+        value: displayRangeRadioResult(valueMap[fieldKey(prefix, index, 'result')]),
+      }
     }
 
     if (type === 'multi-input-row') {
@@ -434,7 +588,7 @@ function buildReadonlyReportRows(fields: unknown, values: unknown, prefix: strin
         const values = columns.map((column, columnIndex) =>
           `${getFieldLabel(column, `输入${columnIndex + 1}`)}：${displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `r${rowIndex + 1}c${columnIndex}`)])}`
         )
-        return `第${rowIndex + 1}点：${values.join('，') || '未填写'}`
+        return `第${rowIndex + 1}点：${values.join('，')}`
       })
       return { label, value: rows.join('；') }
     }
@@ -445,7 +599,7 @@ function buildReadonlyReportRows(fields: unknown, values: unknown, prefix: strin
         const values = items.map((item, itemIndex) =>
           `${getFieldLabel(item, `项目${itemIndex + 1}`)}：${displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `p${pointIndex + 1}i${itemIndex}`)])}`
         )
-        return `第${pointIndex + 1}点：${values.join('，') || '未填写'}`
+        return `第${pointIndex + 1}点：${values.join('，')}`
       })
       return { label, value: points.join('；') }
     }
@@ -457,9 +611,9 @@ function buildReadonlyReportRows(fields: unknown, values: unknown, prefix: strin
       const values = cardFields.map((item, itemIndex) =>
         `${getFieldLabel(item, `字段${itemIndex + 1}`)}：${displayReadonlyReportValue(valueMap[fieldKey(prefix, index, `c${cardIndex}f${itemIndex}`)])}`
       )
-      return `${displayReadonlyReportValue(cardDefinition.title, `卡片${cardIndex + 1}`)}：${values.join('，') || '未填写'}`
+      return `${displayReadonlyReportValue(cardDefinition.title, `卡片${cardIndex + 1}`)}：${values.join('，')}`
     })
-    return { label, value: cardValues.join('；') || '未填写' }
+    return { label, value: cardValues.join('；') }
   })
 }
 
@@ -486,6 +640,7 @@ function resetReportForm() {
   clearOperatorSignature()
   clearReactiveMap(testItemValues)
   clearReactiveMap(evaluationValues)
+  clearReactiveMap(transferDataValues)
 }
 
 function resetSelection() {
@@ -507,7 +662,8 @@ function buildOperationDevices(work: SimulatedWellDownholeWorkItem | null): Repo
     customer: String(device?.customer || ''),
     deviceName: String(device?.deviceName || device?.device_name || device?.name || '-'),
     sn: String(device?.sn || device?.code || device?.device_number || ''),
-    template: String(device?.template || '')
+    template: String(device?.template || ''),
+    orderType: normalizeOrderType(device?.orderType ?? device?.order_type ?? work?.order_type)
   }))
 }
 
@@ -518,7 +674,7 @@ const reportRows = computed(() =>
       return {
         ...report,
         meta,
-        reportName: meta.report_name || meta.template_code || report.report_no,
+        reportName: String(meta.report_name || ''),
         deviceName: meta.device_name || '-',
         operatorName: report.tester || '-',
         statusLabel: statusText(report.status, report.status_text),
@@ -570,16 +726,24 @@ const selectedOperationDevices = computed(() => {
     return !key || !reportedDeviceKeys.value.has(key)
   })
 })
+const isResearchReport = computed(() => selectedDevice.value?.orderType === 1)
+const isPreviewResearchReport = computed(() => normalizeOrderType(previewReport.value?.meta?.order_type) === 1)
+const usesTemplateReport = computed(() => !isResearchReport.value || Boolean(selectedDevice.value?.template?.trim()))
 const reportTitle = computed(
-  () => selectedTemplate.value?.report_name || selectedDevice.value?.template || '井下测试综合报告'
+  () => usesTemplateReport.value
+    ? (selectedTemplate.value?.report_name || selectedDevice.value?.template || '井下测试综合报告')
+    : '研究院测试资料'
 )
 const templateCode = computed(
-  () => selectedTemplate.value?.report_no || selectedDevice.value?.template || '-'
+  () => usesTemplateReport.value ? (selectedTemplate.value?.report_no || selectedDevice.value?.template || '-') : '-'
 )
 const previewTemplateSnapshot = computed<Record<string, any> | null>(() => {
   const snapshot = previewReport.value?.meta?.template_snapshot
   return snapshot && typeof snapshot === 'object' ? snapshot as Record<string, any> : null
 })
+const usesPreviewTemplateReport = computed(() =>
+  !isPreviewResearchReport.value || Boolean(previewTemplateSnapshot.value?.report_no),
+)
 const previewTestItemRows = computed(() =>
   buildReadonlyReportRows(
     previewTemplateSnapshot.value?.test_items,
@@ -594,6 +758,12 @@ const previewEvaluationRows = computed(() =>
     previewReport.value?.meta?.evaluation_standards,
     'eval',
     '评价标准'
+  )
+)
+const previewTransferDataRows = computed(() =>
+  buildReadonlyTransferDataRows(
+    previewTemplateSnapshot.value?.transfer_data_records,
+    previewReport.value?.meta?.transfer_data_records
   )
 )
 
@@ -663,6 +833,7 @@ const fallbackTemplateDetails = computed<SimulatedWellReportTemplateDetail[]>(()
     match_instruments: item.supportingTools || [],
     test_items: item.testItems || [],
     evaluation_standards: item.evaluations || [],
+    transfer_data_records: item.transferDataRecords || [],
     updated_at: '',
   }))
 )
@@ -697,6 +868,10 @@ const templateLibrary = computed<SimulatedWellReportTemplateDetail[]>(() => {
         Array.isArray(existing.evaluation_standards) && existing.evaluation_standards.length
           ? existing.evaluation_standards
           : normalizedItem.evaluation_standards,
+      transfer_data_records:
+        Array.isArray(existing.transfer_data_records) && existing.transfer_data_records.length
+          ? existing.transfer_data_records
+          : normalizedItem.transfer_data_records,
     })
   })
 
@@ -755,6 +930,8 @@ async function loadTemplate(device: ReportOperationDevice) {
   selectedTemplate.value = null
   templateMessage.value = ''
 
+  if (device.orderType === 1 && !device.template.trim()) return
+
   templateLoading.value = true
   try {
     await ensureTemplateCatalog()
@@ -763,6 +940,11 @@ async function loadTemplate(device: ReportOperationDevice) {
     if (matchByCode) {
       selectedTemplate.value = matchByCode
       templateMessage.value = '已使用下井作业中保存的关联模板。'
+      return
+    }
+
+    if (device.orderType === 1) {
+      templateMessage.value = '已选择的测试报告模板不存在或已删除，请返回下井作业重新选择。'
       return
     }
 
@@ -859,6 +1041,7 @@ function buildEditFallbackTemplate(meta: ReportMeta): SimulatedWellReportTemplat
     match_instruments: Array.isArray(snapshot.match_instruments) ? snapshot.match_instruments : [],
     test_items: Array.isArray(snapshot.test_items) ? snapshot.test_items : [],
     evaluation_standards: Array.isArray(snapshot.evaluation_standards) ? snapshot.evaluation_standards : [],
+    transfer_data_records: Array.isArray(snapshot.transfer_data_records) ? snapshot.transfer_data_records : [],
     updated_at: String(snapshot.updated_at || ''),
   }
 }
@@ -889,6 +1072,7 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
     deviceName: String(meta.device_name || '-'),
     sn: String(meta.device_sn || meta.device_number || meta.sn || ''),
     template: String(meta.template_code || meta.template_name || ''),
+    orderType: normalizeOrderType(meta.order_type),
   }
 
   operationDate.value = report.test_date || new Date().toISOString().slice(0, 10)
@@ -905,6 +1089,7 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   }
   assignReactiveMap(testItemValues, meta.test_items)
   assignReactiveMap(evaluationValues, meta.evaluation_standards)
+  assignReactiveMap(transferDataValues, meta.transfer_data_records)
 
   selectedTemplate.value = null
   templateMessage.value = ''
@@ -956,28 +1141,6 @@ async function deleteReport(row: SimulatedWellReportItem & { meta: ReportMeta })
   await Promise.all([fetchReports(), fetchOperations()])
 }
 
-function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) {
-    reportFiles.value = []
-    return
-  }
-  const isPdfName = file.name.toLowerCase().endsWith('.pdf')
-  const isPdfType = !file.type || file.type === 'application/pdf'
-  if (!isPdfName || !isPdfType) {
-    reportFiles.value = []
-    input.value = ''
-    ElMessage.error('测试报告文件仅支持 PDF')
-    return
-  }
-  reportFiles.value = [file]
-}
-
-function handleCurveFileChange(event: Event) {
-  curveFiles.value = Array.from((event.target as HTMLInputElement)?.files || [])
-}
-
 function buildReportNo() {
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -994,12 +1157,12 @@ async function saveReport() {
     ElMessage.warning('请先选择下井作业和测试设备')
     return
   }
-  if (!selectedTemplate.value || (!editingReport.value && selectedTemplate.value.id <= 0)) {
+  if (usesTemplateReport.value && (!selectedTemplate.value || (!editingReport.value && selectedTemplate.value.id <= 0))) {
     ElMessage.warning('当前测试设备未关联有效报告模板，请先在管理端配置模板后再提交')
     return
   }
-  const description = note.value.trim()
-  const descriptionEn = noteEn.value.trim()
+  const description = usesTemplateReport.value ? note.value.trim() : ''
+  const descriptionEn = usesTemplateReport.value ? noteEn.value.trim() : ''
   if (!operatorSignaturePreviewUrl.value) {
     ElMessage.warning('请上传操作人的电子签名')
     return
@@ -1013,9 +1176,10 @@ async function saveReport() {
     const reportNo = editing?.report_no || buildReportNo()
     const reportJson = {
       report_name: reportTitle.value,
-      template_id: selectedTemplate.value.id,
-      template_code: templateCode.value,
-      template_name: selectedTemplate.value?.report_name || '',
+      order_type: selectedDevice.value.orderType,
+      template_id: usesTemplateReport.value ? selectedTemplate.value?.id : null,
+      template_code: usesTemplateReport.value ? templateCode.value : '',
+      template_name: usesTemplateReport.value ? (selectedTemplate.value?.report_name || '') : '',
       downhole_work_no: selectedOperation.value.work_no,
       well_name: selectedOperation.value.well_name,
       testing_device: selectedOperation.value.testing_device || '',
@@ -1027,9 +1191,10 @@ async function saveReport() {
       interval_text: selectedOperation.value.interval_text,
       device_name: selectedDevice.value.deviceName,
       device_sn: selectedDevice.value.sn,
-      conclusion: conclusion.value,
-      test_items: collectMeta(testItemValues),
-      evaluation_standards: collectMeta(evaluationValues),
+      conclusion: usesTemplateReport.value ? conclusion.value : '',
+      test_items: usesTemplateReport.value ? collectMeta(testItemValues) : {},
+      evaluation_standards: usesTemplateReport.value ? collectMeta(evaluationValues) : {},
+      transfer_data_records: usesTemplateReport.value ? collectMeta(transferDataValues) : {},
       curve_chart_no: curveChartNo.value.trim(),
       curve_chart_files: curveFiles.value.map((file) => file.name),
       report_files: reportFiles.value.map((file) => file.name),
@@ -1059,35 +1224,50 @@ async function saveReport() {
         : undefined,
       client_submit_id: editing?.client_submit_id || `${reportNo}-${Date.now()}`,
     }
-    const uploadFiles = [
-      ...curveFiles.value.map((file) => ({ fieldName: 'curve_chart', fileName: file.name, blob: file })),
-      ...reportFiles.value.map((file) => ({ fieldName: 'report_file', fileName: file.name, blob: file })),
+    const uploadFiles: SimulatedWellLocalUploadFile[] = [
+      ...curveFiles.value.map((file) => ({ ...file, kind: 'curve_chart' as const })),
+      ...reportFiles.value.map((file) => ({ ...file, kind: 'report_file' as const })),
       ...(operatorSignatureFile.value
-        ? [{ fieldName: 'operator_signature', fileName: operatorSignatureFile.value.name, blob: operatorSignatureFile.value }]
+        ? [{ ...operatorSignatureFile.value, kind: 'operator_signature' as const }]
         : []),
     ]
 
     if (editing && (curveFiles.value.length || reportFiles.value.length)) {
       ElMessage.warning('编辑模式暂不替换已上传附件，本次仅保存报告字段')
     }
-    const res = editing
-      ? operatorSignatureFile.value
-        ? await updateSimulatedWellReportWithSignature(
+    let res
+    if (editing) {
+      if (operatorSignatureFile.value) {
+        const signatureBytes = await readFile(operatorSignatureFile.value.path)
+        res = await updateSimulatedWellReportWithSignature(
             editing.id,
             payload,
             {
               fieldName: 'operator_signature',
               fileName: operatorSignatureFile.value.name,
-              blob: operatorSignatureFile.value,
+              blob: new Blob([signatureBytes], { type: contentTypeForName(operatorSignatureFile.value.name) }),
             },
             getAuthHeaders()
           )
-        : await updateSimulatedWellReport(editing.id, payload, getAuthHeaders())
-      : uploadFiles.length
-        ? await createSimulatedWellReportWithFiles(payload, uploadFiles, getAuthHeaders())
-        : await createSimulatedWellReport(payload, getAuthHeaders())
+      } else {
+        res = await updateSimulatedWellReport(editing.id, payload, getAuthHeaders())
+      }
+    } else if (uploadFiles.length) {
+      uploadCancelRequested.value = false
+      Object.assign(uploadProgress, { fileName: '', uploaded: 0, total: uploadFiles.reduce((total, file) => total + file.size, 0), speed: 0 })
+      uploadPhase.value = 'uploading'
+      res = await createSimulatedWellReportWithLargeFiles(
+        payload,
+        uploadFiles,
+        getAuthHeaders(),
+        (uploadId) => { activeUploadId.value = uploadId },
+        () => { uploadPhase.value = 'saving' },
+      )
+    } else {
+      res = await createSimulatedWellReport(payload, getAuthHeaders())
+    }
     if (!res.success) {
-      ElMessage.error(res.error || '保存测试报告失败')
+      if (!uploadCancelRequested.value) ElMessage.error(res.error || '保存测试报告失败')
       return
     }
     if (res.data?.code !== 0) {
@@ -1115,10 +1295,27 @@ async function saveReport() {
     resetSelection()
   } finally {
     saving.value = false
+    activeUploadId.value = ''
+    uploadPhase.value = 'idle'
+    uploadCancelRequested.value = false
   }
 }
 
-onBeforeUnmount(() => revokeOperatorSignatureObjectUrl())
+async function cancelCurrentUpload() {
+  if (!activeUploadId.value || uploadPhase.value !== 'uploading') return
+  uploadCancelRequested.value = true
+  const uploadId = activeUploadId.value
+  await cancelSimulatedWellLargeUpload(uploadId, getAuthHeaders())
+  ElMessage.info('上传已取消，再次提交将从头上传')
+}
+
+onBeforeUnmount(() => {
+  revokeOperatorSignatureObjectUrl()
+  uploadProgressUnlisten?.()
+  if (activeUploadId.value && uploadPhase.value === 'uploading') {
+    void cancelSimulatedWellLargeUpload(activeUploadId.value, getAuthHeaders())
+  }
+})
 
 function continueReportFill() {
   reportNextStepVisible.value = false
@@ -1134,8 +1331,22 @@ function finishDownholeOperation() {
   resetSelection()
 }
 
-function openPreview(report: SimulatedWellReportItem & { meta: ReportMeta }) {
-  previewReport.value = report
+async function openPreview(report: SimulatedWellReportItem & { meta: ReportMeta }) {
+  let reportDetail = report
+  try {
+    await initAuth()
+    const res = await getSimulatedWellReportDetail(report.id, getAuthHeaders())
+    if (!res.success || res.data?.code !== 0 || !res.data.data) {
+      ElMessage.warning(res.error || res.data?.msg || '报告详情加载失败，已展示列表缓存数据')
+    } else {
+      const detail = res.data.data
+      reportDetail = { ...detail, meta: getReportMeta(detail) }
+    }
+  } catch (error) {
+    console.error('获取模拟井报告详情失败', error)
+    ElMessage.warning('报告详情加载失败，已展示列表缓存数据')
+  }
+  previewReport.value = reportDetail
 }
 
 function closePreview() {
@@ -1143,18 +1354,31 @@ function closePreview() {
   previewAttachment.value = null
 }
 
-function openAttachment(attachment: ReportAttachment) {
+async function openAttachment(attachment: ReportAttachment) {
   const url = resolveFileUrl(attachment.file_url)
   if (!url) {
-    ElMessage.warning('未找到附件地址')
+    ElMessage.warning('附件暂无可访问地址')
     return
   }
-  const title = attachment.name || attachment.file_name || '附件'
+  const title = attachmentTitle(attachment)
   if (isImageAttachment(attachment)) {
     previewAttachment.value = { title, url, isImage: true }
     return
   }
-  window.open(url, '_blank')
+  if (!/^https?:\/\//i.test(url)) {
+    ElMessage.warning('附件地址无效，无法打开文件')
+    return
+  }
+  openingAttachment.value = attachment
+  try {
+    await openUrl(url)
+  } catch (error) {
+    console.error('打开报告附件失败', error)
+    const reason = error instanceof Error ? error.message : ''
+    ElMessage.error(reason ? `文件打开失败：${reason}` : '文件打开失败')
+  } finally {
+    openingAttachment.value = null
+  }
 }
 
 function batchDownload() {
@@ -1183,6 +1407,13 @@ const curveChartNoModelValue = computed<string>({
 })
 
 onMounted(async () => {
+  uploadProgressUnlisten = await listen<UploadProgressEvent>('simulated-well-upload-progress', (event) => {
+    if (event.payload.uploadId !== activeUploadId.value) return
+    uploadProgress.fileName = event.payload.fileName
+    uploadProgress.uploaded = event.payload.uploaded
+    uploadProgress.total = event.payload.total
+    uploadProgress.speed = event.payload.bytesPerSecond
+  })
   await fetchReports()
 })
 
@@ -1377,7 +1608,7 @@ watch(
               <div class="device-name">{{ device.deviceName }}</div>
               <div class="device-meta">工单：{{ device.orderId || '-' }}</div>
               <div class="device-meta">编号：{{ device.sn || '-' }}</div>
-              <div class="device-meta">模板：{{ device.template || '未配置' }}</div>
+              <div v-if="device.template" class="device-meta">模板：{{ device.template }}</div>
             </button>
           </div>
         </div>
@@ -1388,11 +1619,11 @@ watch(
           <div class="section-header-row">
             <div>
               <div class="downhole-card-title">{{ reportTitle }}</div>
-              <div class="section-desc">模板编号：{{ templateCode }}</div>
+              <div v-if="usesTemplateReport" class="section-desc">模板编号：{{ templateCode }}</div>
             </div>
-            <div v-if="templateLoading" class="tiny-hint">模板加载中...</div>
+            <div v-if="usesTemplateReport && templateLoading" class="tiny-hint">模板加载中...</div>
           </div>
-          <div v-if="templateMessage" class="inline-hint">{{ templateMessage }}</div>
+          <div v-if="usesTemplateReport && templateMessage" class="inline-hint">{{ templateMessage }}</div>
 
           <div class="info-grid">
             <div class="info-item">
@@ -1422,7 +1653,7 @@ watch(
           </div>
         </div>
 
-        <div class="downhole-card">
+        <div v-if="usesTemplateReport" class="downhole-card">
           <div class="downhole-card-title">测试项目 <span class="english-sub">Test Item</span></div>
           <div v-if="!(selectedTemplate?.test_items || []).length" class="empty-state"><p>当前模板未配置测试项目</p></div>
           <div v-else class="field-list">
@@ -1442,6 +1673,7 @@ watch(
                     class="form-input"
                     :type="getFieldType(field) === 'number' ? 'number' : 'text'"
                   />
+                  <span v-if="getFieldType(field) === 'number' && field?.unit" class="single-input-unit">{{ field.unit }}</span>
                 </div>
                 <div v-else class="inline-radio-group">
                   <label class="inline-radio">
@@ -1452,6 +1684,27 @@ watch(
                     <input v-model="testItemValues[fieldKey('test', index)]" type="radio" :name="fieldKey('test', index)" value="abnormal" />
                     <span class="radio-label-fail">不正常</span>
                   </label>
+                </div>
+              </div>
+
+              <div v-else-if="getFieldType(field) === 'single-input'" class="compound-card">
+                <div class="field-row-title">{{ getFieldLabel(field, `测试项目${index + 1}`) }}</div>
+                <div v-if="getFieldLabelEn(field)" class="field-row-sub">{{ getFieldLabelEn(field) }}</div>
+                <div class="single-input-row">
+                  <div class="single-input-control">
+                    <input v-model="testItemValues[fieldKey('test', index)]" type="text" class="form-input" />
+                    <span v-if="field?.unit" class="single-input-unit">{{ field.unit }}</span>
+                  </div>
+                  <div class="inline-radio-group">
+                    <label class="inline-radio">
+                      <input v-model="testItemValues[fieldKey('test', index, 'result')]" type="radio" :name="fieldKey('test', index, 'result')" value="normal" />
+                      <span class="radio-label-ok">正常</span>
+                    </label>
+                    <label class="inline-radio">
+                      <input v-model="testItemValues[fieldKey('test', index, 'result')]" type="radio" :name="fieldKey('test', index, 'result')" value="abnormal" />
+                      <span class="radio-label-fail">不正常</span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -1497,9 +1750,15 @@ watch(
               <div v-else-if="getFieldType(field) === 'range-radio'" class="compound-card">
                 <div class="field-row-title">{{ getFieldLabel(field, `测试项目${index + 1}`) }}</div>
                 <div class="range-row">
-                  <input v-model="testItemValues[fieldKey('test', index, 'from')]" type="number" class="form-input" placeholder="起始深度" />
+                  <div class="form-input-div">
+                    <input v-model="testItemValues[fieldKey('test', index, 'from')]" type="number" class="form-input" placeholder="起始深度" />
+                    <span>{{field.unit}}</span>
+                  </div>
                   <span class="range-sep">~</span>
-                  <input v-model="testItemValues[fieldKey('test', index, 'to')]" type="number" class="form-input" placeholder="结束深度" />
+                  <div class="form-input-div">
+                    <input v-model="testItemValues[fieldKey('test', index, 'to')]" type="number" class="form-input" placeholder="结束深度" />
+                    <span>{{field.unit}}</span>
+                  </div>
                   <div class="inline-radio-group">
                     <label class="inline-radio">
                       <input v-model="testItemValues[fieldKey('test', index, 'result')]" type="radio" :name="fieldKey('test', index, 'result')" value="normal" />
@@ -1588,7 +1847,7 @@ watch(
           </div>
         </div>
 
-        <div class="downhole-card">
+        <div v-if="usesTemplateReport" class="downhole-card">
           <div class="downhole-card-title">资料评价标准值 <span class="english-sub">Data Evaluation Standard Value</span></div>
           <div v-if="!(selectedTemplate?.evaluation_standards || []).length" class="empty-state"><p>当前模板未配置评价标准</p></div>
           <div v-else class="field-list">
@@ -1597,15 +1856,32 @@ watch(
                 <div class="field-row-title">{{ getFieldLabel(field, `评价标准${index + 1}`) }}</div>
                 <div v-if="getFieldLabelEn(field)" class="field-row-sub">{{ getFieldLabelEn(field) }}</div>
               </div>
-              <div v-if="getFieldType(field) === 'textarea'" class="field-row-input">
+              <div v-if="getFieldType(field) === 'single-input'" class="single-input-evaluation">
+                <div class="single-input-control">
+                  <input v-model="evaluationValues[fieldKey('eval', index)]" type="text" class="form-input" />
+                  <span v-if="field?.unit" class="single-input-unit">{{ field.unit }}</span>
+                </div>
+                <div class="inline-radio-group">
+                  <label class="inline-radio">
+                    <input v-model="evaluationValues[fieldKey('eval', index, 'result')]" type="radio" :name="fieldKey('eval', index, 'result')" value="qualified" />
+                    <span class="radio-label-ok">符合</span>
+                  </label>
+                  <label class="inline-radio">
+                    <input v-model="evaluationValues[fieldKey('eval', index, 'result')]" type="radio" :name="fieldKey('eval', index, 'result')" value="unqualified" />
+                    <span class="radio-label-fail">不符合</span>
+                  </label>
+                </div>
+              </div>
+              <div v-else-if="getFieldType(field) === 'textarea'" class="field-row-input">
                 <textarea v-model="evaluationValues[fieldKey('eval', index)]" class="form-input textarea" rows="2" />
               </div>
-              <div v-else-if="getFieldType(field) === 'text' || getFieldType(field) === 'number'" class="field-row-input">
+              <div v-else-if="getFieldType(field) === 'text' || getFieldType(field) === 'number'" class="field-row-input unit-flex">
                 <input
                   v-model="evaluationValues[fieldKey('eval', index)]"
                   class="form-input"
                   :type="getFieldType(field) === 'number' ? 'number' : 'text'"
                 />
+                <span v-if="getFieldType(field) === 'number' && field?.unit" class="single-input-unit">{{ field.unit }}</span>
               </div>
               <div v-else class="inline-radio-group">
                 <label class="inline-radio">
@@ -1621,7 +1897,37 @@ watch(
           </div>
         </div>
 
-        <div class="downhole-card">
+        <div v-if="usesTemplateReport && (selectedTemplate?.transfer_data_records || []).length" class="downhole-card">
+          <div class="downhole-card-title">测试完成转样数据记录 <span class="english-sub">Transferred Data Record Finished by Test</span></div>
+          <div class="field-list">
+            <template v-for="(field, fieldIndex) in selectedTemplate?.transfer_data_records || []" :key="fieldKey('transfer', fieldIndex)">
+              <div v-if="getFieldType(field) !== 'single-row-multi-column'" class="field-row-card">
+                <div class="tiny-hint">请在管理端完善单行多列配置</div>
+              </div>
+              <div v-else-if="!getTransferColumns(field).length" class="field-row-card">
+                <div class="tiny-hint">请在管理端完善单行多列配置</div>
+              </div>
+              <template v-else>
+                <div
+                  v-for="(column, columnIndex) in getTransferColumns(field)"
+                  :key="fieldKey('transfer', fieldIndex, `c${columnIndex}`)"
+                  class="field-row-card"
+                >
+                  <div class="field-row-main">
+                    <div class="field-row-title">{{ getTransferDataLabel(field, fieldIndex, column, columnIndex) }}</div>
+                    <div v-if="getTransferDataLabelEn(field, column)" class="field-row-sub">{{ getTransferDataLabelEn(field, column) }}</div>
+                  </div>
+                  <div class="field-row-input unit-flex">
+                    <input v-model="transferDataValues[fieldKey('transfer', fieldIndex, `c${columnIndex}`)]" type="text" class="form-input" />
+                    <span v-if="column?.unit" class="single-input-unit">{{ column.unit }}</span>
+                  </div>
+                </div>
+              </template>
+            </template>
+          </div>
+        </div>
+
+        <div v-if="usesTemplateReport" class="downhole-card">
           <div class="downhole-card-title">测试结论 <span class="english-sub">Test Conclusion</span></div>
           <div class="inline-radio-group conclusion-radio-group">
             <label class="rect-radio wide conclusion-radio" :class="{ selected: conclusion === 'qualified' }">
@@ -1662,21 +1968,16 @@ watch(
                 </div>
                 <div class="operator-signature-actions">
                   <span class="tiny-hint">{{ operatorSignatureSourceText }}</span>
-                  <label class="signature-upload-btn">
+                  <button type="button" class="signature-upload-btn" :disabled="saving" @click="selectOperatorSignature">
                     {{ operatorSignaturePreviewUrl ? '重新上传' : '上传签名' }}
-                    <input
-                      type="file"
-                      accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                      @change="handleOperatorSignatureChange"
-                    />
-                  </label>
+                  </button>
                   <span class="tiny-hint">支持 PNG、JPG、WEBP，最大 5MB；本次上传不会修改个人签名</span>
                 </div>
               </div>
             </div>
             <div class="info-item">
               <div class="info-label">操作日期</div>
-              <input v-model="operationDate" type="date" class="form-input" />
+              <input v-model="operationDate" type="date" class="form-input" disabled/>
             </div>
           </div>
         </div>
@@ -1694,10 +1995,10 @@ watch(
             </div>
             <div class="upload-box">
               <div class="upload-title">上传测试原始文件</div>
-              <input type="file" accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.pdf" multiple @change="handleCurveFileChange" />
+              <button type="button" class="week-cal-nav" :disabled="saving" @click="selectCurveFiles">选择原始文件</button>
               <div class="file-list">
-                <div v-for="file in curveFiles" :key="file.name" class="file-row">{{ file.name }}</div>
-                <div v-if="!curveFiles.length" class="tiny-hint">支持 JPG、PNG、BMP、TIFF、PDF，可多选</div>
+                <div v-for="file in curveFiles" :key="file.path" class="file-row">{{ file.name }} · {{ formatFileSize(file.size) }}</div>
+                <div v-if="!curveFiles.length" class="tiny-hint">支持全部文件类型，可多选；单文件最大 20 GiB</div>
               </div>
             </div>
           </div>
@@ -1708,9 +2009,9 @@ watch(
           <div class="upload-grid">
             <div class="upload-box">
               <div class="upload-title">测试报告文件</div>
-              <input type="file" accept="application/pdf,.pdf" @change="handleFileChange" />
+              <button type="button" class="week-cal-nav" :disabled="saving" @click="selectReportFile">选择 PDF</button>
               <div class="file-list">
-                <div v-for="file in reportFiles" :key="file.name" class="file-row">{{ file.name }}</div>
+                <div v-for="file in reportFiles" :key="file.path" class="file-row">{{ file.name }} · {{ formatFileSize(file.size) }}</div>
                 <div v-if="!reportFiles.length" class="tiny-hint">仅支持上传一份 PDF 文件</div>
               </div>
             </div>
@@ -1718,7 +2019,16 @@ watch(
         </div>
 
         <div class="form-actions">
-          <button class="week-cal-nav" @click="backStep">返回</button>
+          <div v-if="saving && uploadPhase !== 'idle'" class="large-upload-progress">
+            <div>{{ uploadPhase === 'saving' ? '文件已上传，正在保存报告…' : `正在上传：${uploadProgress.fileName}` }}</div>
+            <div v-if="uploadPhase === 'uploading'" class="tiny-hint">
+              {{ formatFileSize(uploadProgress.uploaded) }} / {{ formatFileSize(uploadProgress.total) }}
+              · {{ formatFileSize(uploadProgress.speed) }}/s
+            </div>
+            <progress v-if="uploadPhase === 'uploading'" :value="uploadProgress.uploaded" :max="uploadProgress.total || 1" />
+            <button v-if="uploadPhase === 'uploading'" type="button" class="week-cal-nav" @click="cancelCurrentUpload">取消上传</button>
+          </div>
+          <button class="week-cal-nav" :disabled="saving" @click="backStep">返回</button>
           <button class="primary-btn" :disabled="saving" @click="saveReport">
             {{ saving ? '保存中...' : '保存报告' }}
           </button>
@@ -1750,7 +2060,7 @@ watch(
             </div>
             <div class="info-item">
               <div class="info-label">报告名称</div>
-              <div class="info-value">{{ previewReport.meta.report_name || previewReport.report_no }}</div>
+              <div class="info-value">{{ previewReport.meta.report_name || '' }}</div>
             </div>
             <div class="info-item">
               <div class="info-label">下井作业</div>
@@ -1779,20 +2089,20 @@ watch(
               <div class="info-label">测试井段</div>
               <div class="info-value">{{ formatSimulatedWellInterval(previewReport.meta.interval_text) }}</div>
             </div>
-            <div class="info-item wide">
+            <div v-if="usesPreviewTemplateReport" class="info-item wide">
               <div class="info-label">测试结论</div>
               <div class="info-value">{{ previewReport.meta.conclusion === 'unqualified' ? '所测资料存在不合格项' : '所测资料合格' }}</div>
             </div>
-            <div class="info-item wide" v-if="previewReport.meta.note">
+            <div v-if="usesPreviewTemplateReport && previewReport.meta.note" class="info-item wide">
               <div class="info-label">描述（中文）</div>
               <div class="info-value">{{ previewReport.meta.note }}</div>
             </div>
-            <div class="info-item wide" v-if="previewReport.meta.note_en">
+            <div v-if="usesPreviewTemplateReport && previewReport.meta.note_en" class="info-item wide">
               <div class="info-label">描述（英文）</div>
               <div class="info-value">{{ previewReport.meta.note_en }}</div>
             </div>
           </div>
-          <div class="report-data-section">
+          <div v-if="usesPreviewTemplateReport" class="report-data-section">
             <div class="downhole-card-title">测试项目 <span class="english-sub">Test Item</span></div>
             <div v-if="!previewTemplateSnapshot" class="tiny-hint">暂无可用项目定义</div>
             <div v-else-if="!previewTestItemRows.length" class="tiny-hint">当前模板未配置测试项目</div>
@@ -1803,7 +2113,7 @@ watch(
               </div>
             </div>
           </div>
-          <div class="report-data-section">
+          <div v-if="usesPreviewTemplateReport" class="report-data-section">
             <div class="downhole-card-title">资料评价标准值 <span class="english-sub">Data Evaluation Standard Value</span></div>
             <div v-if="!previewTemplateSnapshot" class="tiny-hint">暂无可用项目定义</div>
             <div v-else-if="!previewEvaluationRows.length" class="tiny-hint">当前模板未配置评价标准</div>
@@ -1814,17 +2124,52 @@ watch(
               </div>
             </div>
           </div>
+          <div v-if="usesPreviewTemplateReport && previewTransferDataRows.length" class="report-data-section">
+            <div class="downhole-card-title">测试完成转样数据记录 <span class="english-sub">Transferred Data Record Finished by Test</span></div>
+            <div class="readonly-report-list">
+              <div v-for="row in previewTransferDataRows" :key="row.label" class="readonly-report-row">
+                <div class="readonly-report-label">{{ row.label }}</div>
+                <div class="readonly-report-value">{{ row.value }}</div>
+              </div>
+            </div>
+          </div>
           <div class="attachment-section">
             <div class="downhole-card-title">报告附件 <span class="english-sub">Attachments</span></div>
             <div v-if="!getReportAttachments(previewReport).length" class="tiny-hint">暂无上传附件</div>
             <div v-else class="attachment-list">
-              <div v-for="attachment in getReportAttachments(previewReport)" :key="`${attachment.field}-${attachment.file_name || attachment.name}`" class="attachment-row">
+              <div v-if="curveAttachments(previewReport).length" class="attachment-row">
+                <div class="attachment-main">
+                  <span class="attachment-badge">原始文件</span>
+                  <div class="attachment-file-list">
+                    <div
+                      v-for="(attachment, index) in curveAttachments(previewReport)"
+                      :key="`${attachment.field}-${attachment.file_name || attachment.name}-${index}`"
+                      class="attachment-file-item"
+                    >
+                      <div class="attachment-name" :title="attachmentTitle(attachment)">{{ attachmentTitle(attachment) }}</div>
+                      <div class="attachment-path" :title="attachmentPath(attachment)">{{ attachmentPath(attachment) }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-for="(attachment, index) in otherAttachments(previewReport)"
+                :key="`${attachment.field}-${attachment.file_name || attachment.name}-${index}`"
+                class="attachment-row"
+              >
                 <div class="attachment-main">
                   <span class="attachment-badge">{{ attachmentDisplayType(attachment) }}</span>
-                  <span class="attachment-name" :title="attachment.name || attachment.file_name">{{ attachment.name || attachment.file_name }}</span>
+                  <div class="attachment-file-list">
+                    <div class="attachment-name" :title="attachmentTitle(attachment)">{{ attachmentTitle(attachment) }}</div>
+                    <div class="attachment-path" :title="attachmentPath(attachment)">{{ attachmentPath(attachment) }}</div>
+                  </div>
                 </div>
-                <button class="action-btn action-btn-view" @click="openAttachment(attachment)">
-                  {{ isImageAttachment(attachment) ? '预览' : '打开' }}
+                <button
+                  class="action-btn action-btn-view"
+                  :disabled="openingAttachment === attachment"
+                  @click="openAttachment(attachment)"
+                >
+                  {{ isImageAttachment(attachment) ? '预览图片' : openingAttachment === attachment ? '打开中...' : '打开文件' }}
                 </button>
               </div>
             </div>
@@ -2291,6 +2636,10 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  .unit-flex {
+    display: flex;
+    align-items: center;
+  }
 }
 
 .field-row-main {
@@ -2411,6 +2760,45 @@ watch(
   flex-direction: row;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: space-between;
+  .form-input-div {
+    width: 40%;
+  }
+  .form-input {
+    width: 90%;
+  }
+}
+
+.single-input-row,
+.single-input-evaluation,
+.single-input-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.single-input-row {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.single-input-evaluation {
+  flex: 1;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.single-input-control {
+  flex: 0 1 320px;
+}
+
+.single-input-unit {
+  flex-shrink: 0;
+  min-width: 28px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .range-sep {
@@ -2466,6 +2854,22 @@ watch(
 .file-row {
   font-size: 12px;
   color: #334155;
+}
+
+.large-upload-progress {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.large-upload-progress progress {
+  width: 100%;
+  height: 10px;
 }
 
 .report-next-step-bar {
@@ -2609,8 +3013,19 @@ watch(
 .attachment-main {
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+}
+
+.attachment-file-list {
+  min-width: 0;
+  flex: 1;
+}
+
+.attachment-file-item + .attachment-file-item {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
 }
 
 .attachment-badge {
@@ -2630,6 +3045,21 @@ watch(
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attachment-path {
+  max-width: 580px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-row .action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .attachment-preview-mask {
@@ -2751,6 +3181,15 @@ watch(
   .field-row-card {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .attachment-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .attachment-path {
+    max-width: 100%;
   }
 
   .field-row-input {

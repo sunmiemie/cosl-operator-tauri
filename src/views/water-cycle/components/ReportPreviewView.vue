@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import * as echarts from 'echarts'
+import { echarts } from '@/utils/echarts'
 
 import {
   COLLECTION_CHANNELS,

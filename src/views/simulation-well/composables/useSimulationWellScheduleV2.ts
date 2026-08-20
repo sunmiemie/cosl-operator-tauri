@@ -57,6 +57,10 @@ function normalizeScheduleSegments(
     : []
 }
 
+function normalizeOrderType(value: unknown): 0 | 1 {
+  return Number(value) === 1 ? 1 : 0
+}
+
 export function useSimulationWellSchedule() {
   const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
@@ -112,6 +116,7 @@ export function useSimulationWellSchedule() {
           testPurpose: normalizeText(dto.test_purpose) || '',
           testSteps: normalizeText(dto.test_steps) || '',
           safetyRisks: normalizeText(dto.safety_risks) || '',
+          orderType: normalizeOrderType(dto.order_type),
           deviceList: remainingDevices.map((d) => ({
             id: `${orderId}::${d.device_number}`,
             dbId: d.id,
@@ -437,7 +442,8 @@ export function useSimulationWellSchedule() {
           customer: order.customer,
           deviceName: device.name,
           sn: deviceNumber,
-          template: device.template || deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
+          template: device.template || deviceNumber || 'DEFAULT_DOWNHOLE_REPORT',
+          orderType: order.orderType,
         })
       })
     })
@@ -467,7 +473,8 @@ export function useSimulationWellSchedule() {
           customer: order.customer,
           deviceName: device.name,
           sn: deviceNumber,
-          template: device.template || deviceNumber || 'DEFAULT_DOWNHOLE_REPORT'
+          template: device.template || deviceNumber || 'DEFAULT_DOWNHOLE_REPORT',
+          orderType: order.orderType,
         })
       })
     })

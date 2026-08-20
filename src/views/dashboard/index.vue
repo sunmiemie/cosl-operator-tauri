@@ -5,26 +5,7 @@ import { http } from '@/services/http'
 import { useAuth } from '@/composables/useAuth'
 import { useTheme } from '@/composables/useTheme'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { PieChart, BarChart } from 'echarts/charts'
-import {
-  TitleComponent,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent,
-} from 'echarts/components'
-
-// 注册 ECharts 组件
-use([
-  CanvasRenderer,
-  PieChart,
-  BarChart,
-  TitleComponent,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent,
-])
+import '@/utils/echarts'
 
 // 用户信息和主题
 const { userInfo, getAuthHeaders } = useAuth()

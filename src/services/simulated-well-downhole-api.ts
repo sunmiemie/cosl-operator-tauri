@@ -23,6 +23,10 @@ export interface SimulatedWellDownholeDevicePayload {
   id?: string | number
   orderId?: string
   order_id?: string
+  orderDbId?: number | string
+  order_db_id?: number | string
+  deviceDbId?: number | string
+  device_db_id?: number | string
   customer?: string
   deviceName?: string
   name?: string
@@ -31,6 +35,8 @@ export interface SimulatedWellDownholeDevicePayload {
   template?: string
   templateName?: string
   template_name?: string
+  orderType?: 0 | 1
+  order_type?: 0 | 1
   supportingTools?: SimulatedWellSupportingTool[]
   supporting_tools?: SimulatedWellSupportingTool[]
   selectedSupportingTools?: SimulatedWellSupportingTool[]
@@ -53,10 +59,11 @@ export interface SimulatedWellDownholeWorkItem {
   repair_order_number?: string
   env_text: string
   interval_text: string
-  order_ids?: string[]
-  devices?: SimulatedWellDownholeDevicePayload[]
-  supportingTools?: SimulatedWellSupportingTool[]
-  supporting_tools?: SimulatedWellSupportingTool[]
+  order_ids?: string[] | string
+  order_type?: 0 | 1
+  devices?: SimulatedWellDownholeDevicePayload[] | string
+  supportingTools?: SimulatedWellSupportingTool[] | string
+  supporting_tools?: SimulatedWellSupportingTool[] | string
   device_count: number
   status: number
   status_text?: string
@@ -149,12 +156,12 @@ function formatSimulatedWellUnit(value: unknown, unit: 'm' | '℃' | 'MPa') {
 function namedValues(text: string, labels: string[]) {
   const labelPattern = labels.join('|')
   const expression = new RegExp(
-    `(${labelPattern})\\s*[:：]?\\s*(.*?)(?=\\s*(?:/|\\n)?\\s*(?:${labelPattern})\\s*[:：]?|\\s*$)`,
+    `(${labelPattern})\\s*[:：]?\\s*(.*?)(?=\\s*(?:[/\\n,，;；])?\\s*(?:${labelPattern})\\s*[:：]?|\\s*$)`,
     'g',
   )
   const values: Record<string, string> = {}
   for (const match of text.matchAll(expression)) {
-    values[match[1]] = match[2].replace(/[\\s/]+$/, '').trim()
+    values[match[1]] = match[2].replace(/[\\s/,，;；]+$/, '').trim()
   }
   return values
 }
@@ -184,6 +191,18 @@ export function formatSimulatedWellEnvironment(value: unknown) {
     pressure !== undefined && pressure !== null && `${pressure}`.trim() !== '' ? `井压: ${formatSimulatedWellUnit(pressure, 'MPa')}` : '',
   ].filter(Boolean)
   return parts.length ? parts.join(' / ') : '-'
+}
+
+/** 将接口中的测试环境转换为编辑表单使用的无单位值。 */
+export function parseSimulatedWellEnvironment(value: unknown) {
+  const env: any = value && typeof value === 'object' ? value : {}
+  const text = typeof value === 'string' ? value : String(env?.text ?? env?.env_text ?? '')
+  const values = namedValues(text, ['井深', '井温', '井压'])
+  return {
+    wellDepth: stripSimulatedWellUnit(values['井深'] ?? env?.wellDepth ?? env?.depth, 'm'),
+    wellTemperature: stripSimulatedWellUnit(values['井温'] ?? env?.wellTemperature ?? env?.temperature, '℃'),
+    wellPressure: stripSimulatedWellUnit(values['井压'] ?? env?.wellPressure ?? env?.pressure, 'MPa'),
+  }
 }
 
 function formatSimulatedWellRange(value: unknown) {
@@ -222,6 +241,25 @@ export function formatSimulatedWellInterval(value: unknown) {
     ? `${formatSimulatedWellUnit(interval.repeatFrom || '-', 'm')}~${formatSimulatedWellUnit(interval.repeatTo || '-', 'm')}`
     : ''
   return [main ? `主测井段: ${main}` : '', repeat ? `复测井段: ${repeat}` : ''].filter(Boolean).join(' / ') || '-'
+}
+
+/** 将接口中的测试井段转换为编辑表单使用的无单位值。 */
+export function parseSimulatedWellInterval(value: unknown) {
+  const interval: any = value && typeof value === 'object' ? value : {}
+  const text = typeof value === 'string' ? value : String(interval?.text ?? interval?.interval_text ?? '')
+  const values = namedValues(text, ['主测井段', '复测井段', '主段', '重复段'])
+  const splitRange = (range: unknown) => {
+    const [from = '', to = ''] = String(range ?? '').split('~', 2)
+    return { from: stripSimulatedWellUnit(from, 'm'), to: stripSimulatedWellUnit(to, 'm') }
+  }
+  const main = splitRange(values['主测井段'] ?? values['主段'])
+  const repeat = splitRange(values['复测井段'] ?? values['重复段'])
+  return {
+    mainFrom: main.from || stripSimulatedWellUnit(interval?.mainFrom, 'm'),
+    mainTo: main.to || stripSimulatedWellUnit(interval?.mainTo, 'm'),
+    repeatFrom: repeat.from || stripSimulatedWellUnit(interval?.repeatFrom, 'm'),
+    repeatTo: repeat.to || stripSimulatedWellUnit(interval?.repeatTo, 'm'),
+  }
 }
 
 function buildEnvironmentText(payload: any) {

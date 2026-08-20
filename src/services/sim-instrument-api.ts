@@ -11,6 +11,8 @@ export interface SimInstrumentListItem {
 }
 
 export interface ListSimInstrumentsParams {
+  currentPage?: number
+  /** @deprecated 请使用 currentPage，保留该字段兼容现有调用。 */
   page?: number
   pageSize?: number
   sn?: string
@@ -35,7 +37,8 @@ export async function listSimInstruments(
   headers?: Record<string, string>
 ): Promise<ApiResponse<SimInstrumentListResponse>> {
   const query: Record<string, string> = {}
-  if (params.page !== undefined) query.page = String(params.page)
+  const currentPage = params.currentPage ?? params.page
+  if (currentPage !== undefined) query.currentPage = String(currentPage)
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.sn) query.sn = params.sn
   if (params.name) query.name = params.name

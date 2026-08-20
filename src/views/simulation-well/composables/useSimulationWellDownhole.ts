@@ -12,6 +12,7 @@ export function useSimulationWellDownhole(todayScheduledOrders: Readonly<{ value
           deviceName: device.name,
           sn: device.sn || `SN-${order.id}-${String(idx + 1).padStart(3, '0')}`,
           template: device.template || 'DEFAULT_DOWNHOLE_REPORT',
+          orderType: order.orderType,
         })
       })
     })
