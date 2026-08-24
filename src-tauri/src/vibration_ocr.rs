@@ -65,51 +65,6 @@ fn ensure_exists(path: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_python_program(python_path: Option<String>) -> Result<String, String> {
-    let candidate = python_path.unwrap_or_default().trim().to_string();
-    if !candidate.is_empty() {
-        let looks_like_path =
-            candidate.contains('\\') || candidate.contains('/') || candidate.contains(':');
-        if looks_like_path {
-            ensure_exists(&candidate, "Python解释器路径")?;
-        }
-        return Ok(candidate);
-    }
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        let candidates = [
-            current_dir.join(".venv-ocr").join("bin").join("python"),
-            current_dir
-                .join(".venv-ocr")
-                .join("Scripts")
-                .join("python.exe"),
-            current_dir
-                .join("..")
-                .join(".venv-ocr")
-                .join("bin")
-                .join("python"),
-            current_dir
-                .join("..")
-                .join(".venv-ocr")
-                .join("Scripts")
-                .join("python.exe"),
-            current_dir.join(".venv").join("bin").join("python"),
-            current_dir.join(".venv").join("Scripts").join("python.exe"),
-        ];
-        for path in candidates {
-            if path.exists() {
-                return Ok(path.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Ok(if cfg!(target_os = "windows") {
-        "python".to_string()
-    } else {
-        "python3".to_string()
-    })
-}
-
 fn ensure_ocr_dependencies(python_program: &str) -> Result<(), String> {
     let script = if cfg!(target_os = "linux") {
         "import cv2, numpy, onnxruntime, paddleocr, prometheus_client, pydantic, yaml, gi; gi.require_version('Gst', '1.0'); from gi.repository import Gst, GstApp"
@@ -390,7 +345,7 @@ pub fn start_vibration_ocr_stream(
     test_mode: Option<String>,
     order_number: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let python_program = resolve_python_program(python_path)?;
+    let python_program = crate::ocr_runtime::resolve_ocr_python(&app, python_path)?;
     ensure_ocr_dependencies(&python_program)?;
     let script_path = resolve_script_path(&app)?;
     let model_dir = resolve_model_dir(&app)?;

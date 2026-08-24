@@ -5,6 +5,7 @@ mod flojoy;
 mod halt_hass_mqtt;
 mod high_temp_pressure_ocr;
 mod ocr;
+mod ocr_runtime;
 mod scanner;
 mod vibration_ocr;
 

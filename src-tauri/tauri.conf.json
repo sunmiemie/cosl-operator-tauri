@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm run prepare:ocr-runtime && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -51,7 +51,8 @@
       "resources/vibration/ocr-service/ocr_service/ocr/*.py",
       "resources/vibration/ocr-service/ocr_service/vision/*.py",
       "resources/vibration/ocr-service/bin/**/*",
-      "resources/high-temp-pressure/**/*"
+      "resources/high-temp-pressure/**/*",
+      "resources/ocr-runtime/**/*"
     ]
   }
 }

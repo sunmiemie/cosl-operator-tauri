@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 .venv-video
 .venv-ocr
+src-tauri/resources/ocr-runtime/*
+!src-tauri/resources/ocr-runtime/runtime-placeholder.txt
 artifacts/
 __pycache__/
 *.py[cod]

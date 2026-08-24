@@ -67,61 +67,6 @@ fn ensure_exists(path: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_python_program(python_path: Option<String>) -> Result<String, String> {
-    let candidate = python_path.unwrap_or_default().trim().to_string();
-    if !candidate.is_empty() {
-        let looks_like_path =
-            candidate.contains('\\') || candidate.contains('/') || candidate.contains(':');
-        if looks_like_path {
-            ensure_exists(&candidate, "Python解释器路径")?;
-        }
-        return Ok(candidate);
-    }
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        let candidates = [
-            current_dir.join(".venv-ocr").join("bin").join("python"),
-            current_dir
-                .join(".venv-ocr")
-                .join("Scripts")
-                .join("python.exe"),
-            current_dir
-                .join("..")
-                .join(".venv-ocr")
-                .join("bin")
-                .join("python"),
-            current_dir
-                .join("..")
-                .join(".venv-ocr")
-                .join("Scripts")
-                .join("python.exe"),
-            current_dir.join(".venv").join("Scripts").join("python.exe"),
-            current_dir
-                .join("..")
-                .join(".venv")
-                .join("Scripts")
-                .join("python.exe"),
-            current_dir.join(".venv").join("bin").join("python"),
-            current_dir
-                .join("..")
-                .join(".venv")
-                .join("bin")
-                .join("python"),
-        ];
-        for path in candidates {
-            if path.exists() {
-                return Ok(path.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Ok(if cfg!(target_os = "windows") {
-        "python".to_string()
-    } else {
-        "python3".to_string()
-    })
-}
-
 fn ensure_ocr_dependencies(python_program: &str) -> Result<(), String> {
     let import_check = create_hidden_command(python_program)
         .args([
@@ -1011,7 +956,7 @@ pub fn start_high_temp_pressure_ocr_stream(
     if device_index < 0 {
         return Err("采集卡设备索引无效".to_string());
     }
-    let python_program = resolve_python_program(python_path)?;
+    let python_program = crate::ocr_runtime::resolve_ocr_python(&app, python_path)?;
     ensure_ocr_dependencies(&python_program)?;
     let script_path = resolve_script_path(&app)?;
     let output_dir = create_output_dir(&app)?;
@@ -1327,10 +1272,20 @@ pub fn read_high_temp_pressure_curve_records(
     }
 
     let json_path = export_path.join("ocr_readings_0.5s.json");
-    let payload_text = fs::read_to_string(&json_path)
-        .map_err(|error| format!("读取采样JSON失败 {}: {}", json_path.to_string_lossy(), error))?;
-    let payload: serde_json::Value = serde_json::from_str(&payload_text)
-        .map_err(|error| format!("解析采样JSON失败 {}: {}", json_path.to_string_lossy(), error))?;
+    let payload_text = fs::read_to_string(&json_path).map_err(|error| {
+        format!(
+            "读取采样JSON失败 {}: {}",
+            json_path.to_string_lossy(),
+            error
+        )
+    })?;
+    let payload: serde_json::Value = serde_json::from_str(&payload_text).map_err(|error| {
+        format!(
+            "解析采样JSON失败 {}: {}",
+            json_path.to_string_lossy(),
+            error
+        )
+    })?;
     let records = payload
         .get("records")
         .and_then(|value| value.as_array())

@@ -1,0 +1,1 @@
+Windows 打包时由 scripts/prepare-ocr-runtime.mjs 在此生成 Python 3.12 OCR 运行时。
