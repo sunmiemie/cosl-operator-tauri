@@ -8,6 +8,7 @@ mod ocr;
 mod ocr_runtime;
 mod scanner;
 mod vibration_ocr;
+mod simulated_well_upload;
 
 use tauri::{Manager, RunEvent};
 
@@ -112,6 +113,7 @@ pub fn run() {
         .manage(vibration_ocr::VibrationOcrState::default())
         // 注册 HALT-HASS 工作台 MQTT 状态管理
         .manage(halt_hass_mqtt::HaltHassMqttState::default())
+        .manage(simulated_well_upload::SimulatedWellUploadState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -192,6 +194,9 @@ pub fn run() {
             high_temp_pressure_ocr::read_high_temp_pressure_business_report,
             high_temp_pressure_ocr::read_high_temp_pressure_curve_records,
             high_temp_pressure_ocr::write_high_temp_pressure_curve_chart,
+            simulated_well_upload::get_simulated_well_upload_files,
+            simulated_well_upload::upload_simulated_well_file_chunk,
+            simulated_well_upload::cancel_simulated_well_upload,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

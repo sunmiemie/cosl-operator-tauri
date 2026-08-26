@@ -44,6 +44,10 @@ ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }  # ONNX Runtime
 imageproc = "0.25"                                               # 图像预处理
 ndarray = "0.16"                                                 # 张量操作
 
+# 文件上传
+tokio-util = { version = "0.7.19", features = ["io"] }
+reqwest = { version = "0.13.4", features = ["stream", "json"] }
+
 # nokhwa 摄像头库 - 跨平台
 # Windows: 使用 Media Foundation
 # Linux: 使用 Video4Linux

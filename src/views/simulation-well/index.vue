@@ -39,6 +39,10 @@ const activeTestOrdersSnapshot = ref<WorkOrder[]>([])
 const activeStartDevicesSnapshot = ref<DownholeDevice[]>([])
 const activeTestHydrating = ref(false)
 
+function normalizeOrderType(value: unknown): 0 | 1 {
+  return Number(value) === 1 ? 1 : 0
+}
+
 const selectedOrdersFromSchedule = computed<WorkOrder[]>(() => schedule.selectedStartOrders.value)
 
 const productPickerRows = computed(() => {
@@ -51,7 +55,11 @@ const productPickerRows = computed(() => {
       customer: order.customer,
       name: device.name,
       sn: device.code || device.sn || '',
-      template: device.template || device.code || device.sn || 'DEFAULT_DOWNHOLE_REPORT'
+      orderType: normalizeOrderType(order.orderType),
+      // 研究院工单默认采用手工配接仪器，不预选测试报告模板。
+      template: normalizeOrderType(order.orderType) === 1
+        ? ''
+        : (device.template || device.code || device.sn || 'DEFAULT_DOWNHOLE_REPORT'),
     }))
   )
 })
@@ -67,7 +75,8 @@ const selectedDevicesFromSchedule = computed<DownholeDevice[]>(() => {
       customer: row.customer,
       deviceName: row.name,
       sn: row.sn,
-      template: row.template
+      template: row.template,
+      orderType: row.orderType,
     }))
 })
 
@@ -78,15 +87,19 @@ const selectedDevicesFromRoute = computed<DownholeDevice[]>(() => {
   try {
     const parsed = JSON.parse(jsonText)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(Boolean).map((item: any) => ({
-      orderId: String(item.orderId || ''),
-      orderDbId: Number(item.orderDbId || 0) || undefined,
-      deviceDbId: Number(item.deviceDbId || 0) || undefined,
-      customer: String(item.customer || ''),
-      deviceName: String(item.deviceName || ''),
-      sn: String(item.sn || ''),
-      template: String(item.template || 'DEFAULT_DOWNHOLE_REPORT')
-    }))
+    return parsed.filter(Boolean).map((item: any) => {
+      const orderType = normalizeOrderType(item.orderType ?? item.order_type)
+      return {
+        orderId: String(item.orderId || ''),
+        orderDbId: Number(item.orderDbId || 0) || undefined,
+        deviceDbId: Number(item.deviceDbId || 0) || undefined,
+        customer: String(item.customer || ''),
+        deviceName: String(item.deviceName || ''),
+        sn: String(item.sn || ''),
+        template: orderType === 1 ? '' : String(item.template || 'DEFAULT_DOWNHOLE_REPORT'),
+        orderType,
+      }
+    })
   } catch {
     return []
   }
@@ -115,6 +128,7 @@ const startSelectedOrders = computed<WorkOrder[]>(() => {
         testPurpose: order?.testPurpose || '',
         testSteps: order?.testSteps || '',
         safetyRisks: order?.safetyRisks || '',
+        orderType: device.orderType ?? order?.orderType ?? 0,
         deviceList: [],
         supportingTools: order?.supportingTools || []
       })
@@ -125,7 +139,7 @@ const startSelectedOrders = computed<WorkOrder[]>(() => {
       name: device.deviceName,
       sn: device.sn,
       code: device.sn,
-      template: device.template || device.sn || 'DEFAULT_DOWNHOLE_REPORT'
+      template: device.orderType === 1 ? '' : (device.template || device.sn || 'DEFAULT_DOWNHOLE_REPORT')
     })
     wo.devices = wo.deviceList.length
   })
@@ -207,6 +221,11 @@ function handleStartScheduledTest() {
     ElMessage.warning('请先在日历中点击选择要开始实验的工单')
     return
   }
+  const selectedOrderTypes = new Set(selectedOrdersFromSchedule.value.map((order) => order.orderType))
+  if (selectedOrderTypes.has(0) && selectedOrderTypes.has(1)) {
+    ElMessage.warning('研究院工单和非研究院工单不能同时进行测试，请分开选择后再试。')
+    return
+  }
   if (selectedProductIds.value.length === 0) selectAllProducts()
   productPickerVisible.value = true
 }
@@ -264,6 +283,7 @@ function mapDtoToWorkOrder(dto: SimulatedWellOrderDTO): WorkOrder {
     testPurpose: textValue(dto.test_purpose),
     testSteps: textValue(dto.test_steps),
     safetyRisks: textValue(dto.safety_risks),
+    orderType: normalizeOrderType(dto.order_type),
     deviceList: (dto.devices || []).map((device) => ({
       id: `${dto.task_number}::${device.device_number}`,
       dbId: device.id,
@@ -425,15 +445,21 @@ async function hydrateActiveTestFromDatabase() {
           activeTestOperation.value = found
           ;(Array.isArray(found.order_ids) ? found.order_ids : []).forEach(addId)
           if (!activeStartDevicesSnapshot.value.length && Array.isArray(found.devices)) {
-            activeStartDevicesSnapshot.value = found.devices.map((device: any) => ({
-              orderId: textValue(device.orderId || device.order_id),
-              orderDbId: Number(device.orderDbId || device.order_db_id || 0) || undefined,
-              deviceDbId: Number(device.deviceDbId || device.device_db_id || 0) || undefined,
-              customer: textValue(device.customer),
-              deviceName: textValue(device.deviceName || device.name),
-              sn: textValue(device.sn || device.code || device.device_number),
-              template: textValue(device.template || device.templateName || device.template_name) || 'DEFAULT_DOWNHOLE_REPORT'
-            }))
+            activeStartDevicesSnapshot.value = found.devices.map((device: any) => {
+              const orderType = normalizeOrderType(device.orderType ?? device.order_type)
+              return {
+                orderId: textValue(device.orderId || device.order_id),
+                orderDbId: Number(device.orderDbId || device.order_db_id || 0) || undefined,
+                deviceDbId: Number(device.deviceDbId || device.device_db_id || 0) || undefined,
+                customer: textValue(device.customer),
+                deviceName: textValue(device.deviceName || device.name),
+                sn: textValue(device.sn || device.code || device.device_number),
+                // 研究院产品的空模板表示继续使用简化报告，不能在恢复时填入默认模板。
+                template: textValue(device.template || device.templateName || device.template_name)
+                  || (orderType === 1 ? '' : 'DEFAULT_DOWNHOLE_REPORT'),
+                orderType,
+              }
+            })
           }
         }
       }

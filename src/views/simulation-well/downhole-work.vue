@@ -142,9 +142,23 @@ const normalizeTextList = (value: any): string[] => {
   return []
 }
 
+const normalizeArray = <T = any>(value: unknown): T[] => {
+  if (Array.isArray(value)) return value as T[]
+  if (typeof value !== 'string') return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed as T[] : []
+  } catch {
+    return []
+  }
+}
+
+const normalizeOrderType = (value: unknown): 0 | 1 => (Number(value) === 1 ? 1 : 0)
+
 const normalizeDeviceTools = (device: any) => {
-  const tools = device?.selectedSupportingTools ?? device?.selected_supporting_tools ?? device?.supportingTools ?? device?.support_tools ?? []
-  if (!Array.isArray(tools)) return []
+  const tools = normalizeArray(
+    device?.selectedSupportingTools ?? device?.selected_supporting_tools ?? device?.supportingTools ?? device?.support_tools,
+  )
   return tools
     .map((item: any) => {
       if (typeof item === 'string') {
@@ -189,20 +203,36 @@ const formatDetailTool = (tool: any) => {
 }
 
 const detailOrderList = computed(() => normalizeTextList(detailRow.value?.order_ids))
-const detailDeviceList = computed(() => (Array.isArray(detailRow.value?.devices) ? detailRow.value?.devices : []))
+const detailDeviceList = computed(() => normalizeArray(detailRow.value?.devices))
 const getDeviceName = (device: any) => device?.deviceName || device?.name || device?.label || '-'
 const getDeviceSn = (device: any) => device?.sn || device?.code || device?.device_number || '-'
 
 const buildEditOrdersAndDevices = (row: SimulatedWellDownholeWorkItem) => {
   const orders = new Map<string, any>()
   const orderIds = normalizeTextList(row.order_ids)
-  const devices = (Array.isArray(row.devices) ? row.devices : []).map((device: any, index: number) => {
+  const allSupportingTools = normalizeArray(row.supportingTools ?? row.supporting_tools)
+  orderIds.forEach((orderId) => {
+    orders.set(orderId, {
+      id: orderId,
+      customer: '-',
+      orderType: normalizeOrderType((row as any).orderType ?? row.order_type),
+      devices: 0,
+      status: '',
+      createTime: '',
+      planTime: '',
+      taskDesc: '',
+      deviceList: [],
+    })
+  })
+  const devices = normalizeArray(row.devices).map((device: any, index: number) => {
     const orderId = String(device?.orderId || device?.order_id || orderIds[0] || '')
     const customer = String(device?.customer || '')
+    const orderType = normalizeOrderType(device?.orderType ?? device?.order_type ?? (row as any).orderType ?? row.order_type)
     if (orderId && !orders.has(orderId)) {
       orders.set(orderId, {
         id: orderId,
         customer: customer || '-',
+        orderType,
         devices: 0,
         status: '',
         createTime: '',
@@ -211,15 +241,19 @@ const buildEditOrdersAndDevices = (row: SimulatedWellDownholeWorkItem) => {
         deviceList: []
       })
     }
-    const selectedTools = normalizeDeviceTools(device)
-    const availableTools = Array.isArray(device?.availableSupportingTools)
-      ? device.availableSupportingTools
-      : Array.isArray(device?.available_supporting_tools)
-        ? device.available_supporting_tools
-        : selectedTools
+    const globalTools = allSupportingTools.filter((tool: any) => {
+      const toolOrderId = String(tool?.orderId || tool?.order_id || '')
+      const sourceName = String(tool?.sourceDeviceName || tool?.source_device_name || '')
+      return toolOrderId === orderId && (!sourceName || sourceName === getDeviceName(device))
+    })
+    const selectedTools = normalizeDeviceTools(device).length ? normalizeDeviceTools(device) : globalTools
+    const availableTools = normalizeArray(device?.availableSupportingTools ?? device?.available_supporting_tools)
+    const normalizedAvailableTools = availableTools.length ? availableTools : selectedTools
     const normalizedDevice = {
       id: device?.id || `${orderId}::${getDeviceSn(device) || index + 1}`,
       orderId,
+      orderDbId: device?.orderDbId ?? device?.order_db_id,
+      deviceDbId: device?.deviceDbId ?? device?.device_db_id,
       customer,
       deviceName: getDeviceName(device),
       name: getDeviceName(device),
@@ -227,14 +261,19 @@ const buildEditOrdersAndDevices = (row: SimulatedWellDownholeWorkItem) => {
       code: device?.code || device?.sn || '',
       template: device?.template || '',
       templateName: device?.templateName || device?.template_name || '',
+      orderType,
       supportingTools: selectedTools,
       selectedSupportingTools: selectedTools,
-      availableSupportingTools: availableTools
+      availableSupportingTools: normalizedAvailableTools,
     }
     const order = orders.get(orderId)
     if (order) {
+      order.orderType = orderType
+      order.orderDbId = normalizedDevice.orderDbId
+      if (customer) order.customer = customer
       order.deviceList.push({
         id: normalizedDevice.id,
+        dbId: normalizedDevice.deviceDbId,
         name: normalizedDevice.name,
         sn: normalizedDevice.sn,
         code: normalizedDevice.code,

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
 import { invoke } from '@tauri-apps/api/core'
 import type { EquipmentReportUploadFile } from '@/services/equipment-report-api'
+import { echarts } from '@/utils/echarts'
 
 type CurvePoint = {
   timestamp: number
@@ -458,7 +458,7 @@ function buildPrintGraphics(source: CurvePoint[], range?: HighTempPressureCurveR
 function buildChartOption(
   exporting = false,
   exportRange?: HighTempPressureCurveRangeDraft
-): echarts.EChartsOption {
+): echarts.EChartsCoreOption {
   const exportStart = exportRange?.startMs ?? selectedStartMs.value
   const exportEnd = exportRange?.endMs ?? selectedEndMs.value
   const source = exporting && exportStart !== null && exportEnd !== null

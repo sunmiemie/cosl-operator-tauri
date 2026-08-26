@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
@@ -12,7 +12,10 @@ import {
   listSimInstruments,
   type SimInstrumentListItem,
 } from '@/services/sim-instrument-api'
-import { stripSimulatedWellUnit } from '@/services/simulated-well-downhole-api'
+import {
+  parseSimulatedWellEnvironment,
+  parseSimulatedWellInterval,
+} from '@/services/simulated-well-downhole-api'
 
 const props = defineProps<{
   todayScheduledOrders: any[]
@@ -52,6 +55,7 @@ type ResolvedDeviceRow = {
   code: string
   template: string
   templateName: string
+  persistedTemplate: string
   supportTools: TemplateInstrument[]
   selectedSupportTools?: TemplateInstrument[]
 }
@@ -66,6 +70,23 @@ const externalInstrumentModelMap = ref<Record<string, string>>({})
 const internalInstrumentOptionsMap = ref<Record<string, SimInstrumentListItem[]>>({})
 const internalInstrumentLoadingMap = ref<Record<string, boolean>>({})
 const internalInstrumentMessageMap = ref<Record<string, string>>({})
+const researchInstrumentMap = ref<Record<string, TemplateInstrument[]>>({})
+const instrumentPickerVisible = ref(false)
+const instrumentPickerLoading = ref(false)
+const instrumentPickerTableRef = ref<any>(null)
+const instrumentPickerRows = ref<SimInstrumentListItem[]>([])
+const instrumentPickerTotal = ref(0)
+const instrumentPickerPage = ref(1)
+const instrumentPickerPageSize = ref(10)
+const instrumentPickerSn = ref('')
+const instrumentPickerName = ref('')
+const instrumentPickerTarget = ref<{ orderId: string; device: ResolvedDeviceRow } | null>(null)
+const instrumentPickerDraft = ref<Record<number, SimInstrumentListItem>>({})
+const syncingInstrumentPickerSelection = ref(false)
+
+function normalizeOrderType(value: unknown): 0 | 1 {
+  return Number(value) === 1 ? 1 : 0
+}
 
 function sameStringMap(left: Record<string, string>, right: Record<string, string>) {
   const leftKeys = Object.keys(left)
@@ -133,8 +154,8 @@ function normalizeInstrument(item: any): TemplateInstrument {
     return parseTemplateStringItem(item)
   }
   return {
-    code: cleanTemplateText(item?.code || ''),
-    zh: cleanTemplateText(item?.zh || item?.nameCN || item?.name || ''),
+    code: cleanTemplateText(item?.templateInstrumentCode || item?.code || ''),
+    zh: cleanTemplateText(item?.templateInstrumentName || item?.zh || item?.nameCN || item?.name || ''),
     en: cleanTemplateText(item?.en || item?.nameEN || ''),
     internalInstrumentId: item?.internalInstrumentId,
     internalInstrumentSn: item?.internalInstrumentSn,
@@ -175,6 +196,12 @@ function getSourceToolList(device: any, keys: string[]) {
   for (const key of keys) {
     const value = device?.[key]
     if (Array.isArray(value)) return value
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value)
+        if (Array.isArray(parsed)) return parsed
+      } catch {}
+    }
   }
   return []
 }
@@ -249,8 +276,8 @@ function findTemplateByCode(templateCodeValue: string): SimulatedWellReportTempl
 function resolveTemplateMeta(deviceName: string, fallbackTemplate?: string, explicitTemplate?: string): ResolvedTemplateMeta {
   const matchedTemplate =
     findTemplateByCode(explicitTemplate || '') ||
-    findMatchedTemplate(deviceName) ||
-    findTemplateByCode(fallbackTemplate || '')
+    findTemplateByCode(fallbackTemplate || '') ||
+    findMatchedTemplate(deviceName)
   if (!matchedTemplate) {
     return {
       templateCode: '',
@@ -332,22 +359,54 @@ const startedOrderDevices = computed(() => {
         id: orderId,
         orderDbId: device?.orderDbId || orderMeta?.dbId,
         customer: device?.customer || orderMeta?.customer || '-',
+        orderType: normalizeOrderType(device?.orderType ?? device?.order_type ?? orderMeta?.orderType ?? orderMeta?.order_type),
         deviceList: []
       })
     }
+    const orderType = grouped.get(orderId).orderType
     const deviceStateKey = getDeviceStateKey(orderId, device, index)
-    const resolvedTemplate = resolveTemplateMeta(
-      device?.deviceName || device?.name || '',
-      device?.template || 'CBMT61XA_REPORT',
-      selectedTemplateMap.value[deviceStateKey],
+    const persistedTemplate = cleanTemplateText(device?.template || device?.templateName || device?.template_name)
+    // 研究院工单默认不关联模板；操作人主动选择后，该产品使用完整模板报告流程。
+    const selectedTemplate = selectedTemplateMap.value[deviceStateKey]
+    const selectedResearchTemplate = orderType === 1 ? findTemplateByCode(selectedTemplate || '') : null
+    const resolvedTemplate = orderType === 1
+      ? (selectedResearchTemplate
+          ? {
+              templateCode: selectedResearchTemplate.report_no || '',
+              templateName: selectedResearchTemplate.report_name || '',
+              supportTools: mergeInstrumentLists(selectedResearchTemplate.match_instruments as any[]),
+            }
+          : { templateCode: '', templateName: '', supportTools: [] })
+      : resolveTemplateMeta(
+          device?.deviceName || device?.name || '',
+          device?.template || 'CBMT61XA_REPORT',
+          selectedTemplate,
+        )
+    const sourceAvailableTools = getSourceToolList(
+      device,
+      ['availableSupportingTools', 'available_supporting_tools', 'supportTools', 'support_tools'],
     )
-    const availableTools = mergeInstrumentLists(
-      getSourceToolList(device, ['availableSupportingTools', 'available_supporting_tools', 'supportTools', 'support_tools']),
-      resolvedTemplate.supportTools,
+    const isResearchTemplateMode = orderType === 1 && !!resolvedTemplate.templateCode
+    const persistedTemplateCode = findTemplateByCode(persistedTemplate)?.report_no || persistedTemplate
+    const restoresPersistedTemplate = isResearchTemplateMode
+      && normalizeCode(persistedTemplateCode) === normalizeCode(resolvedTemplate.templateCode)
+    const availableTools = orderType === 1
+      ? (isResearchTemplateMode
+          ? mergeInstrumentLists(
+              restoresPersistedTemplate ? sourceAvailableTools : [],
+              resolvedTemplate.supportTools,
+            )
+          : [])
+      : mergeInstrumentLists(sourceAvailableTools, resolvedTemplate.supportTools)
+    const selectedToolSource = getSourceToolList(
+      device,
+      ['selectedSupportingTools', 'selected_supporting_tools', 'supportingTools', 'supporting_tools'],
     )
-    const selectedTools = mergeInstrumentLists(
-      getSourceToolList(device, ['selectedSupportingTools', 'selected_supporting_tools', 'supportingTools', 'supporting_tools']),
-    )
+    const selectedTools = orderType === 1
+      ? (isResearchTemplateMode
+          ? mergeInstrumentLists(restoresPersistedTemplate ? selectedToolSource : [])
+          : normalizeResearchSelectedTools(selectedToolSource))
+      : mergeInstrumentLists(selectedToolSource)
     grouped.get(orderId).deviceList.push({
       id: device?.id || `${orderId}_${device?.sn || index + 1}`,
       deviceDbId: device?.deviceDbId || device?.dbId,
@@ -357,6 +416,7 @@ const startedOrderDevices = computed(() => {
       code: device?.code || device?.sn || '',
       template: resolvedTemplate.templateCode,
       templateName: resolvedTemplate.templateName,
+      persistedTemplate,
       supportTools: availableTools,
       selectedSupportTools: selectedTools,
     })
@@ -365,14 +425,247 @@ const startedOrderDevices = computed(() => {
 })
 
 const startedOrderIds = computed(() => startedOrderDevices.value.map((order: any) => order.id))
+
+function usesTemplateToolMode(order: any, device: ResolvedDeviceRow) {
+  return order.orderType !== 1 || !!device.template
+}
+
+const shouldShowTestInformation = computed(() =>
+  startedOrderDevices.value.some(
+    (order: any) => order.orderType !== 1 || (order.deviceList || []).some((device: ResolvedDeviceRow) => !!device.template),
+  ),
+)
+
+function simInstrumentToTool(item: SimInstrumentListItem): TemplateInstrument {
+  return {
+    code: item.model_number || '',
+    zh: item.name || '',
+    en: '',
+    internalInstrumentId: item.id,
+    internalInstrumentSn: item.sn,
+    internalInstrumentName: item.name,
+    modelNumber: item.model_number,
+    usedCount: item.used_count,
+    remainCount: item.remain_count,
+  }
+}
+
+function toolToSimInstrument(tool: TemplateInstrument): SimInstrumentListItem | null {
+  const id = Number(tool.internalInstrumentId)
+  if (!Number.isFinite(id) || id <= 0) return null
+  return {
+    id,
+    sn: tool.internalInstrumentSn || '',
+    name: tool.internalInstrumentName || tool.zh || tool.code || '',
+    model_number: tool.modelNumber || tool.code || '',
+    used_count: Number(tool.usedCount ?? 0),
+    remain_count: Number(tool.remainCount ?? 0),
+    status: '',
+  }
+}
+
+function getResearchInstruments(device: ResolvedDeviceRow) {
+  return researchInstrumentMap.value[device.stateKey] || []
+}
+
+function normalizeResearchSelectedTools(tools: TemplateInstrument[]) {
+  const result: TemplateInstrument[] = []
+  const seen = new Set<string>()
+  ;(tools || []).forEach((item) => {
+    const tool = normalizeInstrument(item)
+    const key = tool.internalInstrumentId !== undefined && tool.internalInstrumentId !== null
+      ? `id:${tool.internalInstrumentId}`
+      : `sn:${tool.internalInstrumentSn || ''}`
+    if (key === 'sn:' || seen.has(key)) return
+    seen.add(key)
+    result.push(tool)
+  })
+  return result
+}
+
+watch(
+  startedOrderDevices,
+  (orders) => {
+    const next = { ...researchInstrumentMap.value }
+    const validKeys = new Set<string>()
+    orders.forEach((order: any) => {
+      if (order.orderType !== 1) return
+      ;(order.deviceList || []).forEach((device: ResolvedDeviceRow) => {
+        validKeys.add(device.stateKey)
+        if (next[device.stateKey] === undefined) {
+          next[device.stateKey] = device.template || device.persistedTemplate
+            ? []
+            : normalizeResearchSelectedTools(device.selectedSupportTools || [])
+        }
+      })
+    })
+    Object.keys(next).forEach((key) => {
+      if (!validKeys.has(key)) delete next[key]
+    })
+    researchInstrumentMap.value = next
+  },
+  { immediate: true, deep: true },
+)
+
+function instrumentStatusTagType(status: string): 'success' | 'warning' | 'danger' | 'info' {
+  if (status === '正常') return 'success'
+  if (status === '即将到期') return 'warning'
+  if (status === '已到期') return 'danger'
+  return 'info'
+}
+
+async function syncInstrumentPickerTableSelection() {
+  syncingInstrumentPickerSelection.value = true
+  await nextTick()
+  const table = instrumentPickerTableRef.value
+  if (!table) {
+    syncingInstrumentPickerSelection.value = false
+    return
+  }
+  table.clearSelection()
+  instrumentPickerRows.value.forEach((row) => {
+    if (instrumentPickerDraft.value[row.id]) table.toggleRowSelection(row, true)
+  })
+  await nextTick()
+  syncingInstrumentPickerSelection.value = false
+}
+
+async function loadInstrumentPickerRows() {
+  instrumentPickerLoading.value = true
+  try {
+    await initAuth()
+    const res = await listSimInstruments(
+      {
+        currentPage: instrumentPickerPage.value,
+        pageSize: instrumentPickerPageSize.value,
+        sn: instrumentPickerSn.value.trim() || undefined,
+        name: instrumentPickerName.value.trim() || undefined,
+      },
+      getAuthHeaders(),
+    )
+    if (!res.success || res.data?.code !== 0) {
+      throw new Error(res.error || res.data?.msg || '仪器列表加载失败')
+    }
+    syncingInstrumentPickerSelection.value = true
+    instrumentPickerRows.value = res.data.data?.list || []
+    instrumentPickerTotal.value = Number(res.data.data?.total || 0)
+    instrumentPickerPage.value = Number(res.data.data?.currentPage || instrumentPickerPage.value)
+    await syncInstrumentPickerTableSelection()
+  } catch (error: any) {
+    syncingInstrumentPickerSelection.value = true
+    instrumentPickerRows.value = []
+    instrumentPickerTotal.value = 0
+    ElMessage.error(error?.message || '仪器列表加载失败')
+    await nextTick()
+    syncingInstrumentPickerSelection.value = false
+  } finally {
+    instrumentPickerLoading.value = false
+  }
+}
+
+function openInstrumentPicker(orderId: string, device: ResolvedDeviceRow) {
+  instrumentPickerTarget.value = { orderId, device }
+  instrumentPickerDraft.value = {}
+  getResearchInstruments(device).forEach((tool) => {
+    const item = toolToSimInstrument(tool)
+    if (item) instrumentPickerDraft.value[item.id] = item
+  })
+  instrumentPickerSn.value = ''
+  instrumentPickerName.value = ''
+  instrumentPickerPage.value = 1
+  instrumentPickerVisible.value = true
+  void loadInstrumentPickerRows()
+}
+
+function handleInstrumentPickerSelectionChange(rows: SimInstrumentListItem[]) {
+  if (syncingInstrumentPickerSelection.value) return
+  const next = { ...instrumentPickerDraft.value }
+  instrumentPickerRows.value.forEach((row) => delete next[row.id])
+  rows.forEach((row) => { next[row.id] = row })
+  instrumentPickerDraft.value = next
+}
+
+function searchInstrumentPicker() {
+  instrumentPickerPage.value = 1
+  void loadInstrumentPickerRows()
+}
+
+function resetInstrumentPickerSearch() {
+  instrumentPickerSn.value = ''
+  instrumentPickerName.value = ''
+  instrumentPickerPage.value = 1
+  void loadInstrumentPickerRows()
+}
+
+function changeInstrumentPickerPage(page: number) {
+  instrumentPickerPage.value = page
+  void loadInstrumentPickerRows()
+}
+
+function confirmInstrumentPicker() {
+  const target = instrumentPickerTarget.value
+  if (!target) return
+  researchInstrumentMap.value = {
+    ...researchInstrumentMap.value,
+    [target.device.stateKey]: Object.values(instrumentPickerDraft.value).map(simInstrumentToTool),
+  }
+  instrumentPickerVisible.value = false
+}
+
+function removeResearchInstrument(device: ResolvedDeviceRow, tool: TemplateInstrument) {
+  researchInstrumentMap.value = {
+    ...researchInstrumentMap.value,
+    [device.stateKey]: getResearchInstruments(device).filter(
+      (item) => String(item.internalInstrumentId) !== String(tool.internalInstrumentId),
+    ),
+  }
+}
+
 const selectedSupportingOrders = computed(() =>
   startedOrderDevices.value
     .map((order: any) => ({
       ...order,
-      deviceList: (order.deviceList || []).filter((device: ResolvedDeviceRow) => device.supportTools?.length),
+      deviceList: (order.deviceList || []).filter(
+        (device: ResolvedDeviceRow) => usesTemplateToolMode(order, device) && device.supportTools?.length,
+      ),
     }))
     .filter((order: any) => order.deviceList.length),
 )
+
+const researchManualOrders = computed(() =>
+  startedOrderDevices.value
+    .filter((order: any) => order.orderType === 1)
+    .map((order: any) => ({
+      ...order,
+      deviceList: (order.deviceList || []).filter((device: ResolvedDeviceRow) => !device.template),
+    }))
+    .filter((order: any) => order.deviceList.length),
+)
+
+/** 编辑历史下井作业时，优先恢复数据库中仍有效的已保存模板。 */
+function restoreSavedTemplateSelections() {
+  if (props.mode !== 'edit' || !templateLibrary.value.length) return
+  const next = { ...selectedTemplateMap.value }
+  props.downholeDevices.forEach((device: any, index: number) => {
+    const orderId = String(device?.orderId || device?.order_id || '')
+    if (!orderId) return
+    const savedTemplate = cleanTemplateText(device?.template || device?.templateName || device?.template_name)
+    const stateKey = getDeviceStateKey(orderId, device, index)
+    const orderMeta = orderMetaMap.value.get(orderId)
+    const orderType = normalizeOrderType(device?.orderType ?? device?.order_type ?? orderMeta?.orderType ?? orderMeta?.order_type)
+    // 研究院工单的空模板是有效的手工配接状态，需要与“未初始化”区分。
+    if (orderType === 1 && !savedTemplate && next[stateKey] === undefined) {
+      next[stateKey] = ''
+      return
+    }
+    if (savedTemplate && next[stateKey] === undefined && findTemplateByCode(savedTemplate)) {
+      next[stateKey] = savedTemplate
+    }
+  })
+  if (!sameStringMap(selectedTemplateMap.value, next)) selectedTemplateMap.value = next
+}
+
+watch(templateLibrary, restoreSavedTemplateSelections, { immediate: true })
 
 watch(
   startedOrderDevices,
@@ -386,7 +679,11 @@ watch(
         if (next[key] && !findTemplateByCode(next[key])) {
           next[key] = device.template || ''
         }
-        if (next[key] === undefined && device.template) next[key] = device.template
+        if (next[key] === undefined) {
+          // 新建和编辑共用：研究院空模板需要显式匹配“未选择模板”选项。
+          if (order.orderType === 1 && !device.template) next[key] = ''
+          else if (device.template) next[key] = device.template
+        }
       })
     })
     Object.keys(next).forEach((key) => {
@@ -403,9 +700,31 @@ function getSupportToolKey(orderId: string, device: ResolvedDeviceRow, tool: Tem
   return [
     orderId,
     device.id,
+    normalizeCode(device.template),
     normalizeCode(tool.code),
     normalizeText(tool.zh || tool.en || tool.code),
   ].join('::')
+}
+
+function clearDeviceToolState(orderId: string, device: ResolvedDeviceRow) {
+  const prefix = `${orderId}::${device.id}::`
+  const withoutDevice = <T>(map: Record<string, T>) =>
+    Object.fromEntries(Object.entries(map).filter(([key]) => !key.startsWith(prefix))) as Record<string, T>
+
+  selectedSupportToolMap.value = withoutDevice(selectedSupportToolMap.value)
+  selectedInternalInstrumentMap.value = withoutDevice(selectedInternalInstrumentMap.value)
+  externalInstrumentModelMap.value = withoutDevice(externalInstrumentModelMap.value)
+  internalInstrumentOptionsMap.value = withoutDevice(internalInstrumentOptionsMap.value)
+  internalInstrumentLoadingMap.value = withoutDevice(internalInstrumentLoadingMap.value)
+  internalInstrumentMessageMap.value = withoutDevice(internalInstrumentMessageMap.value)
+  researchInstrumentMap.value = {
+    ...researchInstrumentMap.value,
+    [device.stateKey]: [],
+  }
+}
+
+function handleTemplateChange(orderId: string, device: ResolvedDeviceRow) {
+  clearDeviceToolState(orderId, device)
 }
 
 function getSelectedToolSnapshot(device: ResolvedDeviceRow, tool: TemplateInstrument) {
@@ -499,7 +818,13 @@ async function loadInternalInstrumentOptions(orderId: string, device: ResolvedDe
         rows = byName.data.data?.list || []
       }
     }
-    const availableRows = rows
+    const selectedSnapshot = getSelectedToolSnapshot(device, tool)
+    const savedInstrument = selectedSnapshot ? toolToSimInstrument(selectedSnapshot) : null
+    const availableRows = savedInstrument && !rows.some((item) =>
+      String(item.id) === String(savedInstrument.id) || item.sn === savedInstrument.sn,
+    )
+      ? [savedInstrument, ...rows]
+      : rows
     internalInstrumentOptionsMap.value = { ...internalInstrumentOptionsMap.value, [key]: availableRows }
     const current = selectedInternalInstrumentMap.value[key]
     if (current?.startsWith('sn:')) {
@@ -562,6 +887,18 @@ watch(
     })
     externalInstrumentModelMap.value = nextExternal
 
+    const pruneStateMap = <T>(map: Record<string, T>) => {
+      const nextMap = { ...map }
+      Object.keys(nextMap).forEach((key) => {
+        if (!validKeys.has(key)) delete nextMap[key]
+      })
+      return nextMap
+    }
+    selectedInternalInstrumentMap.value = pruneStateMap(selectedInternalInstrumentMap.value)
+    internalInstrumentOptionsMap.value = pruneStateMap(internalInstrumentOptionsMap.value)
+    internalInstrumentLoadingMap.value = pruneStateMap(internalInstrumentLoadingMap.value)
+    internalInstrumentMessageMap.value = pruneStateMap(internalInstrumentMessageMap.value)
+
     selectedSupportToolMap.value = next
   },
   { immediate: true, deep: true },
@@ -582,9 +919,12 @@ function toggleSupportTool(orderId: string, device: ResolvedDeviceRow, tool: Tem
 const resolvedDownholeDevices = computed(() =>
   startedOrderDevices.value.flatMap((order: any) =>
     (order.deviceList || []).map((device: ResolvedDeviceRow) => {
-      const selectedTools = (device.supportTools || [])
-        .filter((tool) => isToolSelected(order.id, device, tool))
-        .map((tool) => buildStructuredTool(order.id, device, tool))
+      const templateToolMode = usesTemplateToolMode(order, device)
+      const selectedTools = templateToolMode
+        ? (device.supportTools || [])
+            .filter((tool) => isToolSelected(order.id, device, tool))
+            .map((tool) => buildStructuredTool(order.id, device, tool))
+        : getResearchInstruments(device)
       return {
         id: device.id,
         orderId: order.id,
@@ -597,9 +937,10 @@ const resolvedDownholeDevices = computed(() =>
         code: device.code,
         template: device.template,
         templateName: device.templateName,
+        orderType: order.orderType,
         supportingTools: selectedTools,
         selectedSupportingTools: selectedTools,
-        availableSupportingTools: device.supportTools,
+        availableSupportingTools: templateToolMode ? device.supportTools : [],
       }
     }),
   ),
@@ -620,6 +961,24 @@ const flattenedSupportingTools = computed(() =>
   ),
 )
 
+const flattenedResearchSupportingTools = computed(() =>
+  researchManualOrders.value.flatMap((order: any) =>
+    (order.deviceList || []).flatMap((device: ResolvedDeviceRow) =>
+      getResearchInstruments(device).map((tool) => ({
+        ...tool,
+        orderId: order.id,
+        sourceDeviceName: device.name,
+        template: '',
+      })),
+    ),
+  ),
+)
+
+const flattenedAllSupportingTools = computed(() => [
+  ...flattenedSupportingTools.value,
+  ...flattenedResearchSupportingTools.value,
+])
+
 // --- 表单状态 ---
 const selectedWellName = ref('')
 const customWellName = ref('') // 联动：试验井名-其他
@@ -633,7 +992,7 @@ const selectedTestObjective = ref('')
 const customTestObjective = ref('') // 联动：测试目的-其他
 const customTestObjectiveEn = ref('')
 
-const selectedTestType = ref('first_test')
+const selectedTestType = ref('')
 const testCount = ref('2')
 const repairOrderNumber = ref('')
 
@@ -649,7 +1008,7 @@ const TODAY_ENV_CACHE_KEY = 'simwell.todayTestEnvironment'
 
 const wellNameOptions = new Set(['cosl1', 'yanjiao1', 'yanjiao2', 'ren91', 'gugu8', 'other'])
 const testingDeviceOptions = new Set(['cosl1_skid', 'yanjiao1_skid', 'yanjiao2_skid', 'other'])
-const testObjectiveOptions = new Set(['new_product', 'first_test'])
+const testObjectiveOptions = new Set(['new_product', 'first_test', 'other'])
 const wellDeviceDefaults: Record<string, string> = {
   cosl1: 'cosl1_skid',
   yanjiao1: 'yanjiao1_skid',
@@ -767,38 +1126,47 @@ watch(
   () => props.initialWork,
   (work) => {
     if (!work) return
-    restoreOptionValue(work.well_name, wellNameOptions, selectedWellName, customWellName)
-    restoreOptionValue(work.testing_device, testingDeviceOptions, selectedTestingDevice, customTestingDevice)
-    restoreOptionValue(work.test_objective, testObjectiveOptions, selectedTestObjective, customTestObjective)
+    restoreOptionValue(work.well_name ?? work.wellName, wellNameOptions, selectedWellName, customWellName)
+    restoreOptionValue(work.testing_device ?? work.testingDevice, testingDeviceOptions, selectedTestingDevice, customTestingDevice)
+    restoreOptionValue(work.test_objective ?? work.testObjective, testObjectiveOptions, selectedTestObjective, customTestObjective)
     customWellNameEn.value = selectedWellName.value === 'other' ? String(work.well_name_en || '') : ''
     customTestingDeviceEn.value = selectedTestingDevice.value === 'other' ? String(work.testing_device_en || '') : ''
     customTestObjectiveEn.value = selectedTestObjective.value === 'other' ? String(work.test_objective_en || '') : ''
-    selectedTestType.value = work.test_type || 'first_test'
-    testCount.value = work.test_count || '2'
-    repairOrderNumber.value = work.repair_order_number || ''
-    const envText = String(work.env_text || '')
-    const depth = envText.match(/井深:?\s*([^\s/]+)/)?.[1]
-    const temp = envText.match(/井温:?\s*([^\s/]+)/)?.[1]
-    const pressure = envText.match(/井压:?\s*([^\s/]+)/)?.[1]
-    wellDepth.value = stripSimulatedWellUnit(depth, 'm')
-    wellTemperature.value = stripSimulatedWellUnit(temp, '℃')
-    wellPressure.value = stripSimulatedWellUnit(pressure, 'MPa')
-    const intervalText = String(work.interval_text || '')
-    const mainMatch = intervalText.match(/主测井段:?\s*([^~\s/]+)\s*~\s*([^\s/]+)/)
-    const repeatMatch = intervalText.match(/复测井段:?\s*([^~\s/]+)\s*~\s*([^\s/]+)/)
-    mainIntervalFrom.value = stripSimulatedWellUnit(mainMatch?.[1], 'm')
-    mainIntervalTo.value = stripSimulatedWellUnit(mainMatch?.[2], 'm')
-    repeatIntervalFrom.value = stripSimulatedWellUnit(repeatMatch?.[1], 'm')
-    repeatIntervalTo.value = stripSimulatedWellUnit(repeatMatch?.[2], 'm')
+    if (selectedWellName.value === 'other') customWellNameEn.value = String(work.well_name_en ?? work.wellNameEn ?? '')
+    if (selectedTestingDevice.value === 'other') customTestingDeviceEn.value = String(work.testing_device_en ?? work.testingDeviceEn ?? '')
+    if (selectedTestObjective.value === 'other') customTestObjectiveEn.value = String(work.test_objective_en ?? work.testObjectiveEn ?? '')
+    selectedTestType.value = String(work.test_type ?? work.testType ?? '')
+    testCount.value = String(work.test_count ?? work.testCount ?? '2')
+    repairOrderNumber.value = String(work.repair_order_number ?? work.repairOrderNumber ?? '')
+    const environment = parseSimulatedWellEnvironment(work.env_text ?? work.test_environment ?? work.testEnvironment)
+    wellDepth.value = environment.wellDepth
+    wellTemperature.value = environment.wellTemperature
+    wellPressure.value = environment.wellPressure
+    const interval = parseSimulatedWellInterval(work.interval_text ?? work.test_interval ?? work.testInterval)
+    mainIntervalFrom.value = interval.mainFrom
+    mainIntervalTo.value = interval.mainTo
+    repeatIntervalFrom.value = interval.repeatFrom
+    repeatIntervalTo.value = interval.repeatTo
   },
   { immediate: true },
 )
 
 function saveDownholeOperation() {
+  if (shouldShowTestInformation.value && !selectedTestObjective.value) {
+    ElMessage.warning('请选择测试目的')
+    return
+  }
+  if (shouldShowTestInformation.value && !selectedTestType.value) {
+    ElMessage.warning('请选择测试类型')
+    return
+  }
+
   const bilingualCustomFields = [
     { selected: selectedWellName, chinese: customWellName, english: customWellNameEn, label: '实验井名' },
     { selected: selectedTestingDevice, chinese: customTestingDevice, english: customTestingDeviceEn, label: '测试设备' },
-    { selected: selectedTestObjective, chinese: customTestObjective, english: customTestObjectiveEn, label: '测试目的' },
+    ...(shouldShowTestInformation.value
+      ? [{ selected: selectedTestObjective, chinese: customTestObjective, english: customTestObjectiveEn, label: '测试目的' }]
+      : []),
   ]
   for (const field of bilingualCustomFields) {
     if (field.selected.value !== 'other') continue
@@ -832,16 +1200,20 @@ function saveDownholeOperation() {
   const payload = {
     orderIds: startedOrderIds.value,
     devices: resolvedDownholeDevices.value,
-    supportingTools: flattenedSupportingTools.value,
+    supportingTools: flattenedAllSupportingTools.value,
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
     wellNameEn: selectedWellName.value === 'other' ? customWellNameEn.value : '',
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
     testingDeviceEn: selectedTestingDevice.value === 'other' ? customTestingDeviceEn.value : '',
-    testObjective: selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value,
-    testObjectiveEn: selectedTestObjective.value === 'other' ? customTestObjectiveEn.value : '',
-    testType: selectedTestType.value,
-    testCount: testCount.value,
-    repairOrderNumber: repairOrderNumber.value,
+    testObjective: shouldShowTestInformation.value
+      ? (selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value)
+      : '',
+    testObjectiveEn: shouldShowTestInformation.value && selectedTestObjective.value === 'other'
+      ? customTestObjectiveEn.value
+      : '',
+    testType: shouldShowTestInformation.value ? selectedTestType.value : '',
+    testCount: shouldShowTestInformation.value ? testCount.value : '',
+    repairOrderNumber: shouldShowTestInformation.value ? repairOrderNumber.value : '',
     testEnvironment: { wellDepth: wellDepth.value, wellTemperature: wellTemperature.value, wellPressure: wellPressure.value },
     testInterval: { mainFrom: mainIntervalFrom.value, mainTo: mainIntervalTo.value, repeatFrom: repeatIntervalFrom.value, repeatTo: repeatIntervalTo.value }
   }
@@ -873,7 +1245,7 @@ onMounted(() => {
     <div class="downhole-content">
       <div class="downhole-card">
         <div class="downhole-card-title">工单测试产品 <span class="english-sub">Order Test Products</span></div>
-        <div v-if="templateLoading" class="hint-text">正在根据测试设备名称匹配测试报告模板...</div>
+        <div v-if="templateLoading" class="hint-text">正在加载测试报告模板...</div>
         <div v-else-if="templateLoadMessage" class="hint-text">{{ templateLoadMessage }}</div>
         <div v-if="!startedOrderDevices.length" class="empty-state"><p>未选择开始实验的测试产品</p></div>
         <div v-for="order in startedOrderDevices" :key="'table-' + order.id" class="order-table-group">
@@ -896,7 +1268,12 @@ onMounted(() => {
                   <td>{{ device.name }}</td>
                   <td>{{ device.sn || device.code || 'SN-' + (idx + 1) }}</td>
                   <td>
-                    <select v-model="selectedTemplateMap[device.stateKey]" class="template-select">
+                    <select
+                      v-model="selectedTemplateMap[device.stateKey]"
+                      class="template-select"
+                      @change="handleTemplateChange(order.id, device)"
+                    >
+                      <option v-if="order.orderType === 1" value="">不选择测试报告模板</option>
                       <option
                         v-for="template in templateLibrary"
                         :key="template.report_no"
@@ -914,7 +1291,65 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="downhole-card" v-if="selectedSupportingOrders.length">
+      <div v-if="researchManualOrders.length" class="downhole-card">
+        <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
+        <div v-for="order in researchManualOrders" :key="'research-support-' + order.id" class="order-table-group">
+          <div class="table-group-header">
+            <span class="group-order-id">{{ order.id }}</span>
+            <span class="group-customer">{{ order.customer }}</span>
+            <span class="group-count">按测试产品选择配接仪器</span>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>测试产品</th>
+                  <th>配接仪器</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
+                  <td>
+                    <div>{{ device.name }}</div>
+                    <div class="cell-subtext">{{ device.sn || device.code || 'SN-' + (idx + 1) }}</div>
+                  </td>
+                  <td>
+                    <div class="research-tool-actions">
+                      <button class="primary-btn" type="button" @click="openInstrumentPicker(order.id, device)">
+                        选择仪器
+                      </button>
+                      <span class="cell-subtext">已选择 {{ getResearchInstruments(device).length }} 台</span>
+                    </div>
+                    <div v-if="getResearchInstruments(device).length" class="tool-selector-stack research-tool-list">
+                      <div
+                        v-for="tool in getResearchInstruments(device)"
+                        :key="String(tool.internalInstrumentId || tool.internalInstrumentSn)"
+                        class="tool-inline-option tool-row-option is-selected"
+                      >
+                        <div class="research-tool-summary">
+                          <span class="tool-inline-text">
+                            <span class="tool-option-name">{{ tool.internalInstrumentName || tool.zh || '-' }}</span>
+                            <span v-if="tool.modelNumber" class="tool-code">{{ tool.modelNumber }}</span>
+                          </span>
+                          <button class="research-tool-remove" type="button" @click="removeResearchInstrument(device, tool)">移除</button>
+                        </div>
+                        <div class="tool-internal-panel research-sn-panel">
+                          <div class="internal-label">SN号</div>
+                          <div class="research-sn-value">{{ tool.internalInstrumentSn || '-' }}</div>
+                          <div class="tool-remain">已用 {{ tool.usedCount ?? 0 }} 次，剩余 {{ tool.remainCount ?? 0 }} 次</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="cell-subtext">暂未选择配接仪器</div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="selectedSupportingOrders.length" class="downhole-card">
         <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
         <div v-for="order in selectedSupportingOrders" :key="'support-' + order.id" class="order-table-group">
           <div class="table-group-header">
@@ -1008,7 +1443,7 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      <div v-else class="downhole-card">
+      <div v-if="!researchManualOrders.length && !selectedSupportingOrders.length" class="downhole-card">
         <div class="downhole-card-title">配接仪器 <span class="english-sub">Supporting Tools</span></div>
         <div class="empty-state">
           <p>{{ templateLoading ? '正在匹配测试报告模板...' : '当前测试产品未匹配到配接仪器信息' }}</p>
@@ -1052,7 +1487,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="form-section-container">
+        <div v-if="shouldShowTestInformation" class="form-section-container">
           <div class="form-section-header">测试目的 Test Objective</div>
           <div class="form-section-body">
             <div class="field-label">选择测试目的</div>
@@ -1068,7 +1503,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="form-section-container">
+        <div v-if="shouldShowTestInformation" class="form-section-container">
           <div class="form-section-header">测试类型 Test type</div>
           <div class="form-section-body">
             <div class="field-label">选择测试类型</div>
@@ -1150,6 +1585,71 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <el-dialog
+      v-model="instrumentPickerVisible"
+      title="选择配接仪器"
+      width="980px"
+      destroy-on-close
+    >
+      <div class="instrument-picker-search">
+        <el-input
+          v-model="instrumentPickerSn"
+          clearable
+          placeholder="请输入SN号"
+          @keyup.enter="searchInstrumentPicker"
+        />
+        <el-input
+          v-model="instrumentPickerName"
+          clearable
+          placeholder="请输入仪器名称"
+          @keyup.enter="searchInstrumentPicker"
+        />
+        <el-button type="primary" @click="searchInstrumentPicker">查询</el-button>
+        <el-button @click="resetInstrumentPickerSearch">重置</el-button>
+        <span class="instrument-picker-selected-count">已选择 {{ Object.keys(instrumentPickerDraft).length }} 台</span>
+      </div>
+
+      <el-table
+        ref="instrumentPickerTableRef"
+        v-loading="instrumentPickerLoading"
+        :data="instrumentPickerRows"
+        row-key="id"
+        border
+        stripe
+        max-height="460"
+        @selection-change="handleInstrumentPickerSelectionChange"
+      >
+        <el-table-column type="selection" width="52" />
+        <el-table-column prop="sn" label="SN号" min-width="150" />
+        <el-table-column prop="name" label="仪器名称" min-width="160" />
+        <el-table-column prop="status" label="状态" min-width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="instrumentStatusTagType(row.status)">{{ row.status || '-' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="model_number" label="型号" min-width="130" />
+        <el-table-column prop="used_count" label="使用次数" min-width="100" align="center" />
+        <el-table-column prop="remain_count" label="剩余可用次数" min-width="120" align="center" />
+      </el-table>
+
+      <div class="instrument-picker-pagination">
+        <el-pagination
+          size="small"
+          background
+          layout="prev, pager, next"
+          :current-page="instrumentPickerPage"
+          :page-size="instrumentPickerPageSize"
+          :total="instrumentPickerTotal"
+          @current-change="changeInstrumentPickerPage"
+        />
+      </div>
+
+      <template #footer>
+        <el-button @click="instrumentPickerVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmInstrumentPicker">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1413,6 +1913,79 @@ onMounted(() => {
 }
 .tool-remain.is-empty {
   color: #dc2626;
+}
+
+.research-tool-actions,
+.research-tool-summary,
+.instrument-picker-search,
+.instrument-picker-pagination {
+  display: flex;
+  align-items: center;
+}
+
+.research-tool-actions {
+  gap: 10px;
+}
+
+.research-tool-list {
+  margin-top: 10px;
+}
+
+.research-tool-summary {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.research-tool-remove {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #dc2626;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.research-sn-panel {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.research-sn-panel .tool-remain {
+  margin-top: 0;
+}
+
+.research-sn-value {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.instrument-picker-search {
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.instrument-picker-search .el-input {
+  width: 220px;
+}
+
+.instrument-picker-selected-count {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.instrument-picker-pagination {
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 
 /* 底部表单特定样式 */

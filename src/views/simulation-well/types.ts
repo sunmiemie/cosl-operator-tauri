@@ -30,6 +30,8 @@ export interface WorkOrder {
   testPurpose?: string
   testSteps?: string
   safetyRisks?: string
+  /** 1：研究院工单；0：非研究院工单。 */
+  orderType: 0 | 1
   deviceList: DeviceItem[]
   supportingTools?: DeviceItem[]
 }
@@ -58,6 +60,8 @@ export interface DownholeDevice {
   deviceName: string
   sn: string
   template: string
+  /** 1：研究院工单；0：非研究院工单。 */
+  orderType: 0 | 1
 }
 
 export interface ScheduledItem {

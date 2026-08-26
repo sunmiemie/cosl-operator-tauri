@@ -49,6 +49,7 @@ export function useSimulationWellSchedule() {
     createTime: "2026-03-01",
     planTime: "2026-03-17", // 默认设为今天以便测试显示
     taskDesc: item.fileName,
+    orderType: 0,
     deviceList: item.testProducts.map(p => ({
       id: p.code,
       name: p.zh,

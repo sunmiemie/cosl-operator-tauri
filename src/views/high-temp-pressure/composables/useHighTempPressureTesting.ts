@@ -1,10 +1,10 @@
 import { nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import * as echarts from 'echarts'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
+import { echarts } from '@/utils/echarts'
 import type { HighTempPressureModal, HighTempPressurePanel } from '../types'
 import { formatRuntimeTimer, getElapsedRuntimeSeconds } from '../utils/runtime'
 

@@ -1,6 +1,5 @@
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { useCamera } from '@/composables/useCamera'
 import { useOcr } from '@/composables/useOcr'
@@ -16,6 +15,7 @@ import {
   type HighTempBoxOrder,
 } from '@/services/high-temp-box-order-api'
 import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
+import { echarts } from '@/utils/echarts'
 
 export interface WorkOrder {
   id: string
