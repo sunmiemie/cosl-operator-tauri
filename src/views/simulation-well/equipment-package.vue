@@ -366,17 +366,9 @@ const startedOrderDevices = computed(() => {
     const orderType = grouped.get(orderId).orderType
     const deviceStateKey = getDeviceStateKey(orderId, device, index)
     const persistedTemplate = cleanTemplateText(device?.template || device?.templateName || device?.template_name)
-    // 研究院工单默认不关联模板；操作人主动选择后，该产品使用完整模板报告流程。
     const selectedTemplate = selectedTemplateMap.value[deviceStateKey]
-    const selectedResearchTemplate = orderType === 1 ? findTemplateByCode(selectedTemplate || '') : null
     const resolvedTemplate = orderType === 1
-      ? (selectedResearchTemplate
-          ? {
-              templateCode: selectedResearchTemplate.report_no || '',
-              templateName: selectedResearchTemplate.report_name || '',
-              supportTools: mergeInstrumentLists(selectedResearchTemplate.match_instruments as any[]),
-            }
-          : { templateCode: '', templateName: '', supportTools: [] })
+      ? { templateCode: '', templateName: '', supportTools: [] }
       : resolveTemplateMeta(
           device?.deviceName || device?.name || '',
           device?.template || 'CBMT61XA_REPORT',
@@ -386,26 +378,15 @@ const startedOrderDevices = computed(() => {
       device,
       ['availableSupportingTools', 'available_supporting_tools', 'supportTools', 'support_tools'],
     )
-    const isResearchTemplateMode = orderType === 1 && !!resolvedTemplate.templateCode
-    const persistedTemplateCode = findTemplateByCode(persistedTemplate)?.report_no || persistedTemplate
-    const restoresPersistedTemplate = isResearchTemplateMode
-      && normalizeCode(persistedTemplateCode) === normalizeCode(resolvedTemplate.templateCode)
     const availableTools = orderType === 1
-      ? (isResearchTemplateMode
-          ? mergeInstrumentLists(
-              restoresPersistedTemplate ? sourceAvailableTools : [],
-              resolvedTemplate.supportTools,
-            )
-          : [])
+      ? []
       : mergeInstrumentLists(sourceAvailableTools, resolvedTemplate.supportTools)
     const selectedToolSource = getSourceToolList(
       device,
       ['selectedSupportingTools', 'selected_supporting_tools', 'supportingTools', 'supporting_tools'],
     )
     const selectedTools = orderType === 1
-      ? (isResearchTemplateMode
-          ? mergeInstrumentLists(restoresPersistedTemplate ? selectedToolSource : [])
-          : normalizeResearchSelectedTools(selectedToolSource))
+      ? normalizeResearchSelectedTools(selectedToolSource)
       : mergeInstrumentLists(selectedToolSource)
     grouped.get(orderId).deviceList.push({
       id: device?.id || `${orderId}_${device?.sn || index + 1}`,
@@ -425,16 +406,13 @@ const startedOrderDevices = computed(() => {
 })
 
 const startedOrderIds = computed(() => startedOrderDevices.value.map((order: any) => order.id))
+const isResearchOrder = computed(() => startedOrderDevices.value.some((order: any) => order.orderType === 1))
 
-function usesTemplateToolMode(order: any, device: ResolvedDeviceRow) {
-  return order.orderType !== 1 || !!device.template
+function usesTemplateToolMode(order: any) {
+  return order.orderType !== 1
 }
 
-const shouldShowTestInformation = computed(() =>
-  startedOrderDevices.value.some(
-    (order: any) => order.orderType !== 1 || (order.deviceList || []).some((device: ResolvedDeviceRow) => !!device.template),
-  ),
-)
+const shouldShowTestInformation = computed(() => !isResearchOrder.value)
 
 function simInstrumentToTool(item: SimInstrumentListItem): TemplateInstrument {
   return {
@@ -626,7 +604,7 @@ const selectedSupportingOrders = computed(() =>
     .map((order: any) => ({
       ...order,
       deviceList: (order.deviceList || []).filter(
-        (device: ResolvedDeviceRow) => usesTemplateToolMode(order, device) && device.supportTools?.length,
+        (device: ResolvedDeviceRow) => usesTemplateToolMode(order) && device.supportTools?.length,
       ),
     }))
     .filter((order: any) => order.deviceList.length),
@@ -919,7 +897,7 @@ function toggleSupportTool(orderId: string, device: ResolvedDeviceRow, tool: Tem
 const resolvedDownholeDevices = computed(() =>
   startedOrderDevices.value.flatMap((order: any) =>
     (order.deviceList || []).map((device: ResolvedDeviceRow) => {
-      const templateToolMode = usesTemplateToolMode(order, device)
+      const templateToolMode = usesTemplateToolMode(order)
       const selectedTools = templateToolMode
         ? (device.supportTools || [])
             .filter((tool) => isToolSelected(order.id, device, tool))
@@ -973,11 +951,6 @@ const flattenedResearchSupportingTools = computed(() =>
     ),
   ),
 )
-
-const flattenedAllSupportingTools = computed(() => [
-  ...flattenedSupportingTools.value,
-  ...flattenedResearchSupportingTools.value,
-])
 
 // --- 表单状态 ---
 const selectedWellName = ref('')
@@ -1200,14 +1173,12 @@ function saveDownholeOperation() {
   const payload = {
     orderIds: startedOrderIds.value,
     devices: resolvedDownholeDevices.value,
-    supportingTools: flattenedAllSupportingTools.value,
+    supportingTools: isResearchOrder.value ? flattenedResearchSupportingTools.value : flattenedSupportingTools.value,
     wellName: selectedWellName.value === 'other' ? customWellName.value : selectedWellName.value,
     wellNameEn: selectedWellName.value === 'other' ? customWellNameEn.value : '',
     testingDevice: selectedTestingDevice.value === 'other' ? customTestingDevice.value : selectedTestingDevice.value,
     testingDeviceEn: selectedTestingDevice.value === 'other' ? customTestingDeviceEn.value : '',
-    testObjective: shouldShowTestInformation.value
-      ? (selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value)
-      : '',
+    testObjective: isResearchOrder.value ? '' : (selectedTestObjective.value === 'other' ? customTestObjective.value : selectedTestObjective.value),
     testObjectiveEn: shouldShowTestInformation.value && selectedTestObjective.value === 'other'
       ? customTestObjectiveEn.value
       : '',
@@ -1260,20 +1231,19 @@ onMounted(() => {
                 <tr>
                   <th>测试产品</th>
                   <th>仪器编号</th>
-                  <th>关联模板</th>
+                  <th v-if="!isResearchOrder">关联模板</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
                   <td>{{ device.name }}</td>
                   <td>{{ device.sn || device.code || 'SN-' + (idx + 1) }}</td>
-                  <td>
+                  <td v-if="!isResearchOrder">
                     <select
                       v-model="selectedTemplateMap[device.stateKey]"
                       class="template-select"
                       @change="handleTemplateChange(order.id, device)"
                     >
-                      <option v-if="order.orderType === 1" value="">不选择测试报告模板</option>
                       <option
                         v-for="template in templateLibrary"
                         :key="template.report_no"
@@ -1487,7 +1457,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="shouldShowTestInformation" class="form-section-container">
+        <div v-if="!isResearchOrder" class="form-section-container">
           <div class="form-section-header">测试目的 Test Objective</div>
           <div class="form-section-body">
             <div class="field-label">选择测试目的</div>
@@ -1503,7 +1473,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="shouldShowTestInformation" class="form-section-container">
+        <div v-if="!isResearchOrder" class="form-section-container">
           <div class="form-section-header">测试类型 Test type</div>
           <div class="form-section-body">
             <div class="field-label">选择测试类型</div>
