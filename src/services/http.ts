@@ -16,6 +16,27 @@ interface RequestOptions {
   queryParams?: Record<string, string>
 }
 
+type UnauthorizedHandler = () => void | Promise<void>
+
+let unauthorizedHandler: UnauthorizedHandler | null = null
+let unauthorizedHandlingPromise: Promise<void> | null = null
+
+/** 注册 401 处理器：普通请求收到 401 后再校验登录状态。 */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+  unauthorizedHandler = handler
+}
+
+function notifyUnauthorized() {
+  if (!unauthorizedHandler || unauthorizedHandlingPromise) return
+  unauthorizedHandlingPromise = Promise.resolve(unauthorizedHandler())
+    .catch((error) => {
+      console.warn('[HTTP] 401 登录状态校验失败:', error)
+    })
+    .finally(() => {
+      unauthorizedHandlingPromise = null
+    })
+}
+
 // API 响应接口
 export interface ApiResponse<T = unknown> {
   success: boolean
@@ -159,6 +180,9 @@ class HttpClient {
       }
 
       if (!response.ok) {
+        if (response.status === 401 && endpoint !== '/login/info' && endpoint !== '/login/login') {
+          notifyUnauthorized()
+        }
         const responseMessage =
           data && typeof data === 'object'
             ? String(

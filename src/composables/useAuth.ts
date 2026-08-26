@@ -1,5 +1,5 @@
 import { ref, computed, readonly } from 'vue'
-import { http } from '@/services/http'
+import { http, setUnauthorizedHandler } from '@/services/http'
 import { load } from '@tauri-apps/plugin-store'
 
 // 用户信息接口
@@ -40,6 +40,8 @@ const token = ref<string | null>(null)
 const userInfo = ref<UserInfo | null>(null)
 const isLoading = ref(false)
 const isInitialized = ref(false)
+let unauthorizedHandlerRegistered = false
+let authInitPromise: Promise<boolean> | null = null
 
 // 计算属性：是否已登录
 const isLoggedIn = computed(() => !!token.value)
@@ -52,6 +54,21 @@ async function getStore() {
     authStore = await load('auth.json')
   }
   return authStore
+}
+
+/** 只清理本地认证状态，避免失效 Token 再触发一次登出请求。 */
+async function clearLocalAuthState() {
+  token.value = null
+  userInfo.value = null
+  isInitialized.value = false
+
+  try {
+    const store = await getStore()
+    await store.delete(TOKEN_KEY)
+    await store.delete(USER_INFO_KEY)
+  } catch (error) {
+    console.warn('清除本地认证状态失败:', error)
+  }
 }
 
 /**
@@ -72,45 +89,50 @@ export function useAuth() {
    * 初始化认证状态（从 Store 加载）
    */
   const initAuth = async (): Promise<boolean> => {
-    // 已初始化时也要重新校验，避免页面长时间停留后继续使用过期 token
+    // 初始化成功后直接复用内存 Token；普通请求收到 401 时再重新校验。
     if (isInitialized.value && token.value) {
-      const valid = await validateToken()
-      if (!valid) {
-        await logout()
-      }
-      return valid
+      return true
     }
+    if (authInitPromise) return authInitPromise
+
+    authInitPromise = (async () => {
+      try {
+        const store = await getStore()
+
+        // 从 store 读取 token 和用户信息
+        const savedToken = await store.get<string>(TOKEN_KEY)
+        const savedUserInfo = await store.get<UserInfo>(USER_INFO_KEY)
+
+        if (savedToken) {
+          token.value = savedToken
+
+          // 如果有保存的用户信息，先恢复
+          if (savedUserInfo) {
+            userInfo.value = savedUserInfo
+          }
+
+          // 应用启动时只验证一次，后续普通请求收到 401 再重新校验。
+          const valid = await validateToken()
+          if (!valid) {
+            await clearLocalAuthState()
+            return false
+          }
+
+          isInitialized.value = true
+          return true
+        }
+
+        return false
+      } catch (error) {
+        console.error('初始化认证失败:', error)
+        return false
+      }
+    })()
 
     try {
-      const store = await getStore()
-
-      // 从 store 读取 token 和用户信息
-      const savedToken = await store.get<string>(TOKEN_KEY)
-      const savedUserInfo = await store.get<UserInfo>(USER_INFO_KEY)
-
-      if (savedToken) {
-        token.value = savedToken
-
-        // 如果有保存的用户信息，先恢复
-        if (savedUserInfo) {
-          userInfo.value = savedUserInfo
-        }
-
-        // 验证 token 有效性并更新用户信息
-        const valid = await validateToken()
-        if (!valid) {
-          await logout()
-          return false
-        }
-
-        isInitialized.value = true
-        return true
-      }
-
-      return false
-    } catch (error) {
-      console.error('初始化认证失败:', error)
-      return false
+      return await authInitPromise
+    } finally {
+      authInitPromise = null
     }
   }
 
@@ -224,20 +246,17 @@ export function useAuth() {
     } catch (error) {
       console.warn('登出请求失败:', error)
     } finally {
-      // 清除本地状态
-      token.value = null
-      userInfo.value = null
-      isInitialized.value = false
-
-      // 清除 store
-      try {
-        const store = await getStore()
-        await store.delete(TOKEN_KEY)
-        await store.delete(USER_INFO_KEY)
-      } catch (error) {
-        console.warn('清除 store 失败:', error)
-      }
+      await clearLocalAuthState()
     }
+  }
+
+  if (!unauthorizedHandlerRegistered) {
+    setUnauthorizedHandler(async () => {
+      if (!token.value) return
+      const valid = await validateToken()
+      if (!valid) await clearLocalAuthState()
+    })
+    unauthorizedHandlerRegistered = true
   }
 
   /**

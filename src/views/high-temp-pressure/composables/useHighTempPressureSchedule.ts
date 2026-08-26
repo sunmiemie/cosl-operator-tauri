@@ -216,7 +216,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
 }
 
 export function useHighTempPressureSchedule() {
-  const { initAuth, validateToken, getAuthHeaders } = useAuth()
+  const { initAuth, getAuthHeaders } = useAuth()
   const searchKeyword = ref('')
   const activeHostDeviceName = ref('')
   const currentAssignOrderId = ref('')
@@ -682,8 +682,7 @@ export function useHighTempPressureSchedule() {
     markPendingSchedule(instrumentId, getInstrumentEvents(instrumentId))
     try {
       const authOk = await initAuth()
-      const tokenOk = authOk && await validateToken()
-      if (!tokenOk) {
+      if (!authOk) {
         if (fallback !== undefined) setInstrumentEvents(instrumentId, fallback)
         ElMessage.error('登录状态失效，请重新登录后再保存排期')
         return false

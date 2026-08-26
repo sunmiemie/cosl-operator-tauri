@@ -35,6 +35,7 @@ export type ListHaltHassOrdersParams = {
   pageSize?: number
   orderNo?: string
   status?: number | string
+  statuses?: Array<number | string>
 }
 
 export type HaltHassOrderWriteResponse = {
@@ -67,6 +68,8 @@ type BackendEnvelope<T> = {
 export type HaltHassOrderScheduleBody = {
   scheduled_start_at: string
   scheduled_end_at: string
+  use_device?: string
+  equipment_id?: string
 }
 
 function mapHaltHassRuntimeResult(
@@ -265,6 +268,7 @@ export async function listHaltHassOrders(
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.orderNo) query.orderNo = params.orderNo
   if (params.status !== undefined) query.status = String(params.status)
+  if (params.statuses?.length) query.statuses = params.statuses.join(',')
   return http.get<HaltHassOrderListResponse>('/test/halt-hass/order/list/', {}, query)
 }
 

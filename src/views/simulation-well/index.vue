@@ -25,7 +25,7 @@ const currentView = ref<SimulationWellView>('dashboard')
 const schedule = useSimulationWellSchedule()
 const route = useRoute()
 const router = useRouter()
-const { initAuth, validateToken, getAuthHeaders } = useAuth()
+const { initAuth, getAuthHeaders } = useAuth()
 
 const sanxinDetailVisible = ref(false)
 const sanxinDetailLoading = ref(false)
@@ -468,8 +468,7 @@ watch(
 async function handleSaveDownhole(payload: any) {
   try {
     const authOk = await initAuth()
-    const tokenOk = authOk && await validateToken()
-    if (!tokenOk) {
+    if (!authOk) {
       ElMessage.error('登录状态已过期，请重新登录后再保存作业')
       router.replace({ path: '/login', query: { redirect: route.fullPath } })
       return

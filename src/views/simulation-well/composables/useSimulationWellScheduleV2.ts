@@ -72,28 +72,13 @@ export function useSimulationWellSchedule() {
     await initAuth()
     const headers = getAuthHeaders()
     await refreshHostDeviceNames(headers)
-    const [orderRes1, orderRes2, orderRes4] = await Promise.all([
-      listSimulatedWellOrders(
-        { page: 1, pageSize: 2000, status: 1, includeDevices: true },
-        headers
-      ),
-      listSimulatedWellOrders(
-        { page: 1, pageSize: 2000, status: 2, includeDevices: true },
-        headers
-      ),
-      listSimulatedWellOrders(
-        { page: 1, pageSize: 2000, status: 4, includeDevices: true },
-        headers
-      )
-    ])
-    if (!orderRes1.success || !orderRes2.success || !orderRes4.success) return
-    if (orderRes1.data?.code !== 0 || orderRes2.data?.code !== 0 || orderRes4.data?.code !== 0) return
+    const orderResponse = await listSimulatedWellOrders(
+      { page: 1, pageSize: 2000, statuses: [1, 2, 4], includeDevices: true },
+      headers
+    )
+    if (!orderResponse.success || orderResponse.data?.code !== 0) return
 
-    const combined = [
-      ...(orderRes1.data.data?.list || []),
-      ...(orderRes2.data.data?.list || []),
-      ...(orderRes4.data.data?.list || []),
-    ]
+    const combined = orderResponse.data.data?.list || []
     workOrders.value = combined
       .map((dto) => {
         const orderId = dto.task_number

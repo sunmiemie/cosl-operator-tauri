@@ -67,6 +67,7 @@ export function useHaltHassSchedule() {
   const selectedScheduledOrder = ref<string | null>(null)
   const activeHostDeviceName = ref('')
   const hostDeviceNames = ref<string[]>([])
+  const hostDevicePsiIdsByName = ref<Record<string, string>>({})
   const draggedOrderId = ref<string | null>(null)
   const isDragging = ref(false)
   const calBase = ref(getMonday(new Date()))
@@ -269,29 +270,24 @@ export function useHaltHassSchedule() {
       const pageSize = 100
       let requestFailed = false
 
-      for (const status of visibleOrderStatuses) {
-        let page = 1
-        let loaded = 0
-        let total = Infinity
-
-        while (loaded < total) {
-          const resp = await listHaltHassOrders({ page, pageSize, status })
-          if (!resp.success || !resp.data || resp.data.code !== 0) {
-            requestFailed = true
-            break
-          }
-
-          const list = resp.data.data.list
-          list.map(mapHaltHassOrder).forEach((order) => byId.set(order.id, order))
-
-          loaded += list.length
-          total = resp.data.data.total
-          if (list.length === 0) break
-          page += 1
-          if (page > 50) break
+      let page = 1
+      let loaded = 0
+      let total = Infinity
+      while (loaded < total) {
+        const resp = await listHaltHassOrders({ page, pageSize, statuses: visibleOrderStatuses })
+        if (!resp.success || !resp.data || resp.data.code !== 0) {
+          requestFailed = true
+          break
         }
 
-        if (requestFailed) break
+        const list = resp.data.data.list
+        list.map(mapHaltHassOrder).forEach((order) => byId.set(order.id, order))
+
+        loaded += list.length
+        total = resp.data.data.total
+        if (list.length === 0) break
+        page += 1
+        if (page > 50) break
       }
 
       const nextOrders = Array.from(byId.values())
@@ -333,6 +329,7 @@ export function useHaltHassSchedule() {
     }
 
     hostDeviceNames.value = result.names
+    hostDevicePsiIdsByName.value = result.psiIdsByName
   }
 
   const scheduledOrders = computed<Record<string, string[]>>(() => {
@@ -482,6 +479,8 @@ export function useHaltHassSchedule() {
     }
 
     const schedule = eventId ? getScheduleChangePayload(eventId) : null
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim()
+    const scheduleHostEquipmentId = hostDevicePsiIdsByName.value[scheduleHostDeviceName]
     schedulePersisting.value = true
     try {
       const authOk = await initAuth()
@@ -497,6 +496,8 @@ export function useHaltHassSchedule() {
             {
               scheduled_start_at: schedule.scheduledStartAt,
               scheduled_end_at: schedule.scheduledEndAt,
+              use_device: scheduleHostDeviceName,
+              equipment_id: scheduleHostEquipmentId,
             },
             getAuthHeaders()
           )

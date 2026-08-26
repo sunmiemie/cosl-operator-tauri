@@ -153,6 +153,7 @@ export type ListWaterCycleOrdersParams = {
   pageSize?: number
   taskNumber?: string
   status?: number | string
+  statuses?: Array<number | string>
 }
 
 export async function listWaterCycleOrders(
@@ -163,6 +164,7 @@ export async function listWaterCycleOrders(
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.taskNumber) query.taskNumber = params.taskNumber
   if (params.status !== undefined) query.status = String(params.status)
+  if (params.statuses?.length) query.statuses = params.statuses.join(',')
   return http.get<WaterCycleOrderListResponse>('/test/water-cycle/order/list/', {}, query)
 }
 

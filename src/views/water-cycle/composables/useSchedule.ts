@@ -51,7 +51,7 @@ export type UseScheduleOptions = {
 }
 
 export function useSchedule(options: UseScheduleOptions = {}) {
-  const { initAuth, validateToken, getAuthHeaders } = useAuth()
+  const { initAuth, getAuthHeaders } = useAuth()
   // ============ 基础状态 ============
   const searchKeyword = ref('') // 待排程工单的搜索关键字
   
@@ -211,31 +211,29 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     try {
       const all: WaterCycleOrder[] = []
       const pageSize = 100
-      for (const status of visibleOrderStatuses) {
-        let page = 1
-        let loaded = 0
-        let total = Infinity
+      let page = 1
+      let loaded = 0
+      let total = Infinity
 
-        while (loaded < total) {
-          const resp = await listWaterCycleOrders({ page, pageSize, status })
-          if (!resp.success || !resp.data) {
-            workOrdersError.value = resp.error || '获取水循环工单失败'
-            break
-          }
-          if (resp.data.code !== 0) {
-            workOrdersError.value = resp.data.msg || '获取水循环工单失败'
-            break
-          }
-
-          const chunk = resp.data.data.list.map(mapWaterCycleOrder).filter((o) => o.status === status)
-          all.push(...chunk)
-          loaded += resp.data.data.list.length
-          total = resp.data.data.total
-
-          if (resp.data.data.list.length === 0) break
-          page += 1
-          if (page > 50) break
+      while (loaded < total) {
+        const resp = await listWaterCycleOrders({ page, pageSize, statuses: visibleOrderStatuses })
+        if (!resp.success || !resp.data) {
+          workOrdersError.value = resp.error || '获取水循环工单失败'
+          break
         }
+        if (resp.data.code !== 0) {
+          workOrdersError.value = resp.data.msg || '获取水循环工单失败'
+          break
+        }
+
+        const chunk = resp.data.data.list.map(mapWaterCycleOrder)
+        all.push(...chunk)
+        loaded += resp.data.data.list.length
+        total = resp.data.data.total
+
+        if (resp.data.data.list.length === 0) break
+        page += 1
+        if (page > 50) break
       }
 
       workOrders.value = all
@@ -406,8 +404,7 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     markPendingSchedule(orderId, getOrderEvents(orderId))
     try {
       const authOk = await initAuth()
-      const tokenOk = authOk && await validateToken()
-      if (!tokenOk) {
+      if (!authOk) {
         if (fallback !== undefined) setOrderEvents(orderId, fallback)
         ElMessage.error('登录状态失效，请重新登录后再保存排期')
         return false
@@ -752,13 +749,6 @@ export function useSchedule(options: UseScheduleOptions = {}) {
     }
 
     try {
-      const authOk = await initAuth()
-      const tokenOk = authOk && await validateToken()
-      if (!tokenOk) {
-        rollback()
-        ElMessage.error('登录状态失效，请重新登录后再取消排期')
-        return
-      }
       const saved = await persistScheduledEvent(orderId, previousEvents[orderId] || [])
       if (!saved) {
         rollback()

@@ -68,6 +68,7 @@ export interface ListSimulatedWellOrdersParams {
   pageSize?: number
   taskNumber?: string
   status?: number | string
+  statuses?: Array<number | string>
   includeDevices?: boolean
 }
 
@@ -80,6 +81,7 @@ export async function listSimulatedWellOrders(
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.taskNumber) query.taskNumber = params.taskNumber
   if (params.status !== undefined) query.status = String(params.status)
+  if (params.statuses?.length) query.statuses = params.statuses.join(',')
   if (params.includeDevices) query.includeDevices = '1'
 
   return http.get<SimulatedWellOrderListResponse>(

@@ -199,28 +199,25 @@ export function useVibrationSchedule() {
       await refreshHostDeviceNames()
       const pageSize = 100
       const byId = new Map<string, WorkOrder>()
-      for (const status of visibleOrderStatuses) {
-        let page = 1
-        let loaded = 0
-        let total = Infinity
+      let page = 1
+      let loaded = 0
+      let total = Infinity
 
-        while (loaded < total) {
-          const resp = await listVibrationTableOrders({ page, pageSize, status })
-          if (!resp.success || !resp.data || resp.data.code !== 0) break
+      while (loaded < total) {
+        const resp = await listVibrationTableOrders({ page, pageSize, statuses: visibleOrderStatuses })
+        if (!resp.success || !resp.data || resp.data.code !== 0) break
 
-          const list = resp.data.data.list
-          list
-            .filter(o => o.status === status)
-            .map(mapVibrationTableOrder)
-            .forEach(order => byId.set(order.id, order))
+        const list = resp.data.data.list
+        list
+          .map(mapVibrationTableOrder)
+          .forEach(order => byId.set(order.id, order))
 
-          loaded += list.length
-          total = resp.data.data.total
+        loaded += list.length
+        total = resp.data.data.total
 
-          if (list.length === 0) break
-          page += 1
-          if (page > 50) break
-        }
+        if (list.length === 0) break
+        page += 1
+        if (page > 50) break
       }
       const nextOrders = Array.from(byId.values())
       workOrders.value = nextOrders

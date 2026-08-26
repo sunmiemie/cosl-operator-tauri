@@ -109,6 +109,7 @@ export type ListVibrationTableOrdersParams = {
   pageSize?: number
   taskNumber?: string
   status?: number | string
+  statuses?: Array<number | string>
 }
 
 export async function listVibrationTableOrders(
@@ -119,6 +120,7 @@ export async function listVibrationTableOrders(
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
   if (params.taskNumber) query.taskNumber = params.taskNumber
   if (params.status !== undefined) query.status = String(params.status)
+  if (params.statuses?.length) query.statuses = params.statuses.join(',')
   return http.get<VibrationTableOrderListResponse>('/test/vibration-table/order/list/', {}, query)
 }
 
