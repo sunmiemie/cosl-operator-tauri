@@ -97,8 +97,8 @@ export function isMatrixData(data: OverridePlotData): boolean {
  * Check if data is a 3D plot
  */
 export function is3DPlot(data: OverridePlotData): boolean {
-  const plotType = data[0]?.type
-  return plotType === 'surface' || plotType === 'scatter3d'
+  const types = new Set(['surface', 'scatter3d', 'mesh3d', 'cone', 'streamtube', 'isosurface', 'volume'])
+  return data.some(trace => types.has(String(trace?.type)))
 }
 
 /**
