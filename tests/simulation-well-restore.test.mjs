@@ -41,8 +41,8 @@ assert.match(
 
 assert.match(
   reportContent,
-  /template_id:\s*selectedTemplate\.value\.id/,
-  'test-report should submit the selected persisted template ID with each new report'
+  /template_id:\s*usesTemplateReport\.value \? selectedTemplate\.value\?\.id : null/,
+  'test-report should submit the selected persisted template ID for each template-based report'
 )
 
 assert.match(

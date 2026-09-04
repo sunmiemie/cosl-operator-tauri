@@ -21,6 +21,7 @@ export interface XrayCropArea {
 export interface AppConfig {
   // 连接设置
   backendUrl: string
+  simulatedWellWindowAgentUrl: string
   
   // 外观设置
   themeMode: ThemeMode
@@ -65,6 +66,7 @@ const DEFAULT_LOCKER_PASSWORD = '25d55ad283aa400af464c76d713c07ad'
 
 const defaultConfig: AppConfig = {
   backendUrl: 'http://localhost:8080',
+  simulatedWellWindowAgentUrl: 'ws://127.0.0.1:17890/',
   themeMode: ThemeMode.DARK,
   language: 'zh-CN',
   autoStart: false,
@@ -130,6 +132,7 @@ export async function initializeConfig(): Promise<AppConfig> {
 
       // 读取所有配置项
       const backendUrl = await store.get<string>('backendUrl')
+      const simulatedWellWindowAgentUrl = await store.get<string>('simulatedWellWindowAgentUrl')
       const themeMode = await store.get<ThemeMode>('themeMode')
       const language = await store.get<string>('language')
       const autoStart = await store.get<boolean>('autoStart')
@@ -157,6 +160,10 @@ export async function initializeConfig(): Promise<AppConfig> {
       // 基础配置
       if (backendUrl === null || backendUrl === undefined) {
         await store.set('backendUrl', defaultConfig.backendUrl)
+        needsSave = true
+      }
+      if (simulatedWellWindowAgentUrl === null || simulatedWellWindowAgentUrl === undefined) {
+        await store.set('simulatedWellWindowAgentUrl', defaultConfig.simulatedWellWindowAgentUrl)
         needsSave = true
       }
       if (themeMode === null || themeMode === undefined) {
@@ -259,6 +266,7 @@ export async function initializeConfig(): Promise<AppConfig> {
       // 合并配置
       config.value = {
         backendUrl: backendUrl ?? defaultConfig.backendUrl,
+        simulatedWellWindowAgentUrl: simulatedWellWindowAgentUrl ?? defaultConfig.simulatedWellWindowAgentUrl,
         themeMode: themeMode ?? defaultConfig.themeMode,
         language: language ?? defaultConfig.language,
         autoStart: autoStart ?? defaultConfig.autoStart,

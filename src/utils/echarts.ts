@@ -5,7 +5,7 @@
  * 的懒加载场景中可能重复注册同一图表组件。
  */
 import * as echarts from 'echarts/core'
-import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart, ScatterChart  } from 'echarts/charts'
 import {
   DataZoomComponent,
   GraphicComponent,
@@ -22,6 +22,7 @@ echarts.use([
   LineChart,
   BarChart,
   PieChart,
+  ScatterChart,
   DataZoomComponent,
   GraphicComponent,
   GridComponent,

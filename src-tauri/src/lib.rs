@@ -7,8 +7,9 @@ mod high_temp_pressure_ocr;
 mod ocr;
 mod ocr_runtime;
 mod scanner;
-mod vibration_ocr;
+mod simulated_well_monitor;
 mod simulated_well_upload;
+mod vibration_ocr;
 
 use tauri::{Manager, RunEvent};
 
@@ -114,6 +115,7 @@ pub fn run() {
         // 注册 HALT-HASS 工作台 MQTT 状态管理
         .manage(halt_hass_mqtt::HaltHassMqttState::default())
         .manage(simulated_well_upload::SimulatedWellUploadState::default())
+        .manage(simulated_well_monitor::SimulatedWellMonitorState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -197,6 +199,13 @@ pub fn run() {
             simulated_well_upload::get_simulated_well_upload_files,
             simulated_well_upload::upload_simulated_well_file_chunk,
             simulated_well_upload::cancel_simulated_well_upload,
+            simulated_well_monitor::get_simulated_well_ws_status,
+            simulated_well_monitor::connect_simulated_well_monitor,
+            simulated_well_monitor::start_simulated_well_monitor_session,
+            simulated_well_monitor::get_simulated_well_monitor_snapshot,
+            simulated_well_monitor::stop_simulated_well_monitor_session,
+            simulated_well_monitor::get_simulated_well_monitor_file,
+            simulated_well_monitor::delete_simulated_well_monitor_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -217,6 +226,11 @@ pub fn run() {
                 cleanup_vibration_ocr(state.inner());
             }
             if let Some(state) = app_handle.try_state::<halt_hass_mqtt::HaltHassMqttState>() {
+                state.shutdown_now();
+            }
+            if let Some(state) =
+                app_handle.try_state::<simulated_well_monitor::SimulatedWellMonitorState>()
+            {
                 state.shutdown_now();
             }
         }

@@ -41,4 +41,11 @@ assert.match(page, /template: normalizeOrderType\(order\.orderType\) === 1\s*\? 
 assert.match(page, /template: orderType === 1 \? '' : String\(item\.template \|\| 'DEFAULT_DOWNHOLE_REPORT'\)/, 'route-restored research products should keep the empty template')
 assert.match(page, /template: device\.orderType === 1 \? '' : \(device\.template \|\| device\.sn \|\| 'DEFAULT_DOWNHOLE_REPORT'\)/, 'start-order snapshot should retain research manual mode')
 
+assert.match(downhole, /defineEmits<[\s\S]*'edit-saved': \[workNo: string\]/, 'downhole work should expose a typed edit-saved event')
+assert.match(downhole, /buildSimulatedWellDownholeWorkPayload\(payload, \{\s*status: 1,[\s\S]*emit\('edit-saved', res\.data\?\.data\?\.work_no \|\| editedWorkNo\)/, 'editing downhole work should mark it running and emit its final work number')
+assert.match(page, /async function enterMonitoringFlow\(workNo: string\)[\s\S]*await startMonitorAndNavigate\(workNo\)[\s\S]*view: 'active-test'/, 'saved downhole work should share monitoring and fallback navigation')
+assert.match(page, /const workNo = res\.data\.data\?\.work_no \|\| ''[\s\S]*await enterMonitoringFlow\(workNo\)/, 'saving new downhole work should enter the shared monitoring flow')
+assert.match(page, /async function handleEditedDownholeSaved\(workNo: string\)[\s\S]*activeTestOperation\.value = null[\s\S]*await enterMonitoringFlow\(workNo\)/, 'editing should clear stale active-test context before monitoring')
+assert.match(page, /@edit-saved="handleEditedDownholeSaved"/, 'saving edited downhole work should enter the shared monitoring flow')
+
 console.log('simulation well downhole edit restore assertions passed')

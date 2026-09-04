@@ -23,6 +23,10 @@ defineProps<{
   downholeDevices: any[]
 }>()
 
+const emit = defineEmits<{
+  'edit-saved': [workNo: string]
+}>()
+
 const { initAuth, getAuthHeaders } = useAuth()
 const loading = ref(false)
 const list = ref<SimulatedWellDownholeWorkItem[]>([])
@@ -331,7 +335,7 @@ const handleEditSaveV3 = async (payload: any) => {
     const editedId = editingRow.value.id
     const editedWorkNo = editingRow.value.work_no
     const body = buildSimulatedWellDownholeWorkPayload(payload, {
-      status: editingRow.value.status,
+      status: 1,
       reportCount: payload?.reportCount ?? editingRow.value.report_count
     })
     const res = await updateSimulatedWellDownholeWork(editedId, body, getAuthHeaders())
@@ -360,6 +364,7 @@ const handleEditSaveV3 = async (payload: any) => {
     ElMessage.success(removableDuplicates.length > 0 ? '下井作业已更新，已清理重复记录' : '下井作业已更新')
     editMode.value = false
     editingRow.value = null
+    emit('edit-saved', res.data?.data?.work_no || editedWorkNo)
   } finally {
     editSaving.value = false
   }

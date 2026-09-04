@@ -6,12 +6,17 @@ import DownholeWork from './downhole-work.vue'
 import EquipmentPackage from './equipment-package.vue'
 import SimulationWellDashboard from './components/SimulationWellDashboard.vue'
 import TestReport from './test-report.vue'
+import TestMonitor from './test-monitor.vue'
 import { useSimulationWellSchedule } from './composables/useSimulationWellScheduleV2'
 import { useRoute, useRouter } from 'vue-router'
 import type { DownholeDevice, SimulationWellView, WorkOrder } from './types'
 import SanxinOrderDetailModal from './components/SanxinOrderDetailModal.vue'
 import { listSimulatedWellOrders, type SimulatedWellOrderDTO } from '@/services/simulated-well-api'
 import { useAuth } from '@/composables/useAuth'
+import {
+  startSimulatedWellMonitorSession,
+  type SimulatedWellMonitorCsvFile,
+} from '@/services/simulated-well-monitor'
 import {
   buildSimulatedWellDownholeWorkPayload,
   createSimulatedWellDownholeWork,
@@ -192,7 +197,7 @@ function confirmProductSelection() {
 }
 
 const normalizeView = (v: unknown): SimulationWellView => {
-  if (v === 'downhole-work' || v === 'equipment-package' || v === 'active-test' || v === 'test-report') return v
+  if (v === 'downhole-work' || v === 'equipment-package' || v === 'active-test' || v === 'test-monitor' || v === 'test-report') return v
   return 'dashboard'
 }
 
@@ -377,19 +382,58 @@ function activeTestParamRows() {
   return rows.filter((row, index, arr) => arr.findIndex((item) => item.label === row.label && item.value === row.value) === index)
 }
 
-function finishActiveTestToReportPrep() {
+async function startMonitorAndNavigate(workNo: string) {
+  try {
+    const session = await startSimulatedWellMonitorSession(workNo)
+    await router.replace({
+      path: '/simulation-well',
+      query: {
+        view: 'test-monitor',
+        workNo,
+        monitorSession: session.sessionId,
+      },
+    })
+    return true
+  } catch (error) {
+    ElMessage.error(`启动测试监控失败：${String(error)}`)
+    return false
+  }
+}
+
+async function enterMonitoringFlow(workNo: string) {
+  const monitorStarted = await startMonitorAndNavigate(workNo)
+  if (!monitorStarted) {
+    await router.replace({ path: '/simulation-well', query: { view: 'active-test', workNo } })
+  }
+}
+
+async function handleEditedDownholeSaved(workNo: string) {
+  activeTestOperation.value = null
+  activeTestPayload.value = null
+  activeStartDevicesSnapshot.value = []
+  activeTestOrdersSnapshot.value = []
+  activeTestPaused.value = false
+  await enterMonitoringFlow(workNo)
+}
+
+async function finishActiveTestToReportPrep() {
   activeTestPaused.value = false
   const workNo = activeTestWorkNo.value
   if (!workNo) {
     ElMessage.error('未找到当前下井作业号，无法创建报告')
     return
   }
+  await startMonitorAndNavigate(workNo)
+}
+
+function handleMonitorFinished(file: SimulatedWellMonitorCsvFile) {
   router.replace({
     path: '/simulation-well',
     query: {
       view: 'test-report',
       autoCreate: '1',
-      workNo,
+      workNo: activeTestWorkNo.value || String(route.query.workNo || route.query.work_no || ''),
+      monitorSession: file.sessionId,
     },
   })
 }
@@ -524,14 +568,8 @@ async function handleSaveDownhole(payload: any) {
     schedule.consumeDevices(startDevicesForSave.value)
     await schedule.refreshWorkOrders()
     ElMessage.success('下井作业已保存')
-    router.replace({
-      path: '/simulation-well',
-      query: {
-        view: 'test-report',
-        autoCreate: '1',
-        workNo: res.data.data?.work_no || '',
-      },
-    })
+    const workNo = res.data.data?.work_no || ''
+    await enterMonitoringFlow(workNo)
   } catch (e) {
     ElMessage.error('保存下井作业失败')
     throw e
@@ -734,7 +772,7 @@ async function handleSaveDownhole(payload: any) {
         </button>
         <button class="active-action-btn primary" @click="finishActiveTestToReportPrep">
           <Icon icon="mdi:check-circle-outline" />
-          测试完成，前往报告准备
+          启动测试监控
           <Icon icon="mdi:arrow-right" />
         </button>
       </div>
@@ -744,6 +782,7 @@ async function handleSaveDownhole(payload: any) {
       v-else-if="currentView === 'downhole-work'"
       :today-scheduled-orders="startSelectedOrders"
       :downhole-devices="startSelectedDevices"
+      @edit-saved="handleEditedDownholeSaved"
     />
 
     <EquipmentPackage
@@ -754,12 +793,20 @@ async function handleSaveDownhole(payload: any) {
       @save="handleSaveDownhole"
     />
 
+    <TestMonitor
+      v-else-if="currentView === 'test-monitor'"
+      :work-no="String(route.query.workNo || route.query.work_no || '')"
+      :session-id="String(route.query.monitorSession || '')"
+      @finished="handleMonitorFinished"
+    />
+
     <TestReport
       v-else-if="currentView === 'test-report'"
       :selected-orders="startSelectedOrders"
       :selected-devices="startSelectedDevices"
       :auto-create-report="route.query.autoCreate === '1'"
       :auto-work-no="String(route.query.workNo || route.query.work_no || '')"
+      :monitor-session-id="String(route.query.monitorSession || '')"
       @back="backToDashboard"
     />
   </div>

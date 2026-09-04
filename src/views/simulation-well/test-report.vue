@@ -36,12 +36,18 @@ import {
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 import extractedFields from './extracted_fields.json'
+import {
+  deleteSimulatedWellMonitorFile,
+  getSimulatedWellMonitorFile,
+  type SimulatedWellMonitorCsvFile,
+} from '@/services/simulated-well-monitor'
 
 const props = defineProps<{
   selectedOrders: any[]
   selectedDevices: any[]
   autoCreateReport?: boolean
   autoWorkNo?: string
+  monitorSessionId?: string
 }>()
 
 const emit = defineEmits<{
@@ -115,6 +121,12 @@ const noteEn = ref('')
 const curveChartNo = ref('')
 const curveFiles = ref<LocalUploadFile[]>([])
 const reportFiles = ref<LocalUploadFile[]>([])
+const monitorCsvFile = ref<SimulatedWellMonitorCsvFile | null>(null)
+const monitorCsvLoading = ref(false)
+const activeMonitorCsvFile = computed(() => {
+  if (!monitorCsvFile.value || !selectedOperation.value) return null
+  return selectedOperation.value.work_no === props.autoWorkNo ? monitorCsvFile.value : null
+})
 const operatorSignatureFile = ref<LocalUploadFile | null>(null)
 const operatorSignaturePreviewUrl = ref('')
 const operatorSignatureObjectUrl = ref('')
@@ -227,6 +239,13 @@ function statusText(value: number | undefined, fallback?: string) {
 
 function getReportMeta(report: SimulatedWellReportItem): ReportMeta {
   return report.report_json && typeof report.report_json === 'object' ? { ...report.report_json } : {}
+}
+
+function reportMetaUsesTemplate(meta: ReportMeta | null | undefined) {
+  if (normalizeOrderType(meta?.order_type) !== 1) return true
+  const snapshot = meta?.template_snapshot
+  const snapshotCode = snapshot && typeof snapshot === 'object' ? snapshot.report_no : ''
+  return Boolean(String(meta?.template_code || snapshotCode || '').trim())
 }
 
 function getReportAttachments(report: SimulatedWellReportItem | null | undefined): ReportAttachment[] {
@@ -342,11 +361,37 @@ async function inspectLocalFiles(paths: string[]) {
 }
 
 function contentTypeForName(name: string) {
+  if (/\.csv$/i.test(name)) return 'text/csv'
   if (/\.pdf$/i.test(name)) return 'application/pdf'
   if (/\.png$/i.test(name)) return 'image/png'
   if (/\.jpe?g$/i.test(name)) return 'image/jpeg'
   if (/\.webp$/i.test(name)) return 'image/webp'
   return 'application/octet-stream'
+}
+
+async function loadMonitorCsvFile(sessionId: string) {
+  monitorCsvFile.value = null
+  if (!sessionId) return
+  monitorCsvLoading.value = true
+  try {
+    monitorCsvFile.value = await getSimulatedWellMonitorFile(sessionId)
+  } catch (error) {
+    ElMessage.warning(`监控 CSV 加载失败：${String(error)}`)
+  } finally {
+    monitorCsvLoading.value = false
+  }
+}
+
+async function cleanupMonitorCsvAfterReportFlow() {
+  const sessionId = String(props.monitorSessionId || '').trim()
+  if (!sessionId || !monitorCsvFile.value) return
+  try {
+    await deleteSimulatedWellMonitorFile(sessionId)
+    monitorCsvFile.value = null
+  } catch (error) {
+    // 报告已由后端保存，本地临时文件清理失败不能改变报告保存结果。
+    console.warn('清理本地监控 CSV 失败', error)
+  }
 }
 
 async function selectOperatorSignature() {
@@ -671,11 +716,10 @@ const reportRows = computed(() =>
   reports.value
     .map((report) => {
       const meta = getReportMeta(report)
-      const isResearch = normalizeOrderType(meta.order_type) === 1
       return {
         ...report,
         meta,
-        reportName: isResearch ? '' : (meta.report_name || meta.template_code || report.report_no),
+        reportName: String(meta.report_name || ''),
         deviceName: meta.device_name || '-',
         operatorName: report.tester || '-',
         statusLabel: statusText(report.status, report.status_text),
@@ -728,8 +772,7 @@ const selectedOperationDevices = computed(() => {
   })
 })
 const isResearchReport = computed(() => selectedDevice.value?.orderType === 1)
-const isPreviewResearchReport = computed(() => normalizeOrderType(previewReport.value?.meta?.order_type) === 1)
-const usesTemplateReport = computed(() => !isResearchReport.value)
+const usesTemplateReport = computed(() => !isResearchReport.value || Boolean(selectedDevice.value?.template?.trim()))
 const reportTitle = computed(
   () => usesTemplateReport.value
     ? (selectedTemplate.value?.report_name || selectedDevice.value?.template || '井下测试综合报告')
@@ -742,6 +785,7 @@ const previewTemplateSnapshot = computed<Record<string, any> | null>(() => {
   const snapshot = previewReport.value?.meta?.template_snapshot
   return snapshot && typeof snapshot === 'object' ? snapshot as Record<string, any> : null
 })
+const usesPreviewTemplateReport = computed(() => reportMetaUsesTemplate(previewReport.value?.meta))
 const previewTestItemRows = computed(() =>
   buildReadonlyReportRows(
     previewTemplateSnapshot.value?.test_items,
@@ -928,7 +972,7 @@ async function loadTemplate(device: ReportOperationDevice) {
   selectedTemplate.value = null
   templateMessage.value = ''
 
-  if (device.orderType === 1) return
+  if (device.orderType === 1 && !device.template.trim()) return
 
   templateLoading.value = true
   try {
@@ -938,6 +982,11 @@ async function loadTemplate(device: ReportOperationDevice) {
     if (matchByCode) {
       selectedTemplate.value = matchByCode
       templateMessage.value = '已使用下井作业中保存的关联模板。'
+      return
+    }
+
+    if (device.orderType === 1) {
+      templateMessage.value = '已选择的测试报告模板不存在或已删除，请返回下井作业重新选择。'
       return
     }
 
@@ -1086,7 +1135,7 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
 
   selectedTemplate.value = null
   templateMessage.value = ''
-  if (selectedDevice.value.orderType === 1) return
+  if (selectedDevice.value.orderType === 1 && !selectedDevice.value.template.trim()) return
   templateLoading.value = true
 
   /*
@@ -1151,12 +1200,16 @@ async function saveReport() {
     ElMessage.warning('请先选择下井作业和测试设备')
     return
   }
-  if (!isResearchReport.value && (!selectedTemplate.value || (!editingReport.value && selectedTemplate.value.id <= 0))) {
+  if (usesTemplateReport.value && (!selectedTemplate.value || (!editingReport.value && selectedTemplate.value.id <= 0))) {
     ElMessage.warning('当前测试设备未关联有效报告模板，请先在管理端配置模板后再提交')
     return
   }
-  const description = isResearchReport.value ? '' : note.value.trim()
-  const descriptionEn = isResearchReport.value ? '' : noteEn.value.trim()
+  if (!editingReport.value && props.monitorSessionId && selectedOperation.value.work_no === props.autoWorkNo && !monitorCsvFile.value) {
+    ElMessage.warning(monitorCsvLoading.value ? '监控 CSV 正在加载，请稍后提交' : '未能读取本次测试的监控 CSV')
+    return
+  }
+  const description = usesTemplateReport.value ? note.value.trim() : ''
+  const descriptionEn = usesTemplateReport.value ? noteEn.value.trim() : ''
   if (!operatorSignaturePreviewUrl.value) {
     ElMessage.warning('请上传操作人的电子签名')
     return
@@ -1171,9 +1224,9 @@ async function saveReport() {
     const reportJson = {
       report_name: reportTitle.value,
       order_type: selectedDevice.value.orderType,
-      template_id: isResearchReport.value ? null : selectedTemplate.value?.id,
-      template_code: isResearchReport.value ? '' : templateCode.value,
-      template_name: isResearchReport.value ? '' : (selectedTemplate.value?.report_name || ''),
+      template_id: usesTemplateReport.value ? selectedTemplate.value?.id : null,
+      template_code: usesTemplateReport.value ? templateCode.value : '',
+      template_name: usesTemplateReport.value ? (selectedTemplate.value?.report_name || '') : '',
       downhole_work_no: selectedOperation.value.work_no,
       well_name: selectedOperation.value.well_name,
       testing_device: selectedOperation.value.testing_device || '',
@@ -1185,10 +1238,10 @@ async function saveReport() {
       interval_text: selectedOperation.value.interval_text,
       device_name: selectedDevice.value.deviceName,
       device_sn: selectedDevice.value.sn,
-      conclusion: isResearchReport.value ? '' : conclusion.value,
-      test_items: isResearchReport.value ? {} : collectMeta(testItemValues),
-      evaluation_standards: isResearchReport.value ? {} : collectMeta(evaluationValues),
-      transfer_data_records: isResearchReport.value ? {} : collectMeta(transferDataValues),
+      conclusion: usesTemplateReport.value ? conclusion.value : '',
+      test_items: usesTemplateReport.value ? collectMeta(testItemValues) : {},
+      evaluation_standards: usesTemplateReport.value ? collectMeta(evaluationValues) : {},
+      transfer_data_records: usesTemplateReport.value ? collectMeta(transferDataValues) : {},
       curve_chart_no: curveChartNo.value.trim(),
       curve_chart_files: curveFiles.value.map((file) => file.name),
       report_files: reportFiles.value.map((file) => file.name),
@@ -1221,6 +1274,15 @@ async function saveReport() {
     const uploadFiles: SimulatedWellLocalUploadFile[] = [
       ...curveFiles.value.map((file) => ({ ...file, kind: 'curve_chart' as const })),
       ...reportFiles.value.map((file) => ({ ...file, kind: 'report_file' as const })),
+      ...(!editing && activeMonitorCsvFile.value
+        ? [{
+            path: activeMonitorCsvFile.value.path,
+            name: activeMonitorCsvFile.value.name,
+            size: activeMonitorCsvFile.value.size,
+            contentType: 'text/csv',
+            kind: 'monitor_csv' as const,
+          }]
+        : []),
       ...(operatorSignatureFile.value
         ? [{ ...operatorSignatureFile.value, kind: 'operator_signature' as const }]
         : []),
@@ -1285,6 +1347,7 @@ async function saveReport() {
       resetReportForm()
       return
     }
+    if (!editing) void cleanupMonitorCsvAfterReportFlow()
     mode.value = 'list'
     resetSelection()
   } finally {
@@ -1321,6 +1384,7 @@ function continueReportFill() {
 
 function finishDownholeOperation() {
   reportNextStepVisible.value = false
+  void cleanupMonitorCsvAfterReportFlow()
   mode.value = 'list'
   resetSelection()
 }
@@ -1375,6 +1439,19 @@ async function openAttachment(attachment: ReportAttachment) {
   }
 }
 
+async function openMonitorCsv(fileUrl: string | null | undefined) {
+  const url = resolveFileUrl(fileUrl || undefined)
+  if (!/^https?:\/\//i.test(url)) {
+    ElMessage.warning('监控 CSV 地址无效')
+    return
+  }
+  try {
+    await openUrl(url)
+  } catch (error) {
+    ElMessage.error(`监控 CSV 打开失败：${String(error)}`)
+  }
+}
+
 function batchDownload() {
   ElMessage.info('批量下载流程待接入')
 }
@@ -1418,6 +1495,12 @@ watch(
     void openCreateFlowForWorkNo(String(workNo))
   },
   { immediate: true }
+)
+
+watch(
+  () => props.monitorSessionId,
+  (sessionId) => { void loadMonitorCsvFile(String(sessionId || '')) },
+  { immediate: true },
 )
 </script>
 
@@ -1647,7 +1730,7 @@ watch(
           </div>
         </div>
 
-        <div v-if="!isResearchReport" class="downhole-card">
+        <div v-if="usesTemplateReport" class="downhole-card">
           <div class="downhole-card-title">测试项目 <span class="english-sub">Test Item</span></div>
           <div v-if="!(selectedTemplate?.test_items || []).length" class="empty-state"><p>当前模板未配置测试项目</p></div>
           <div v-else class="field-list">
@@ -1841,7 +1924,7 @@ watch(
           </div>
         </div>
 
-        <div v-if="!isResearchReport" class="downhole-card">
+        <div v-if="usesTemplateReport" class="downhole-card">
           <div class="downhole-card-title">资料评价标准值 <span class="english-sub">Data Evaluation Standard Value</span></div>
           <div v-if="!(selectedTemplate?.evaluation_standards || []).length" class="empty-state"><p>当前模板未配置评价标准</p></div>
           <div v-else class="field-list">
@@ -1891,7 +1974,7 @@ watch(
           </div>
         </div>
 
-        <div v-if="!isResearchReport && (selectedTemplate?.transfer_data_records || []).length" class="downhole-card">
+        <div v-if="usesTemplateReport && (selectedTemplate?.transfer_data_records || []).length" class="downhole-card">
           <div class="downhole-card-title">测试完成转样数据记录 <span class="english-sub">Transferred Data Record Finished by Test</span></div>
           <div class="field-list">
             <template v-for="(field, fieldIndex) in selectedTemplate?.transfer_data_records || []" :key="fieldKey('transfer', fieldIndex)">
@@ -1921,7 +2004,7 @@ watch(
           </div>
         </div>
 
-        <div v-if="!isResearchReport" class="downhole-card">
+        <div v-if="usesTemplateReport" class="downhole-card">
           <div class="downhole-card-title">测试结论 <span class="english-sub">Test Conclusion</span></div>
           <div class="inline-radio-group conclusion-radio-group">
             <label class="rect-radio wide conclusion-radio" :class="{ selected: conclusion === 'qualified' }">
@@ -1995,6 +2078,17 @@ watch(
                 <div v-if="!curveFiles.length" class="tiny-hint">支持全部文件类型，可多选；单文件最大 20 GiB</div>
               </div>
             </div>
+            <div class="upload-box">
+              <div class="upload-title">测试监控 CSV</div>
+              <div class="file-list">
+                <div v-if="monitorCsvLoading" class="tiny-hint">正在读取监控数据文件…</div>
+                <div v-else-if="activeMonitorCsvFile" class="file-row">
+                  {{ activeMonitorCsvFile.name }} · {{ formatFileSize(activeMonitorCsvFile.size) }}
+                </div>
+                <div v-else-if="editingReport?.monitor_csv_url" class="file-row">已保存监控 CSV</div>
+                <div v-else class="tiny-hint">本次流程未关联监控 CSV</div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2052,7 +2146,7 @@ watch(
               <div class="info-label">报告编号</div>
               <div class="info-value">{{ previewReport.report_no }}</div>
             </div>
-            <div v-if="!isPreviewResearchReport" class="info-item">
+            <div v-if="usesPreviewTemplateReport" class="info-item">
               <div class="info-label">报告名称</div>
               <div class="info-value">{{ previewReport.meta.report_name || '' }}</div>
             </div>
@@ -2083,20 +2177,20 @@ watch(
               <div class="info-label">测试井段</div>
               <div class="info-value">{{ formatSimulatedWellInterval(previewReport.meta.interval_text) }}</div>
             </div>
-            <div v-if="!isPreviewResearchReport" class="info-item wide">
+            <div v-if="usesPreviewTemplateReport" class="info-item wide">
               <div class="info-label">测试结论</div>
               <div class="info-value">{{ previewReport.meta.conclusion === 'unqualified' ? '所测资料存在不合格项' : '所测资料合格' }}</div>
             </div>
-            <div v-if="!isPreviewResearchReport && previewReport.meta.note" class="info-item wide">
+            <div v-if="usesPreviewTemplateReport && previewReport.meta.note" class="info-item wide">
               <div class="info-label">描述（中文）</div>
               <div class="info-value">{{ previewReport.meta.note }}</div>
             </div>
-            <div v-if="!isPreviewResearchReport && previewReport.meta.note_en" class="info-item wide">
+            <div v-if="usesPreviewTemplateReport && previewReport.meta.note_en" class="info-item wide">
               <div class="info-label">描述（英文）</div>
               <div class="info-value">{{ previewReport.meta.note_en }}</div>
             </div>
           </div>
-          <div v-if="!isPreviewResearchReport" class="report-data-section">
+          <div v-if="usesPreviewTemplateReport" class="report-data-section">
             <div class="downhole-card-title">测试项目 <span class="english-sub">Test Item</span></div>
             <div v-if="!previewTemplateSnapshot" class="tiny-hint">暂无可用项目定义</div>
             <div v-else-if="!previewTestItemRows.length" class="tiny-hint">当前模板未配置测试项目</div>
@@ -2107,7 +2201,7 @@ watch(
               </div>
             </div>
           </div>
-          <div v-if="!isPreviewResearchReport" class="report-data-section">
+          <div v-if="usesPreviewTemplateReport" class="report-data-section">
             <div class="downhole-card-title">资料评价标准值 <span class="english-sub">Data Evaluation Standard Value</span></div>
             <div v-if="!previewTemplateSnapshot" class="tiny-hint">暂无可用项目定义</div>
             <div v-else-if="!previewEvaluationRows.length" class="tiny-hint">当前模板未配置评价标准</div>
@@ -2118,7 +2212,7 @@ watch(
               </div>
             </div>
           </div>
-          <div v-if="!isPreviewResearchReport && previewTransferDataRows.length" class="report-data-section">
+          <div v-if="usesPreviewTemplateReport && previewTransferDataRows.length" class="report-data-section">
             <div class="downhole-card-title">测试完成转样数据记录 <span class="english-sub">Transferred Data Record Finished by Test</span></div>
             <div class="readonly-report-list">
               <div v-for="row in previewTransferDataRows" :key="row.label" class="readonly-report-row">
@@ -2129,8 +2223,18 @@ watch(
           </div>
           <div class="attachment-section">
             <div class="downhole-card-title">报告附件 <span class="english-sub">Attachments</span></div>
-            <div v-if="!getReportAttachments(previewReport).length" class="tiny-hint">暂无上传附件</div>
+            <div v-if="!getReportAttachments(previewReport).length && !previewReport.monitor_csv_url" class="tiny-hint">暂无上传附件</div>
             <div v-else class="attachment-list">
+              <div v-if="previewReport.monitor_csv_url" class="attachment-row">
+                <div class="attachment-main">
+                  <span class="attachment-badge">监控 CSV</span>
+                  <div class="attachment-file-list">
+                    <div class="attachment-name">模拟井测试监控数据</div>
+                    <div class="attachment-path" :title="previewReport.monitor_csv_url">{{ previewReport.monitor_csv_url }}</div>
+                  </div>
+                </div>
+                <button class="action-btn action-btn-view" @click="openMonitorCsv(previewReport.monitor_csv_url)">打开文件</button>
+              </div>
               <div v-if="curveAttachments(previewReport).length" class="attachment-row">
                 <div class="attachment-main">
                   <span class="attachment-badge">原始文件</span>

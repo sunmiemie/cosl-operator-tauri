@@ -1,4 +1,4 @@
-export type SimulationWellView = 'dashboard' | 'downhole-work' | 'equipment-package' | 'active-test' | 'test-report'
+export type SimulationWellView = 'dashboard' | 'downhole-work' | 'equipment-package' | 'active-test' | 'test-monitor' | 'test-report'
 
 export interface DeviceItem {
   id: string

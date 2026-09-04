@@ -14,6 +14,7 @@ export interface SimulatedWellReportItem {
   reviewer_id?: number | null
   operator_user_id?: number | null
   operator_signature_url?: string | null
+  monitor_csv_url?: string | null
   report_json?: Record<string, unknown>
   attachments?: Array<Record<string, unknown>>
   order_ids?: number[]
@@ -111,7 +112,7 @@ export interface SimulatedWellLocalUploadFile {
   name: string
   size: number
   contentType?: string
-  kind: 'curve_chart' | 'report_file' | 'operator_signature'
+  kind: 'curve_chart' | 'report_file' | 'operator_signature' | 'monitor_csv'
 }
 
 interface UploadSessionResponse {

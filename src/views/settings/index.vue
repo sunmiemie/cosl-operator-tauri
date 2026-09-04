@@ -28,8 +28,11 @@ const flojoyBackend = useFlojoyBackend()
 
 // 后端地址
 const backendUrl = ref('http://localhost:60034')
+const simulatedWellWindowAgentUrl = ref('ws://127.0.0.1:17890/')
 const isSaving = ref(false)
 const saveSuccess = ref(false)
+const isSavingWindowAgent = ref(false)
+const windowAgentSaveSuccess = ref(false)
 const configPath = ref('')
 
 // 连接测试状态
@@ -156,6 +159,7 @@ onMounted(async () => {
   
   // 加载配置
   backendUrl.value = config.value.backendUrl
+  simulatedWellWindowAgentUrl.value = config.value.simulatedWellWindowAgentUrl
   microDevice.value = config.value.microDevice ?? -1
   planeDevice.value = config.value.planeDevice ?? -1
   xrayDevice.value = config.value.xrayDevice ?? -1
@@ -406,6 +410,34 @@ async function doSaveBackendUrl() {
     console.error('保存后端地址失败:', error)
   } finally {
     isSaving.value = false
+  }
+}
+
+function saveWindowAgentUrl() {
+  requirePassword(doSaveWindowAgentUrl)
+}
+
+async function doSaveWindowAgentUrl() {
+  const value = simulatedWellWindowAgentUrl.value.trim()
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'ws:' || !parsed.hostname) throw new Error('invalid WebSocket URL')
+  } catch {
+    ElMessage.error('WindowAgent 地址必须是有效的 ws:// URL')
+    return
+  }
+  isSavingWindowAgent.value = true
+  windowAgentSaveSuccess.value = false
+  try {
+    await setConfigItem('simulatedWellWindowAgentUrl', value)
+    simulatedWellWindowAgentUrl.value = value
+    windowAgentSaveSuccess.value = true
+    setTimeout(() => { windowAgentSaveSuccess.value = false }, 2000)
+  } catch (error) {
+    console.error('保存 WindowAgent 地址失败:', error)
+    ElMessage.error('保存 WindowAgent 地址失败')
+  } finally {
+    isSavingWindowAgent.value = false
   }
 }
 
@@ -868,7 +900,6 @@ function getFlojoyInitStatusText(): string {
               </button>
             </div>
           </div>
-          
           <!-- Python 版本显示 -->
           <div class="settings-item" v-if="flojoyBackend.pythonVersion.value">
             <span class="item-label">Python 版本</span>
@@ -987,6 +1018,27 @@ function getFlojoyInitStatusText(): string {
               >
                 <Icon v-if="saveSuccess" icon="mdi:check" />
                 <Icon v-else-if="isSaving" icon="mdi:loading" class="spin" />
+                <span v-else>保存</span>
+              </button>
+            </div>
+          </div>
+          <div class="settings-item backend-item">
+            <span class="item-label">模拟井 WebSocket 地址</span>
+            <div class="backend-config">
+              <input
+                v-model="simulatedWellWindowAgentUrl"
+                type="text"
+                class="backend-input"
+                placeholder="ws://127.0.0.1:17890/"
+              />
+              <button
+                class="action-btn save-btn"
+                :class="{ saving: isSavingWindowAgent, success: windowAgentSaveSuccess }"
+                :disabled="isSavingWindowAgent"
+                @click="saveWindowAgentUrl"
+              >
+                <Icon v-if="windowAgentSaveSuccess" icon="mdi:check" />
+                <Icon v-else-if="isSavingWindowAgent" icon="mdi:loading" class="spin" />
                 <span v-else>保存</span>
               </button>
             </div>
