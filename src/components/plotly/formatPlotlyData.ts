@@ -57,7 +57,7 @@ export function formatPlotlyData(
           fill: {
             color: cellFillColor,
           },
-          ...(d.header?.values?.length === 0 && {
+          ...(!d.header?.values?.length && {
             font: { color: matrixFontColor },
           }),
           ...(isThumbnail && {
@@ -90,7 +90,7 @@ export function formatPlotlyData(
  * Check if data represents a matrix (table without headers)
  */
 export function isMatrixData(data: OverridePlotData): boolean {
-  return data[0]?.header?.values?.length === 0
+  return data[0]?.type === 'table' && !data[0]?.header?.values?.length
 }
 
 /**
