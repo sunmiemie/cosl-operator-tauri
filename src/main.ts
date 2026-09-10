@@ -4,6 +4,7 @@ import router from './router'
 import { initializeConfig } from './composables/useConfig'
 import { initializeOfflineIcons } from './utils/iconify-offline'
 import { http } from './services/http'
+import { invoke } from '@tauri-apps/api/core'
 
 // 导入 Element Plus 及其样式
 import ElementPlus from 'element-plus'
@@ -28,6 +29,19 @@ async function bootstrap() {
     console.log('正在初始化配置...')
     const config = await initializeConfig()
     console.log('配置初始化完成:', config)
+
+    try {
+      await invoke('configure_file_receiver', {
+        config: {
+          enabled: config.fileReceiverEnabled,
+          port: config.fileReceiverPort,
+          directory: config.fileReceiverDirectory,
+          tokenHash: config.fileReceiverTokenHash,
+        },
+      })
+    } catch (error) {
+      console.error('文件接收服务启动失败:', error)
+    }
 
     console.log('正在初始化 API 服务...')
     await http.init()

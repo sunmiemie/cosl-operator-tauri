@@ -20,7 +20,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 // 当前使用输入框手动输入作为临时方案
 
 const { themeMode, setTheme, initTheme } = useTheme()
-const { initConfig, setConfigItem, getConfigPath, config } = useConfig()
+const { initConfig, setConfigItem, setConfig, getConfigPath, config } = useConfig()
 const camera = useCamera()
 
 // Flojoy 后端管理
@@ -34,6 +34,14 @@ const saveSuccess = ref(false)
 const isSavingWindowAgent = ref(false)
 const windowAgentSaveSuccess = ref(false)
 const configPath = ref('')
+type FileReceiverStatus = { running: boolean; bindAddress: string; port: number; directory: string; error?: string | null }
+const fileReceiverEnabled = ref(false)
+const fileReceiverPort = ref(17891)
+const fileReceiverDirectory = ref('')
+const fileReceiverTokenHash = ref('')
+const generatedFileReceiverToken = ref('')
+const fileReceiverStatus = ref<FileReceiverStatus | null>(null)
+const isSavingFileReceiver = ref(false)
 
 // 连接测试状态
 const isTestingConnection = ref(false)
@@ -160,6 +168,10 @@ onMounted(async () => {
   // 加载配置
   backendUrl.value = config.value.backendUrl
   simulatedWellWindowAgentUrl.value = config.value.simulatedWellWindowAgentUrl
+  fileReceiverEnabled.value = config.value.fileReceiverEnabled
+  fileReceiverPort.value = config.value.fileReceiverPort
+  fileReceiverDirectory.value = config.value.fileReceiverDirectory
+  fileReceiverTokenHash.value = config.value.fileReceiverTokenHash
   microDevice.value = config.value.microDevice ?? -1
   planeDevice.value = config.value.planeDevice ?? -1
   xrayDevice.value = config.value.xrayDevice ?? -1
@@ -184,6 +196,7 @@ onMounted(async () => {
   
   // 获取配置文件路径
   configPath.value = await getConfigPath()
+  fileReceiverStatus.value = await invoke<FileReceiverStatus>('get_file_receiver_status')
   
   // 加载摄像头列表
   await loadCameraList()
@@ -438,6 +451,65 @@ async function doSaveWindowAgentUrl() {
     ElMessage.error('保存 WindowAgent 地址失败')
   } finally {
     isSavingWindowAgent.value = false
+  }
+}
+
+async function selectFileReceiverDirectory() {
+  const selected = await open({ title: '选择 WindowAgent 文件接收目录', directory: true, multiple: false })
+  if (typeof selected === 'string') fileReceiverDirectory.value = selected
+}
+
+async function generateFileReceiverToken() {
+  const generated = await invoke<{ token: string; tokenHash: string }>('generate_file_receiver_token')
+  generatedFileReceiverToken.value = generated.token
+  fileReceiverTokenHash.value = generated.tokenHash
+  await setConfigItem('fileReceiverTokenHash', generated.tokenHash)
+  ElMessage.success('新令牌已生成，旧令牌已经失效')
+  if (fileReceiverEnabled.value) await saveFileReceiver()
+}
+
+async function copyFileReceiverToken() {
+  if (!generatedFileReceiverToken.value) return
+  await navigator.clipboard.writeText(generatedFileReceiverToken.value)
+  ElMessage.success('令牌已复制，请粘贴到 WindowAgent')
+}
+
+async function saveFileReceiver() {
+  if (fileReceiverEnabled.value && !fileReceiverDirectory.value.trim()) {
+    ElMessage.warning('请先选择文件接收目录')
+    return
+  }
+  if (fileReceiverEnabled.value && !fileReceiverTokenHash.value) {
+    ElMessage.warning('请先生成共享令牌')
+    return
+  }
+  if (!Number.isInteger(fileReceiverPort.value) || fileReceiverPort.value < 1 || fileReceiverPort.value > 65535) {
+    ElMessage.warning('监听端口无效')
+    return
+  }
+  isSavingFileReceiver.value = true
+  try {
+    const values = {
+      fileReceiverEnabled: fileReceiverEnabled.value,
+      fileReceiverPort: Number(fileReceiverPort.value),
+      fileReceiverDirectory: fileReceiverDirectory.value.trim(),
+      fileReceiverTokenHash: fileReceiverTokenHash.value,
+    }
+    await setConfig(values)
+    fileReceiverStatus.value = await invoke<FileReceiverStatus>('configure_file_receiver', {
+      config: {
+        enabled: values.fileReceiverEnabled,
+        port: values.fileReceiverPort,
+        directory: values.fileReceiverDirectory,
+        tokenHash: values.fileReceiverTokenHash,
+      },
+    })
+    ElMessage.success(fileReceiverStatus.value.running ? '文件接收服务已启动' : '文件接收服务已停止')
+  } catch (error) {
+    ElMessage.error(`文件接收服务配置失败：${String(error)}`)
+    fileReceiverStatus.value = await invoke<FileReceiverStatus>('get_file_receiver_status')
+  } finally {
+    isSavingFileReceiver.value = false
   }
 }
 
@@ -1040,6 +1112,52 @@ function getFlojoyInitStatusText(): string {
                 <Icon v-if="windowAgentSaveSuccess" icon="mdi:check" />
                 <Icon v-else-if="isSavingWindowAgent" icon="mdi:loading" class="spin" />
                 <span v-else>保存</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3 class="section-title">
+          <Icon icon="mdi:folder-arrow-down-outline" class="section-icon" />
+          文件接收
+        </h3>
+        <div class="settings-list">
+          <div class="settings-item">
+            <span class="item-label">启用接收服务</span>
+            <label class="switch"><input v-model="fileReceiverEnabled" type="checkbox" /><span class="slider"></span></label>
+          </div>
+          <div class="settings-item backend-item">
+            <span class="item-label">监听端口</span>
+            <div class="backend-config">
+              <input v-model.number="fileReceiverPort" class="backend-input port-input" type="number" min="1" max="65535" />
+            </div>
+          </div>
+          <div class="settings-item backend-item">
+            <span class="item-label">接收根目录</span>
+            <div class="backend-config">
+              <input v-model="fileReceiverDirectory" class="backend-input" placeholder="请选择接收目录" />
+              <button class="action-btn" @click="selectFileReceiverDirectory"><Icon icon="mdi:folder-open-outline" />选择</button>
+            </div>
+          </div>
+          <div class="settings-item backend-item">
+            <span class="item-label">共享令牌</span>
+            <div class="backend-config">
+              <input :value="generatedFileReceiverToken || (fileReceiverTokenHash ? '••••••••（已配置）' : '')" readonly class="backend-input" placeholder="尚未生成" />
+              <button class="action-btn" @click="generateFileReceiverToken">重新生成</button>
+              <button class="action-btn" :disabled="!generatedFileReceiverToken" @click="copyFileReceiverToken"><Icon icon="mdi:content-copy" />复制</button>
+            </div>
+          </div>
+          <div class="settings-item backend-item">
+            <span class="item-label">运行状态</span>
+            <div class="backend-config">
+              <span class="status-badge" :class="fileReceiverStatus?.running ? 'status-success' : 'status-warning'">
+                {{ fileReceiverStatus?.running ? `监听中 ${fileReceiverStatus.bindAddress}:${fileReceiverStatus.port}` : '未运行' }}
+              </span>
+              <span v-if="fileReceiverStatus?.error" class="text-error">{{ fileReceiverStatus.error }}</span>
+              <button class="action-btn save-btn" :disabled="isSavingFileReceiver" @click="saveFileReceiver">
+                <Icon v-if="isSavingFileReceiver" icon="mdi:loading" class="spin" /><span v-else>保存并应用</span>
               </button>
             </div>
           </div>

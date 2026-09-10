@@ -46,6 +46,9 @@ const ending = ref(false)
 const clock = ref(Date.now())
 const depthChart = ref<InstanceType<typeof VChart> | null>(null)
 
+const DEPTH_DISPLAY_DIGITS = 3
+const DEPTH_INITIAL_RANGE_OFFSET_M = 100
+const DEPTH_RANGE_EXPANSION_STEP_M = 100
 const DEPTH_CHART_ZOOM_LEVELS = [
   { label: '5 分钟', durationMs: 5 * 60 * 1000 },
   { label: '10 分钟', durationMs: 10 * 60 * 1000 },
@@ -139,6 +142,33 @@ const depthChartBounds = computed(() => {
     start: Math.min(...timestamps),
     end: Math.max(...timestamps),
   }
+})
+
+const depthYAxisRange = computed(() => {
+  const depths = (snapshot.value?.points || [])
+    .map(point => point.value)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  const initialDepth = depths[0]
+  if (initialDepth === undefined) return null
+
+  let observedMin = initialDepth
+  let observedMax = initialDepth
+  for (const depth of depths) {
+    observedMin = Math.min(observedMin, depth)
+    observedMax = Math.max(observedMax, depth)
+  }
+
+  const initialMin = initialDepth - DEPTH_INITIAL_RANGE_OFFSET_M
+  const initialMax = initialDepth + DEPTH_INITIAL_RANGE_OFFSET_M
+  const lowerExpansionSteps = observedMin < initialMin
+    ? Math.ceil((initialMin - observedMin) / DEPTH_RANGE_EXPANSION_STEP_M)
+    : 0
+  const upperExpansionSteps = observedMax > initialMax
+    ? Math.ceil((observedMax - initialMax) / DEPTH_RANGE_EXPANSION_STEP_M)
+    : 0
+  const min = initialMin - lowerExpansionSteps * DEPTH_RANGE_EXPANSION_STEP_M
+  const max = initialMax + upperExpansionSteps * DEPTH_RANGE_EXPANSION_STEP_M
+  return { min, max }
 })
 
 function normalizeChartRange(range: DepthChartRange, spanMs: number, domain: DepthChartRange) {
@@ -340,7 +370,7 @@ function depthAxisTooltip(params: any[]) {
   const depth = depthItem?.value?.[1]
   return [
     Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString('zh-CN', { hour12: false }) : '--',
-    `深度：${typeof depth === 'number' && Number.isFinite(depth) ? `${depth.toFixed(2)} m` : '--'}`,
+    `深度：${typeof depth === 'number' && Number.isFinite(depth) ? `${depth.toFixed(DEPTH_DISPLAY_DIGITS)} m` : '--'}`,
   ].join('<br/>')
 }
 
@@ -351,7 +381,7 @@ function communicationPointTooltip(params: any) {
   const depth = item?.value?.[1]
   const event = item?.data as ReturnType<typeof groupedCommunicationEvents>[number] | undefined
   const carried = event?.depthCarried ? '（深度沿用最近值）' : ''
-  lines.push(`深度：${typeof depth === 'number' && Number.isFinite(depth) ? `${depth.toFixed(2)} m` : '--'}${carried}`)
+  lines.push(`深度：${typeof depth === 'number' && Number.isFinite(depth) ? `${depth.toFixed(DEPTH_DISPLAY_DIGITS)} m` : '--'}${carried}`)
   if (event) {
     const states = event.deviceStates?.length
       ? event.deviceStates
@@ -386,6 +416,11 @@ const chartOption = computed(() => ({
     type: 'value',
     name: '深度 (m)',
     scale: true,
+    min: depthYAxisRange.value?.min,
+    max: depthYAxisRange.value?.max,
+    axisLabel: {
+      formatter: (value: number) => value.toFixed(0),
+    },
   },
   dataZoom: visibleChartRange.value ? [
     {
@@ -600,7 +635,7 @@ onBeforeUnmount(() => {
         <div class="metric-grid">
           <section class="metric-card emphasis">
             <div class="metric-label">当前深度</div>
-            <div class="metric-value">{{ formatMetric(displayedDepth, 2) }} <small>m</small></div>
+            <div class="metric-value">{{ formatMetric(displayedDepth, DEPTH_DISPLAY_DIGITS) }} <small>m</small></div>
             <span v-if="!depthUsesPrevious" :class="['metric-status', latest?.service.cdepth_status || 'unavailable']">
               {{ statusText(latest?.service.cdepth_status) }}
             </span>

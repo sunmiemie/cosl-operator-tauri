@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod cache;
 mod camera;
+mod file_receiver;
 mod flojoy;
 mod halt_hass_mqtt;
 mod high_temp_pressure_ocr;
@@ -116,9 +117,13 @@ pub fn run() {
         .manage(halt_hass_mqtt::HaltHassMqttState::default())
         .manage(simulated_well_upload::SimulatedWellUploadState::default())
         .manage(simulated_well_monitor::SimulatedWellMonitorState::default())
+        .manage(file_receiver::FileReceiverState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
+            file_receiver::generate_file_receiver_token,
+            file_receiver::get_file_receiver_status,
+            file_receiver::configure_file_receiver,
             // 摄像头相关
             camera::get_camera_list,
             camera::open_camera,
@@ -226,6 +231,9 @@ pub fn run() {
                 cleanup_vibration_ocr(state.inner());
             }
             if let Some(state) = app_handle.try_state::<halt_hass_mqtt::HaltHassMqttState>() {
+                state.shutdown_now();
+            }
+            if let Some(state) = app_handle.try_state::<file_receiver::FileReceiverState>() {
                 state.shutdown_now();
             }
             if let Some(state) =

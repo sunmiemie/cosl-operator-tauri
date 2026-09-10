@@ -51,6 +51,10 @@ ndarray = "0.16"                                                 # 张量操作
 # 文件上传
 tokio-util = { version = "0.7.19", features = ["io"] }
 reqwest = { version = "0.13.4", features = ["stream", "json"] }
+axum = "0.8"
+sha2 = "0.10"
+rand = "0.9"
+hex = "0.4"
 
 # nokhwa 摄像头库 - 跨平台
 # Windows: 使用 Media Foundation

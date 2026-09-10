@@ -22,6 +22,10 @@ export interface AppConfig {
   // 连接设置
   backendUrl: string
   simulatedWellWindowAgentUrl: string
+  fileReceiverEnabled: boolean
+  fileReceiverPort: number
+  fileReceiverDirectory: string
+  fileReceiverTokenHash: string
   
   // 外观设置
   themeMode: ThemeMode
@@ -67,6 +71,10 @@ const DEFAULT_LOCKER_PASSWORD = '25d55ad283aa400af464c76d713c07ad'
 const defaultConfig: AppConfig = {
   backendUrl: 'http://localhost:8080',
   simulatedWellWindowAgentUrl: 'ws://127.0.0.1:17890/',
+  fileReceiverEnabled: false,
+  fileReceiverPort: 17891,
+  fileReceiverDirectory: '',
+  fileReceiverTokenHash: '',
   themeMode: ThemeMode.DARK,
   language: 'zh-CN',
   autoStart: false,
@@ -133,6 +141,10 @@ export async function initializeConfig(): Promise<AppConfig> {
       // 读取所有配置项
       const backendUrl = await store.get<string>('backendUrl')
       const simulatedWellWindowAgentUrl = await store.get<string>('simulatedWellWindowAgentUrl')
+      const fileReceiverEnabled = await store.get<boolean>('fileReceiverEnabled')
+      const fileReceiverPort = await store.get<number>('fileReceiverPort')
+      const fileReceiverDirectory = await store.get<string>('fileReceiverDirectory')
+      const fileReceiverTokenHash = await store.get<string>('fileReceiverTokenHash')
       const themeMode = await store.get<ThemeMode>('themeMode')
       const language = await store.get<string>('language')
       const autoStart = await store.get<boolean>('autoStart')
@@ -164,6 +176,26 @@ export async function initializeConfig(): Promise<AppConfig> {
       }
       if (simulatedWellWindowAgentUrl === null || simulatedWellWindowAgentUrl === undefined) {
         await store.set('simulatedWellWindowAgentUrl', defaultConfig.simulatedWellWindowAgentUrl)
+        needsSave = true
+      }
+      if (fileReceiverEnabled === null || fileReceiverEnabled === undefined) {
+        await store.set('fileReceiverEnabled', defaultConfig.fileReceiverEnabled)
+        needsSave = true
+      }
+      // 监听地址已固定为 0.0.0.0，清理旧版遗留配置。
+      if (await store.delete('fileReceiverBindAddress')) {
+        needsSave = true
+      }
+      if (fileReceiverPort === null || fileReceiverPort === undefined) {
+        await store.set('fileReceiverPort', defaultConfig.fileReceiverPort)
+        needsSave = true
+      }
+      if (fileReceiverDirectory === null || fileReceiverDirectory === undefined) {
+        await store.set('fileReceiverDirectory', defaultConfig.fileReceiverDirectory)
+        needsSave = true
+      }
+      if (fileReceiverTokenHash === null || fileReceiverTokenHash === undefined) {
+        await store.set('fileReceiverTokenHash', defaultConfig.fileReceiverTokenHash)
         needsSave = true
       }
       if (themeMode === null || themeMode === undefined) {
@@ -267,6 +299,10 @@ export async function initializeConfig(): Promise<AppConfig> {
       config.value = {
         backendUrl: backendUrl ?? defaultConfig.backendUrl,
         simulatedWellWindowAgentUrl: simulatedWellWindowAgentUrl ?? defaultConfig.simulatedWellWindowAgentUrl,
+        fileReceiverEnabled: fileReceiverEnabled ?? defaultConfig.fileReceiverEnabled,
+        fileReceiverPort: fileReceiverPort ?? defaultConfig.fileReceiverPort,
+        fileReceiverDirectory: fileReceiverDirectory ?? defaultConfig.fileReceiverDirectory,
+        fileReceiverTokenHash: fileReceiverTokenHash ?? defaultConfig.fileReceiverTokenHash,
         themeMode: themeMode ?? defaultConfig.themeMode,
         language: language ?? defaultConfig.language,
         autoStart: autoStart ?? defaultConfig.autoStart,
