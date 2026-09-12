@@ -48,7 +48,7 @@ export function createPlotLayout(theme: 'dark' | 'light'): Partial<Layout> {
     plot_bgcolor: plotBackgroundColor,
     autosize: true,
     font: { color: accentColor },
-    margin: DEFAULT_MARGIN,
+    margin: { ...DEFAULT_MARGIN },
     xaxis: {
       gridcolor: theme === 'dark' ? '#333333' : '#e5e5e5',
       zerolinecolor: theme === 'dark' ? '#444444' : '#cccccc',
@@ -93,6 +93,10 @@ export function mergeLayouts(
   return {
     ...base,
     ...override,
+    font: {
+      ...base.font,
+      ...override.font,
+    },
     margin: {
       ...base.margin,
       ...override.margin,
