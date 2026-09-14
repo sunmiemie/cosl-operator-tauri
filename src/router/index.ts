@@ -31,6 +31,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'HALT-HASS测试', requiresAuth: true }
       },
       {
+        path: 'halt-hass-sds-test',
+        name: 'HaltHassSdsTest',
+        component: () => import('@/views/halt-hass-sds-test/index.vue'),
+        meta: { title: 'HALT-HASS SDS测试', requiresAuth: true }
+      },
+      {
         path: 'high-temp-pressure',
         name: 'HighTempPressure',
         component: () => import('@/views/high-temp-pressure/index.vue'),

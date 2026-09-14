@@ -19,15 +19,18 @@ import {
 } from '@/types'
 import {
   applyHassHardwareBindings,
+  externalizeHassRuntimeGraph,
   getHassPreflightBaudrates,
   getHassPreflightRequiredRoles,
   getRequiredHassHardwareRoles,
-  resolveHassPreflightPowerBinding,
-  resolveHassHardwareBindings,
+  type HassHardwareProfile,
   type HassHardwareRole,
   type ResolvedHassHardwareBinding,
 } from '@/services/hass-hardware-binding'
-import { applyHassCycleDuration } from '@/services/hass-cycle-runtime'
+import {
+  getHassHardwareProfiles,
+  loadHassWorkbenchConfig,
+} from '@/services/hass-workbench-config'
 
 // Re-export types for backwards compatibility
 export type { BlockDefinition, BlockSection, BlockMetadata }
@@ -80,7 +83,6 @@ export interface RunFlowchartArgs {
   jobId: string
   observeBlocks?: string[]
   settings?: RunSettings
-  haltHassRemainingDurationSeconds?: number
 }
 
 export interface HassHardwarePreflightResult {
@@ -110,6 +112,88 @@ export interface HassHardwareShutdownResponse {
   success: boolean
   results: HassHardwareShutdownResult[]
   message: string
+}
+
+export interface GracefulFlowchartStopResponse {
+  success: boolean
+  graceful: boolean
+  forced: boolean
+  discardedJobs: number
+  unfinishedJobs: number
+  message: string
+}
+
+export type FlojoyExecutionLogLevel = 'debug' | 'info' | 'warning' | 'error'
+
+export interface FlojoyExecutionLogEntry {
+  id: string
+  timestamp: string
+  timestampMs: number
+  level: FlojoyExecutionLogLevel | string
+  eventType: string
+  direction: 'send' | 'receive' | string
+  jobsetId: string
+  nodeId: string
+  function: string
+  message: string
+  data: unknown
+  persisted?: boolean
+  persistenceError?: string
+}
+
+export interface FlojoyExecutionLogResponse {
+  persisted: boolean
+  path: string
+  events: FlojoyExecutionLogEntry[]
+  hasMore: boolean
+  nextBeforeTimestampMs: number | null
+  nextBeforeEventId: string | null
+  queued: number
+  persistenceError: string
+}
+
+export interface AppendFlojoyExecutionLogInput {
+  eventType: string
+  message: string
+  level?: FlojoyExecutionLogLevel | string
+  direction?: 'send' | 'receive' | string
+  data?: unknown
+  jobsetId?: string
+  nodeId?: string
+  function?: string
+}
+
+export interface HassHardwareBindingResolveResponse {
+  bindings: ResolvedHassHardwareBinding[]
+  errors: Partial<Record<HassHardwareRole, string>>
+}
+
+export type HassRectifierAction =
+  | 'initialize'
+  | 'set_input'
+  | 'set_loads'
+  | 'measure'
+  | 'shutdown'
+
+export interface HassRectifierMeasurement {
+  output48Voltage: number
+  output48CurrentA: number
+  output90Voltage: number
+  output90CurrentA: number
+}
+
+export interface HassRectifierCommandResponse {
+  success: boolean
+  action: HassRectifierAction
+  message: string
+  measurement?: HassRectifierMeasurement | null
+}
+
+export interface HassRectifierCommandInput {
+  inputVoltage?: number
+  sourceCurrentLimitA?: number
+  load48Ohm?: number
+  load90Ohm?: number
 }
 
 // ========== API 客户端 ==========
@@ -203,36 +287,29 @@ export async function runFlowchart(args: RunFlowchartArgs): Promise<void> {
     jobId,
     observeBlocks = [],
     settings,
-    haltHassRemainingDurationSeconds,
   } = args
-  const requiredHardware = getRequiredHassHardwareRoles(nodes)
-  let runtimeNodes = nodes
+  const externalizedGraph = externalizeHassRuntimeGraph(nodes, edges)
+  const requiredHardware = getRequiredHassHardwareRoles(externalizedGraph.nodes)
+  let runtimeNodes = externalizedGraph.nodes
+  const runtimeEdges = externalizedGraph.edges
 
   if (requiredHardware.length > 0) {
-    // 工艺文件中的 COM 号只作为历史显示值；每次运行都根据 USB 硬件身份
-    // 解析当前端口，并且只修改本次请求的内存副本。
-    const deviceInfo = await getDeviceInfo(false, false, false)
-    const bindings = resolveHassHardwareBindings(
+    // 工艺只描述设备角色；每次运行都根据客户端工作台配置解析当前端口，
+    // 并且只修改本次请求的内存副本。
+    const bindings = await discoverHassHardwareBindings(
       requiredHardware,
-      deviceInfo.serialDevices
+      getHassPreflightBaudrates(externalizedGraph.nodes),
     )
-    runtimeNodes = applyHassHardwareBindings(nodes, bindings)
+    runtimeNodes = applyHassHardwareBindings(externalizedGraph.nodes, bindings)
     console.info(
       '[HASS Hardware Binding]',
       bindings.map(({ displayName, port, hwid }) => ({ displayName, port, hwid }))
     )
   }
 
-  if (haltHassRemainingDurationSeconds !== undefined) {
-    runtimeNodes = applyHassCycleDuration(
-      runtimeNodes,
-      haltHassRemainingDurationSeconds
-    )
-  }
-
   // 构建请求体，对齐 Studio 的 PostWFC 模型
   const requestBody: Record<string, unknown> = {
-    fc: JSON.stringify({ nodes: runtimeNodes, edges }),
+    fc: JSON.stringify({ nodes: runtimeNodes, edges: runtimeEdges }),
     jobsetId: jobId,
     cancelExistingJobs: true,
     observeBlocks,
@@ -252,6 +329,39 @@ export async function runFlowchart(args: RunFlowchartArgs): Promise<void> {
   }
 
   await apiClient.post('wfc', { json: requestBody })
+}
+
+export async function resolveHassHardwareBindings(
+  roles: HassHardwareRole[],
+  baudrates: Partial<Record<HassHardwareRole, number>> = {},
+  profiles: HassHardwareProfile[] = getHassHardwareProfiles(roles),
+): Promise<HassHardwareBindingResolveResponse> {
+  const response = await apiClient.post('devices/halt-hass/resolve-bindings', {
+    json: { roles, baudrates, profiles },
+    timeout: 15000,
+  }).json<HassHardwareBindingResolveResponse>()
+
+  return response
+}
+
+export async function discoverHassHardwareBindings(
+  roles: HassHardwareRole[],
+  baudrates: Partial<Record<HassHardwareRole, number>> = {},
+  allowPartial = false,
+  profiles: HassHardwareProfile[] = getHassHardwareProfiles(roles),
+): Promise<ResolvedHassHardwareBinding[]> {
+  const response = await resolveHassHardwareBindings(roles, baudrates, profiles)
+
+  const errors = Object.entries(response.errors || {})
+  if (!allowPartial && errors.length > 0) {
+    throw new Error(errors.map(([, message]) => message).join('；'))
+  }
+  if (allowPartial) {
+    errors.forEach(([role, message]) => {
+      console.error(`[HALT-HASS] 无法按序列号解析 ${role}: ${message}`)
+    })
+  }
+  return response.bindings
 }
 
 /**
@@ -278,18 +388,37 @@ export async function cancelCurrentFlowchartRun(): Promise<void> {
 }
 
 /**
+ * 停止调度新的循环节点，等待当前在途节点结束并释放 Flojoy 设备连接。
+ * 超时后由 Flojoy 执行有记录的强制释放，调用方仍应继续做独立下电确认。
+ */
+export async function gracefulStopCurrentFlowchartRun(
+  jobId: string | null,
+  timeoutSeconds = 15,
+): Promise<GracefulFlowchartStopResponse> {
+  return apiClient.post('graceful_stop_fc', {
+    json: {
+      jobsetId: jobId,
+      timeoutSeconds,
+    },
+    timeout: Math.max(30_000, (timeoutSeconds + 10) * 1000),
+  }).json<GracefulFlowchartStopResponse>()
+}
+
+/**
  * 获取设备列表
  */
 export async function getDeviceInfo(
   discoverNIDAQmx = false,
   discoverNIDMM = false,
-  includeVISADevices = true
+  includeVISADevices = true,
+  includeCameraDevices = true,
 ): Promise<DeviceInfo> {
   const response = await apiClient.get('devices', {
     searchParams: {
       include_nidaqmx_drivers: discoverNIDAQmx,
       include_nidmm_drivers: discoverNIDMM,
       include_visa_devices: includeVISADevices,
+      include_camera_devices: includeCameraDevices,
     },
   }).json()
 
@@ -304,25 +433,46 @@ export async function getDeviceInfo(
 }
 
 /**
- * 先确认 6723G 并输出 48 V / 1 A，等待台架设备稳定启动 20 秒后，
+ * 先按序列号确认固定的 3123 并输出 48 V / 1 A，等待台架设备稳定启动 20 秒后，
  * 再重新枚举脉冲器、IFBOX 和其余设备并执行真实通信预检。
  */
 export async function runHassHardwarePreflight(
-  nodes: FlowchartNode[]
+  nodes: FlowchartNode[],
+  reportType: 'drive_control' | 'rectifier_regulator' = 'drive_control',
 ): Promise<HassHardwarePreflightResponse> {
-  const deviceInfo = await getDeviceInfo(false, false, false)
-  const powerBinding = resolveHassPreflightPowerBinding(deviceInfo.serialDevices)
-  const requiredRoles = getHassPreflightRequiredRoles(nodes)
+  if (reportType === 'rectifier_regulator') {
+    const requiredRoles = getHassPreflightRequiredRoles(nodes, reportType)
+    const profiles = getHassHardwareProfiles(requiredRoles)
+    const response = await apiClient.post('devices/halt-hass/preflight', {
+      json: {
+        bindings: [],
+        requiredRoles,
+        profiles,
+        reportType,
+      },
+      timeout: 60000,
+    }).json<Omit<HassHardwarePreflightResponse, 'powerResource'>>()
+    return { ...response, powerResource: '' }
+  }
+
+  const [powerBinding] = await discoverHassHardwareBindings(['itech3123_48v'])
+  const requiredRoles = getHassPreflightRequiredRoles(nodes, reportType)
   const baudrates = getHassPreflightBaudrates(nodes)
+  const profiles = getHassHardwareProfiles([
+    'itech3123_48v',
+    ...requiredRoles,
+  ])
 
   const response = await apiClient.post('devices/halt-hass/preflight', {
     json: {
       bindings: [powerBinding],
       requiredRoles,
       baudrates,
+      profiles,
       supplyVoltage: 48,
       supplyCurrentLimit: 1,
       powerStabilizationSeconds: 20,
+      reportType,
     },
     timeout: 60000,
   }).json<Omit<HassHardwarePreflightResponse, 'powerResource'>>()
@@ -334,29 +484,18 @@ export async function runHassHardwarePreflight(
 }
 
 /**
- * 正式流程尚未接管供电时，关闭预检阶段开启的 6723G 输出。
+ * 正式流程尚未接管供电时，关闭预检阶段开启的 48 V 3123 输出。
  */
 export async function releaseHassPreflightPower(resource: string): Promise<void> {
   if (!resource) return
+  const profile = getHassHardwareProfiles(['itech3123_48v'])[0]
   await apiClient.post('devices/halt-hass/power-off', {
-    json: { resource },
+    json: {
+      resource,
+      role: 'itech3123_48v',
+      instrumentSerial: profile?.matcher.instrumentSerial,
+    },
   })
-}
-
-function getControlString(
-  node: FlowchartNode,
-  controlName: string
-): string | undefined {
-  const ctrls = node.data.ctrls
-  if (!ctrls || typeof ctrls !== 'object' || Array.isArray(ctrls)) {
-    return undefined
-  }
-  const control = (ctrls as Record<string, unknown>)[controlName]
-  if (!control || typeof control !== 'object' || Array.isArray(control)) {
-    return undefined
-  }
-  const value = (control as Record<string, unknown>).value
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 /**
@@ -365,42 +504,85 @@ function getControlString(
  * 拓扑中的旧连接对象。
  */
 export async function runHassHardwareShutdown(
-  nodes: FlowchartNode[]
+  _nodes: FlowchartNode[],
+  jobId = '',
+  reportType: 'drive_control' | 'rectifier_regulator' = 'drive_control',
 ): Promise<HassHardwareShutdownResponse> {
-  const deviceInfo = await getDeviceInfo(false, false, false)
-  const requiredPowerRoles: HassHardwareRole[] = [
-    'itech6723',
-    'itech3123',
-  ]
-  const bindings: ResolvedHassHardwareBinding[] = []
-
-  // 单个电源缺失时仍把其它可用设备和 MQTT 停止请求提交给后端；
-  // 后端会把缺失设备作为失败项返回，避免一项解析失败阻断全部收尾。
-  for (const role of requiredPowerRoles) {
-    try {
-      bindings.push(
-        ...resolveHassHardwareBindings([role], deviceInfo.serialDevices)
-      )
-    } catch (error) {
-      console.error(`[HALT-HASS] 无法解析 ${role} 下电端口:`, error)
+  if (reportType === 'rectifier_regulator') {
+    const roles: HassHardwareRole[] = [
+      'itech3123_input',
+      'itech8513_48v_load',
+      'itech8513_90v_load',
+    ]
+    const bindings = await discoverHassHardwareBindings(roles, {}, true)
+    const response = await runHassRectifierCommand(
+      'shutdown',
+      bindings,
+      {},
+      jobId,
+    )
+    return {
+      success: response.success,
+      message: response.success ? '整流稳压负载和输入源已关闭' : response.message,
+      results: [{
+        role: 'rectifier_hardware',
+        displayName: '整流稳压输入源和两路负载',
+        success: response.success,
+        message: response.message,
+      }],
     }
   }
-
-  const stopEdmNode = nodes.find(
-    node => String(node.data.func || '').toUpperCase() === 'STOP_EDM'
+  const requiredPowerRoles: HassHardwareRole[] = [
+    'itech3123_48v',
+    'itech3123',
+  ]
+  // 单个电源缺失时仍把其它可用设备和 MQTT 停止请求提交给后端；
+  // 后端会把缺失设备作为失败项返回，避免一项解析失败阻断全部收尾。
+  const bindings = await discoverHassHardwareBindings(
+    requiredPowerRoles,
+    {},
+    true,
   )
-  const brokerIp = stopEdmNode
-    ? getControlString(stopEdmNode, 'broker_ip') || '127.0.0.1'
-    : '127.0.0.1'
+
+  const brokerIp = loadHassWorkbenchConfig().mqtt.broker
 
   return apiClient.post('devices/halt-hass/shutdown', {
     json: {
       bindings,
       requiredPowerRoles,
       brokerIp,
+      jobsetId: jobId,
     },
     timeout: 30000,
   }).json<HassHardwareShutdownResponse>()
+}
+
+export async function resolveHassRectifierBindings(): Promise<ResolvedHassHardwareBinding[]> {
+  return discoverHassHardwareBindings([
+    'itech3123_input',
+    'itech8513_48v_load',
+    'itech8513_90v_load',
+  ])
+}
+
+export async function runHassRectifierCommand(
+  action: HassRectifierAction,
+  bindings: ResolvedHassHardwareBinding[],
+  input: HassRectifierCommandInput = {},
+  jobId = '',
+): Promise<HassRectifierCommandResponse> {
+  return apiClient.post('devices/halt-hass/rectifier/command', {
+    json: {
+      action,
+      bindings,
+      inputVoltage: input.inputVoltage,
+      sourceCurrentLimitA: input.sourceCurrentLimitA ?? 5,
+      load48Ohm: input.load48Ohm,
+      load90Ohm: input.load90Ohm,
+      jobsetId: jobId,
+    },
+    timeout: 30000,
+  }).json<HassRectifierCommandResponse>()
 }
 
 /**
@@ -416,6 +598,37 @@ export async function getLogLevel(): Promise<string> {
  */
 export async function setLogLevel(level: string): Promise<void> {
   await apiClient.post('log_level', { json: { level } })
+}
+
+/**
+ * 获取 Flojoy 结构化执行日志。jobId 为空时返回全部任务中的最近记录。
+ */
+export async function getExecutionLogs(
+  jobId = '',
+  limit = 200,
+  beforeEventId?: string,
+  beforeTimestampMs?: number,
+): Promise<FlojoyExecutionLogResponse> {
+  return apiClient.get('execution_logs', {
+    searchParams: {
+      jobset_id: jobId,
+      limit: String(limit),
+      ...(beforeEventId ? { before_event_id: beforeEventId } : {}),
+      ...(beforeTimestampMs === undefined
+        ? {}
+        : { before_timestamp_ms: String(beforeTimestampMs) }),
+    },
+  }).json<FlojoyExecutionLogResponse>()
+}
+
+/** 把客户端侧通信事件追加到 Flojoy 的同一份 JSONL 日志。 */
+export async function appendExecutionLog(
+  event: AppendFlojoyExecutionLogInput
+): Promise<{ persisted: boolean; event: FlojoyExecutionLogEntry }> {
+  return apiClient.post('execution_logs', { json: event }).json<{
+    persisted: boolean
+    event: FlojoyExecutionLogEntry
+  }>()
 }
 
 // 导出错误类型

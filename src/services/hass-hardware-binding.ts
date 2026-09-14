@@ -1,21 +1,24 @@
-import type { SerialDevice } from '@/types'
-
 export type HassHardwareRole =
   | 'pulser'
-  | 'itech6723'
+  | 'itech3123_48v'
   | 'itech3123'
+  | 'itech3123_input'
+  | 'itech8513_48v_load'
+  | 'itech8513_90v_load'
   | 'ifbox'
   | 'storage'
 
 interface BindableFlowchartNode {
   id: string
-  data: Record<string, unknown>
+  data?: object
 }
 
-interface HardwareDefinition {
-  displayName: string
-  resourceType: 'serial' | 'visa'
-  matches: (device: SerialDevice) => boolean
+interface BindableFlowchartEdge {
+  id: string
+  source: string
+  target: string
+  sourceHandle?: string | null
+  targetHandle?: string | null
 }
 
 export interface ResolvedHassHardwareBinding {
@@ -25,6 +28,32 @@ export interface ResolvedHassHardwareBinding {
   resource: string
   hwid: string
   baudrate?: number
+  persistentPort?: string
+  vid?: number
+  pid?: number
+  serialNumber?: string
+  interfaceName?: string
+  instrumentIdentity?: string
+  instrumentSerial?: string
+}
+
+export type HassHardwareResourceType = 'serial' | 'visa'
+
+export interface HassHardwareMatcher {
+  preferredPort?: string
+  vid?: number
+  pid?: number
+  serialNumber?: string
+  interfaceMarker?: string
+  instrumentSerial?: string
+}
+
+export interface HassHardwareProfile {
+  role: HassHardwareRole
+  displayName: string
+  resourceType: HassHardwareResourceType
+  baudrate?: number
+  matcher: HassHardwareMatcher
 }
 
 const HARDWARE_CONTROL_TYPES = new Set([
@@ -52,79 +81,47 @@ const PULSER_FUNCTIONS = new Set([
   'WAVEFORM_SHOW2',
 ])
 
-function normalizeIdentity(value: string): string {
-  return value.toUpperCase().replace(/\s+/g, ' ')
-}
+const CLIENT_MANAGED_WORKBENCH_FUNCTIONS = new Set(['START_EDM', 'STOP_EDM'])
 
-function matchesUsbIdentity(
-  device: SerialDevice,
-  vid: string,
-  pid: string,
-  serial?: string
-): boolean {
-  const hwid = normalizeIdentity(device.hwid)
-  if (!hwid.includes(`VID:PID=${vid}:${pid}`)) return false
-  return serial ? hwid.includes(`SER=${serial}`) : true
-}
-
-function matchesTbusPort(device: SerialDevice): boolean {
-  return (
-    matchesUsbIdentity(device, '2E3C', '7543')
-    && normalizeIdentity(device.description).includes('TBUS PORT')
-  )
-}
-
-function matchesExtPort(device: SerialDevice): boolean {
-  return (
-    matchesUsbIdentity(device, '2E3C', '7543')
-    && normalizeIdentity(device.description).includes('EXT PORT')
-  )
-}
-
-const HARDWARE_DEFINITIONS: Record<HassHardwareRole, HardwareDefinition> = {
-  pulser: {
-    displayName: '脉冲器',
-    resourceType: 'serial',
-    matches: (device) => matchesUsbIdentity(device, '0403', '6001', 'B003PLDPA'),
-  },
-  itech6723: {
-    displayName: 'ITECH 6723',
-    resourceType: 'visa',
-    // CH340 没有硬件序列号；现场设备以独有 VID/PID 识别。
-    // 如果以后接入多个相同 CH340，匹配会因候选不唯一而明确失败。
-    matches: (device) => matchesUsbIdentity(device, '1A86', '7523'),
-  },
-  itech3123: {
-    displayName: 'ITECH 3123（工艺节点名为 3124）',
-    resourceType: 'visa',
-    matches: (device) => matchesUsbIdentity(device, '2EC7', '0666'),
-  },
-  ifbox: {
-    displayName: 'IFBOX',
-    resourceType: 'serial',
-    // 新 IFBOX 是包含 TBus/HS/EXT 三个串口的复合设备，三个接口具有相同
-    // VID/PID，必须同时按接口描述锁定 TBus Port，不能只按 USB 身份匹配。
-    matches: matchesTbusPort,
-  },
-  storage: {
-    displayName: '存储板',
-    resourceType: 'serial',
-    // 存储板通过同一复合设备的 EXT Port 通信，不能误绑定到 TBus Port。
-    matches: matchesExtPort,
-  },
-}
+// 已发布的高速率工艺中，该节点负责在脉冲器初始化完成后以 115200
+// 重新打开同一脉冲器串口。旧工单可能仍持有未写入 hardwareRole 的
+// 进程内工艺快照，因此用稳定节点 ID 做窄范围兼容，不能按相邻节点猜测。
+const LEGACY_PULSER_OPEN_SERIAL_NODE_IDS = new Set([
+  'OPEN_SERIAL-f4a0e8b1-3f7e-4748-8cc6-0aaf02630688',
+])
 
 function stringField(data: Record<string, unknown>, key: string): string {
   return typeof data[key] === 'string' ? data[key] : ''
 }
 
-function inferHardwareRole(node: BindableFlowchartNode): HassHardwareRole | null {
-  const func = stringField(node.data, 'func').toUpperCase()
-  const label = stringField(node.data, 'label').toUpperCase()
-  const path = stringField(node.data, 'path').toUpperCase()
+function nodeData(node: BindableFlowchartNode): Record<string, unknown> {
+  return node.data && typeof node.data === 'object'
+    ? node.data as Record<string, unknown>
+    : {}
+}
 
-  if (func.includes('ITECH6723G')) return 'itech6723'
-  if (func.includes('ITECH3124') || func.includes('ITECH3123')) return 'itech3123'
+export function inferHassHardwareRole(node: BindableFlowchartNode): HassHardwareRole | null {
+  const data = nodeData(node)
+  const configuredRole = stringField(data, 'hardwareRole') as HassHardwareRole
+  if (
+    configuredRole === 'pulser'
+    || configuredRole === 'itech3123_48v'
+    || configuredRole === 'itech3123'
+    || configuredRole === 'itech3123_input'
+    || configuredRole === 'itech8513_48v_load'
+    || configuredRole === 'itech8513_90v_load'
+    || configuredRole === 'ifbox'
+    || configuredRole === 'storage'
+  ) {
+    return configuredRole
+  }
+
+  const func = stringField(data, 'func').toUpperCase()
+  const label = stringField(data, 'label').toUpperCase()
+  const path = stringField(data, 'path').toUpperCase()
+
+  if (func.includes('ITECH3123_48V')) return 'itech3123_48v'
+  if (func.includes('ITECH3123')) return 'itech3123'
 
   if (
     func === 'READ_MEMORY_ADDRESS'
@@ -148,8 +145,8 @@ function inferHardwareRole(node: BindableFlowchartNode): HassHardwareRole | null
     PULSER_FUNCTIONS.has(func)
     || path.includes('/PULSER/')
     || path.includes('\\PULSER\\')
-    || label === '打开脉冲器串口'
-    || label === 'OPEN SERIAL'
+    || (func === 'OPEN_SERIAL' && label.includes('脉冲器'))
+    || (func === 'OPEN_SERIAL' && LEGACY_PULSER_OPEN_SERIAL_NODE_IDS.has(node.id))
   ) {
     return 'pulser'
   }
@@ -157,19 +154,12 @@ function inferHardwareRole(node: BindableFlowchartNode): HassHardwareRole | null
   return null
 }
 
-function toVisaResource(port: string): string {
-  const windowsPort = /^COM(\d+)$/i.exec(port)
-  return windowsPort
-    ? `ASRL${windowsPort[1]}::INSTR`
-    : `ASRL${port}::INSTR`
-}
-
 export function getRequiredHassHardwareRoles(
   nodes: BindableFlowchartNode[]
 ): HassHardwareRole[] {
   const roles = new Set<HassHardwareRole>()
   for (const node of nodes) {
-    const role = inferHardwareRole(node)
+    const role = inferHassHardwareRole(node)
     if (role) roles.add(role)
   }
   return [...roles]
@@ -179,7 +169,7 @@ function getControlNumber(
   node: BindableFlowchartNode,
   controlName: string
 ): number | undefined {
-  const ctrls = node.data.ctrls
+  const ctrls = nodeData(node).ctrls
   if (!ctrls || typeof ctrls !== 'object' || Array.isArray(ctrls)) {
     return undefined
   }
@@ -209,8 +199,8 @@ function getRoleBaudrate(
   }
 
   const serialNode = nodes.find((node) => {
-    const func = stringField(node.data, 'func').toUpperCase()
-    return func === 'OPEN_SERIAL' && inferHardwareRole(node) === role
+    const func = stringField(nodeData(node), 'func').toUpperCase()
+    return func === 'OPEN_SERIAL' && inferHassHardwareRole(node) === role
   })
   const configuredBaudrate = serialNode
     ? getControlNumber(serialNode, 'baudrate')
@@ -221,30 +211,27 @@ function getRoleBaudrate(
 }
 
 /**
- * 上电前只绑定 6723G。脉冲器和 IFBOX 都依赖其 48 V 输出，不能在
- * 上电前因为串口尚未枚举而阻断预检。
- */
-export function resolveHassPreflightPowerBinding(
-  serialDevices: SerialDevice[]
-): ResolvedHassHardwareBinding {
-  return resolveHassHardwareBindings(['itech6723'], serialDevices)[0]
-}
-
-/**
- * 工单预检固定覆盖整套 HALT-HASS 台架，而不仅是当前流程中碰巧出现的节点。
- * 6723G 在上电阶段单独检测，其余角色在稳定等待后重新枚举。
+ * 工单预检固定包含高速率台架核心设备，并补充当前工艺实际使用的可选设备。
+ * 48 V 3123 在上电阶段单独检测，存储板等可选角色按工艺节点决定。
  */
 export function getHassPreflightRequiredRoles(
-  nodes: BindableFlowchartNode[]
+  nodes: BindableFlowchartNode[],
+  reportType: 'drive_control' | 'rectifier_regulator' = 'drive_control',
 ): HassHardwareRole[] {
+  if (reportType === 'rectifier_regulator') {
+    return [
+      'itech3123_input',
+      'itech8513_48v_load',
+      'itech8513_90v_load',
+    ]
+  }
   const requiredRoles = new Set<HassHardwareRole>([
     'pulser',
     'ifbox',
     'itech3123',
-    'storage',
     ...getRequiredHassHardwareRoles(nodes),
   ])
-  requiredRoles.delete('itech6723')
+  requiredRoles.delete('itech3123_48v')
   return [...requiredRoles]
 }
 
@@ -258,37 +245,6 @@ export function getHassPreflightBaudrates(
   }
 }
 
-export function resolveHassHardwareBindings(
-  requiredRoles: HassHardwareRole[],
-  serialDevices: SerialDevice[]
-): ResolvedHassHardwareBinding[] {
-  return requiredRoles.map((role) => {
-    const definition = HARDWARE_DEFINITIONS[role]
-    const candidates = serialDevices.filter(definition.matches)
-
-    if (candidates.length === 0) {
-      throw new Error(`未检测到 ${definition.displayName}，请检查 USB 连接`)
-    }
-    if (candidates.length > 1) {
-      const ports = candidates.map((device) => device.port).join('、')
-      throw new Error(
-        `${definition.displayName} 匹配到多个设备（${ports}），无法进行唯一绑定`
-      )
-    }
-
-    const device = candidates[0]
-    return {
-      role,
-      displayName: definition.displayName,
-      port: device.port,
-      resource: definition.resourceType === 'visa'
-        ? toVisaResource(device.port)
-        : device.port,
-      hwid: device.hwid,
-    }
-  })
-}
-
 export function applyHassHardwareBindings<T extends BindableFlowchartNode>(
   nodes: T[],
   bindings: ResolvedHassHardwareBinding[]
@@ -296,13 +252,14 @@ export function applyHassHardwareBindings<T extends BindableFlowchartNode>(
   const bindingByRole = new Map(bindings.map((binding) => [binding.role, binding]))
 
   return nodes.map((node) => {
-    const role = inferHardwareRole(node)
+    const role = inferHassHardwareRole(node)
     if (!role) return node
 
     const binding = bindingByRole.get(role)
     if (!binding) return node
 
-    const rawCtrls = node.data.ctrls
+    const data = nodeData(node)
+    const rawCtrls = data.ctrls
     if (!rawCtrls || typeof rawCtrls !== 'object' || Array.isArray(rawCtrls)) {
       return node
     }
@@ -336,9 +293,121 @@ export function applyHassHardwareBindings<T extends BindableFlowchartNode>(
     return {
       ...node,
       data: {
-        ...node.data,
+        ...data,
         ctrls,
       },
-    }
+    } as T
   })
+}
+
+/**
+ * 工艺只保存设备角色和协议参数，不保存某台客户端上的 COM 口、VISA 地址。
+ * 运行时 applyHassHardwareBindings 会在流程内存副本中注入本机实际资源。
+ */
+export function normalizeHassHardwareNodes<T extends BindableFlowchartNode>(
+  nodes: T[],
+): T[] {
+  return nodes.map((node) => {
+    const role = inferHassHardwareRole(node)
+    if (!role) return node
+
+    const data = nodeData(node)
+    const rawCtrls = data.ctrls
+    if (!rawCtrls || typeof rawCtrls !== 'object' || Array.isArray(rawCtrls)) {
+      return {
+        ...node,
+        data: { ...data, hardwareRole: role },
+      } as T
+    }
+
+    let changed = false
+    const ctrls = Object.fromEntries(
+      Object.entries(rawCtrls).map(([key, rawControl]) => {
+        if (!rawControl || typeof rawControl !== 'object' || Array.isArray(rawControl)) {
+          return [key, rawControl]
+        }
+        const control = rawControl as Record<string, unknown>
+        if (typeof control.type !== 'string' || !HARDWARE_CONTROL_TYPES.has(control.type)) {
+          return [key, rawControl]
+        }
+        if (control.value !== '') changed = true
+        return [key, { ...control, value: '' }]
+      }),
+    )
+
+    if (!changed && data.hardwareRole === role) return node
+    return {
+      ...node,
+      data: {
+        ...data,
+        hardwareRole: role,
+        ctrls,
+      },
+    } as T
+  })
+}
+
+/**
+ * MQTT 工作台启停属于客户端生命周期，不再交给 Flojoy 工艺节点执行。
+ * 对旧工艺中的 START_EDM / STOP_EDM 做内存级旁路，保留前后节点顺序。
+ */
+export function externalizeHassRuntimeGraph<
+  TNode extends BindableFlowchartNode,
+  TEdge extends BindableFlowchartEdge,
+>(nodes: TNode[], edges: TEdge[]): { nodes: TNode[]; edges: TEdge[] } {
+  const externalNodeIds = new Set(
+    nodes
+      .filter(node => CLIENT_MANAGED_WORKBENCH_FUNCTIONS.has(
+        stringField(nodeData(node), 'func').toUpperCase(),
+      ))
+      .map(node => node.id),
+  )
+  if (!externalNodeIds.size) {
+    return {
+      nodes: normalizeHassHardwareNodes(nodes),
+      edges: edges.slice(),
+    }
+  }
+
+  let runtimeEdges = edges.slice()
+  for (const externalNodeId of externalNodeIds) {
+    const incoming = runtimeEdges.filter(edge => edge.target === externalNodeId)
+    const outgoing = runtimeEdges.filter(edge => edge.source === externalNodeId)
+    runtimeEdges = runtimeEdges.filter(
+      edge => edge.source !== externalNodeId && edge.target !== externalNodeId,
+    )
+
+    for (const sourceEdge of incoming) {
+      for (const targetEdge of outgoing) {
+        if (
+          externalNodeIds.has(sourceEdge.source)
+          || externalNodeIds.has(targetEdge.target)
+          || sourceEdge.source === targetEdge.target
+        ) {
+          continue
+        }
+        const duplicate = runtimeEdges.some(edge => (
+          edge.source === sourceEdge.source
+          && edge.target === targetEdge.target
+          && edge.sourceHandle === sourceEdge.sourceHandle
+          && edge.targetHandle === targetEdge.targetHandle
+        ))
+        if (duplicate) continue
+        runtimeEdges.push({
+          ...sourceEdge,
+          id: `client-managed-bypass-${externalNodeId}-${sourceEdge.source}-${targetEdge.target}`,
+          source: sourceEdge.source,
+          target: targetEdge.target,
+          sourceHandle: sourceEdge.sourceHandle,
+          targetHandle: targetEdge.targetHandle,
+        } as TEdge)
+      }
+    }
+  }
+
+  const runtimeNodes = nodes.filter(node => !externalNodeIds.has(node.id))
+  return {
+    nodes: normalizeHassHardwareNodes(runtimeNodes),
+    edges: runtimeEdges,
+  }
 }

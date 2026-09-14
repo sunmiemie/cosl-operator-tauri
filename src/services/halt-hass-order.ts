@@ -5,9 +5,13 @@
 import { http, type ApiResponse } from './http'
 import type {
   HaltHassOrder,
+  HaltHassChartUpload,
   HaltHassReport,
   HaltHassReportJson,
-  HaltHassTempData,
+  HaltHassTargetBoard,
+  HaltHassTestSession,
+  HaltHassSessionBoardInput,
+  HaltHassExecutionProcessOption,
   OrderBoardSerial,
   OrderScheduleSegment,
   ScannedBoard,
@@ -44,21 +48,6 @@ export type HaltHassOrderWriteResponse = {
   data?: HaltHassOrderDTO
 }
 
-export type HaltHassStartResult = {
-  success: boolean
-  startedAt?: string | null
-  cycleCount?: number
-  singleCycleDurationHours?: number
-  totalCycleDurationHours?: number
-  requiredRuntimeSeconds?: number
-  elapsedRuntimeSeconds?: number
-  remainingRuntimeSeconds?: number
-  runtimeProgress?: number
-  runtimeConfigured?: boolean
-  runtimeCompleted?: boolean
-  currentRunStartedAt?: string | null
-}
-
 type BackendEnvelope<T> = {
   code: number
   msg?: string
@@ -70,25 +59,6 @@ export type HaltHassOrderScheduleBody = {
   scheduled_end_at: string
   use_device?: string
   equipment_id?: string
-}
-
-function mapHaltHassRuntimeResult(
-  runtime: HaltHassOrderDTO
-): HaltHassStartResult {
-  return {
-    success: true,
-    startedAt: runtime.started_at ?? runtime.startedAt ?? null,
-    cycleCount: Number(runtime.cycle_count ?? runtime.cycleCount ?? 1),
-    singleCycleDurationHours: Number(runtime.single_cycle_duration_hours ?? runtime.singleCycleDurationHours ?? 0),
-    totalCycleDurationHours: Number(runtime.total_cycle_duration_hours ?? runtime.totalCycleDurationHours ?? 0),
-    requiredRuntimeSeconds: Number(runtime.required_runtime_seconds ?? runtime.requiredRuntimeSeconds ?? 0),
-    elapsedRuntimeSeconds: Number(runtime.elapsed_runtime_seconds ?? runtime.elapsedRuntimeSeconds ?? 0),
-    remainingRuntimeSeconds: Number(runtime.remaining_runtime_seconds ?? runtime.remainingRuntimeSeconds ?? 0),
-    runtimeProgress: Number(runtime.runtime_progress ?? runtime.runtimeProgress ?? 0),
-    runtimeConfigured: Boolean(runtime.runtime_configured ?? runtime.runtimeConfigured ?? false),
-    runtimeCompleted: Boolean(runtime.runtime_completed ?? runtime.runtimeCompleted ?? false),
-    currentRunStartedAt: runtime.current_run_started_at ?? runtime.currentRunStartedAt ?? null,
-  }
 }
 
 function unwrapBackendEnvelope<T>(
@@ -173,39 +143,78 @@ function normalizeScannedBoards(value: unknown): ScannedBoard[] {
     const boardModel = item?.board_model || item?.boardModel || {}
     return {
       serial: String(item?.serial || item?.sn || ''),
+      targetBoardId: item?.target_board_id ?? item?.targetBoardId,
+      orderId: item?.order_id ?? item?.orderId,
+      orderNo: item?.order_no ?? item?.orderNo,
+      role: item?.role,
+      slotNo: item?.slot_no ?? item?.slotNo,
       boardModelId: item?.board_model_id ?? item?.boardModelId ?? boardModel?.id,
       boardModelName: item?.board_model_name || item?.boardModelName || boardModel?.name,
+      boardModelCode: item?.board_model_code || item?.boardModelCode || boardModel?.code,
       scannedAt: item?.scanned_at || item?.scannedAt ? new Date(item.scanned_at || item.scannedAt) : new Date(),
     }
   })
 }
 
+function normalizeTargetBoards(value: unknown): HaltHassTargetBoard[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => ({
+    id: Number(item?.id),
+    orderId: Number(item?.orderId ?? item?.order_id),
+    orderNo: String(item?.orderNo ?? item?.order_no ?? ''),
+    processId: Number(item?.processId ?? item?.process_id),
+    processName: String(item?.processName ?? item?.process_name ?? ''),
+    serial: String(item?.serial ?? item?.serial_number ?? ''),
+    boardModelId: Number(item?.boardModelId ?? item?.board_model_id),
+    boardModelName: String(item?.boardModelName ?? item?.board_model_name ?? ''),
+    boardModelCode: String(item?.boardModelCode ?? item?.board_model_code ?? ''),
+    status: Number(item?.status ?? 0),
+    statusText: String(item?.statusText ?? item?.status_text ?? ''),
+    attemptNo: Number(item?.attemptNo ?? item?.attempt_no ?? 0),
+    failureReason: String(item?.failureReason ?? item?.failure_reason ?? ''),
+  }))
+}
+
 export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
   const boardGroup = dto.board_group || dto.boardGroup || {}
   const boardsInGroup = dto.boards_in_group || dto.boardsInGroup
-  const process = dto.process || dto.process_info || dto.processInfo || {}
   const scannedBoards = normalizeScannedBoards(dto.scanned_boards || dto.scannedBoards)
   const orderNo = String(dto.order_no || dto.orderNo || dto.task_number || dto.taskNumber || dto.id || '')
   const boardSerials = Array.isArray(dto.board_serials || dto.boardSerials)
     ? (dto.board_serials || dto.boardSerials) as OrderBoardSerial[]
     : []
   const scheduleSegments = normalizeScheduleSegments(dto.schedule_segments || dto.scheduleSegments)
+  const targetBoards = normalizeTargetBoards(dto.target_boards || dto.targetBoards)
+  const productModel = dto.product_model || dto.productModel || null
+  const instrumentModel = dto.instrument_model || dto.instrumentModel || null
+  const rawClientTestType = dto.client_test_type ?? dto.clientTestType
+  const clientTestType = rawClientTestType === 1 || rawClientTestType === 2
+    ? rawClientTestType
+    : Number(rawClientTestType) === 1 || Number(rawClientTestType) === 2
+      ? Number(rawClientTestType) as 1 | 2
+      : null
 
   return {
     id: Number(dto.id),
     orderNo,
+    productModel: productModel
+      ? { id: Number(productModel.id ?? dto.product_model_id ?? dto.productModelId), name: String(productModel.name || '') }
+      : null,
+    instrumentModel: instrumentModel
+      ? { id: Number(instrumentModel.id ?? dto.instrument_model_id ?? dto.instrumentModelId), name: String(instrumentModel.name || '') }
+      : null,
+    clientTestType,
+    clientTestTypeName: String(
+      dto.client_test_type_name || dto.clientTestTypeName || (clientTestType === 1 ? '高速率测试' : clientTestType === 2 ? 'SDS 测试' : '')
+    ),
+    experimentType: String(dto.experiment_type ?? dto.experimentType ?? ''),
+    taskExecutionDescription: String(
+      dto.task_execution_description ?? dto.taskExecutionDescription ?? ''
+    ),
     status: Number(dto.status ?? 0),
     boardCount: Number(dto.board_count ?? dto.boardCount ?? scannedBoards.length ?? 0),
     cycleCount: Number(dto.cycle_count ?? dto.cycleCount ?? 1),
-    singleCycleDurationHours: Number(dto.single_cycle_duration_hours ?? dto.singleCycleDurationHours ?? 0),
-    totalCycleDurationHours: Number(dto.total_cycle_duration_hours ?? dto.totalCycleDurationHours ?? 0),
-    requiredRuntimeSeconds: Number(dto.required_runtime_seconds ?? dto.requiredRuntimeSeconds ?? 0),
-    elapsedRuntimeSeconds: Number(dto.elapsed_runtime_seconds ?? dto.elapsedRuntimeSeconds ?? 0),
-    remainingRuntimeSeconds: Number(dto.remaining_runtime_seconds ?? dto.remainingRuntimeSeconds ?? 0),
-    runtimeProgress: Number(dto.runtime_progress ?? dto.runtimeProgress ?? 0),
-    runtimeConfigured: Boolean(dto.runtime_configured ?? dto.runtimeConfigured ?? false),
-    runtimeCompleted: Boolean(dto.runtime_completed ?? dto.runtimeCompleted ?? false),
-    currentRunStartedAt: dto.current_run_started_at ?? dto.currentRunStartedAt ?? null,
+    workbenchTestName: String(dto.workbench_test_name ?? dto.workbenchTestName ?? ''),
     boardGroup: {
       id: Number(boardGroup.id ?? dto.board_group_id ?? dto.boardGroupId ?? 0),
       name: String(boardGroup.name || dto.board_group_name || dto.boardGroupName || '-'),
@@ -215,12 +224,9 @@ export function mapHaltHassOrder(dto: HaltHassOrderDTO): HaltHassOrder {
           ? boardsInGroup
           : [],
     },
-    process: {
-      id: Number(process.id ?? dto.process_id ?? dto.processId ?? 0),
-      name: String(process.name || dto.process_name || dto.processName || '-'),
-      version: String(process.version || dto.process_version || dto.processVersion || ''),
-    },
+    process: null,
     boardSerials,
+    targetBoards,
     scannedBoards,
     feedbackReason: String(dto.feedback_reason || dto.feedbackReason || ''),
     remark: String(dto.remark || ''),
@@ -292,101 +298,6 @@ export async function getOrderDetail(
 }
 
 /**
- * 开始测试（领取工单）
- * 提交所有扫描的电路板序列号，正式开始测试
- */
-export async function startOrder(
-  orderId: number,
-  data: {
-    operatorId: number
-    boardSerials: string[]
-  }
-): Promise<ApiResponse<HaltHassStartResult>> {
-  const response = await http.post<BackendEnvelope<unknown>>(
-    `/test/halt-hass/order/start/${orderId}/`,
-    {
-      operatorId: data.operatorId,
-      boardSerials: data.boardSerials,
-    }
-  )
-  const unwrapped = unwrapBackendEnvelope(response, '开始测试失败')
-  if (!unwrapped.success) return apiFailure<HaltHassStartResult>(unwrapped, '开始测试失败')
-  const runtime = (unwrapped.data || {}) as HaltHassOrderDTO
-  return {
-    success: true,
-    data: mapHaltHassRuntimeResult(runtime),
-    status: response.status,
-  }
-}
-
-/**
- * 循环流实际启动时才开始或继续累计循环总时长。
- */
-export async function startOrderCycleRuntime(
-  orderId: number
-): Promise<ApiResponse<HaltHassStartResult>> {
-  const response = await http.post<BackendEnvelope<unknown>>(
-    `/test/halt-hass/order/cycle/start/${orderId}/`
-  )
-  const unwrapped = unwrapBackendEnvelope(response, '启动循环流计时失败')
-  if (!unwrapped.success) {
-    return apiFailure<HaltHassStartResult>(unwrapped, '启动循环流计时失败')
-  }
-
-  return {
-    success: true,
-    data: mapHaltHassRuntimeResult(
-      (unwrapped.data || {}) as HaltHassOrderDTO
-    ),
-    status: response.status,
-  }
-}
-
-/**
- * 循环流结束、失败或手动停止时冻结已累计时长。
- */
-export async function pauseOrderCycleRuntime(
-  orderId: number
-): Promise<ApiResponse<HaltHassStartResult>> {
-  const response = await http.post<BackendEnvelope<unknown>>(
-    `/test/halt-hass/order/cycle/pause/${orderId}/`
-  )
-  const unwrapped = unwrapBackendEnvelope(response, '暂停循环流计时失败')
-  if (!unwrapped.success) {
-    return apiFailure<HaltHassStartResult>(unwrapped, '暂停循环流计时失败')
-  }
-
-  return {
-    success: true,
-    data: mapHaltHassRuntimeResult(
-      (unwrapped.data || {}) as HaltHassOrderDTO
-    ),
-    status: response.status,
-  }
-}
-
-/**
- * 清空测试中工单的上一轮执行状态。
- * 后端保留工单配置与排程，只删除实际扫码和运行状态。
- */
-export async function resetRunningOrderExecution(
-  orderId: number
-): Promise<ApiResponse<{ id: number; status: number }>> {
-  const response = await http.post<BackendEnvelope<{ id: number; status: number }>>(
-    `/test/halt-hass/order/reset-running/${orderId}/`
-  )
-  const unwrapped = unwrapBackendEnvelope(response, '清空工单执行状态失败')
-  if (!unwrapped.success) {
-    return apiFailure<{ id: number; status: number }>(unwrapped, '清空工单执行状态失败')
-  }
-  return {
-    success: true,
-    data: unwrapped.data,
-    status: response.status,
-  }
-}
-
-/**
  * 保存 HALT-HASS 工单排程
  */
 export async function saveHaltHassOrderSchedule(
@@ -415,53 +326,8 @@ export async function clearHaltHassOrderSchedule(
 }
 
 /**
- * 上传临时数据（暂存）
- */
-export async function uploadTempData(
-  orderId: number,
-  data: HaltHassTempData
-): Promise<ApiResponse<{ success: boolean }>> {
-  const tempData = data
-  const response = await http.post<BackendEnvelope<unknown>>(
-    `/test/halt-hass/order/temp/upload/${orderId}/`,
-    { data: tempData }
-  )
-  const unwrapped = unwrapBackendEnvelope(response, '暂存数据上传失败')
-  if (!unwrapped.success) return apiFailure<{ success: boolean }>(unwrapped, '暂存数据上传失败')
-  return { success: true, data: { success: true }, status: response.status }
-}
-
-/**
- * 下载临时数据（恢复暂存）
- */
-export async function downloadTempData(
-  orderId: number
-): Promise<ApiResponse<HaltHassTempData>> {
-  const response = await http.get<BackendEnvelope<HaltHassTempData>>(
-    `/test/halt-hass/order/temp/download/${orderId}/`
-  )
-  return unwrapBackendEnvelope(response, '下载暂存数据失败')
-}
-
-/**
- * 下载反馈数据（审核打回后的数据）
- */
-export async function downloadFeedbackData(
-  orderId: number
-): Promise<ApiResponse<{
-  report: HaltHassReport | null
-  comment: string
-}>> {
-  const response = await http.get<BackendEnvelope<{
-    report: HaltHassReport | null
-    comment: string
-  }>>(`/test/halt-hass/order/feedback/download/${orderId}/`)
-  return unwrapBackendEnvelope(response, '下载反馈数据失败')
-}
-
-/**
  * 下载工艺数据
- * 根据工单关联的工艺 ID 获取完整工艺 JSON
+ * 根据客户端本次选择的工艺 ID 获取完整工艺 JSON
  */
 export async function downloadProcessData(
   processId: number
@@ -490,6 +356,193 @@ export async function downloadProcessData(
   }
 }
 
+// ==================== 测试场次 API ====================
+
+function normalizeSession(value: any): HaltHassTestSession {
+  return {
+    id: Number(value?.id),
+    sessionNo: String(value?.sessionNo ?? value?.session_no ?? ''),
+    clientSessionId: String(value?.clientSessionId ?? value?.client_session_id ?? ''),
+    processId: Number(value?.processId ?? value?.process_id),
+    processVersion: String(value?.processVersion ?? value?.process_version ?? ''),
+    experimentType: String(value?.experimentType ?? value?.experiment_type ?? ''),
+    status: Number(value?.status ?? 0),
+    statusText: String(value?.statusText ?? value?.status_text ?? ''),
+    operatorId: value?.operatorId ?? value?.operator_id ?? null,
+    elapsedRuntimeSeconds: Number(value?.elapsedRuntimeSeconds ?? value?.elapsed_runtime_seconds ?? 0),
+    precheck: value?.precheck || {},
+    flowResult: value?.flowResult ?? value?.flow_result ?? {},
+    testData: value?.testData ?? value?.test_data ?? {},
+    uploadError: String(value?.uploadError ?? value?.upload_error ?? ''),
+    startedAt: value?.startedAt ?? value?.started_at ?? null,
+    endedAt: value?.endedAt ?? value?.ended_at ?? null,
+    closedAt: value?.closedAt ?? value?.closed_at ?? null,
+    lastSyncedAt: value?.lastSyncedAt ?? value?.last_synced_at ?? null,
+    createdAt: value?.createdAt ?? value?.created_at ?? null,
+    boards: Array.isArray(value?.boards)
+      ? value.boards.map((item: any) => ({
+          id: Number(item?.id),
+          sessionId: Number(item?.sessionId ?? item?.session_id),
+          targetBoardId: item?.targetBoardId ?? item?.target_board_id ?? null,
+          orderId: item?.orderId ?? item?.order_id ?? null,
+          role: item?.role === 'companion' ? 'companion' : 'target',
+          serial: String(item?.serial ?? ''),
+          boardModelId: Number(item?.boardModelId ?? item?.board_model_id),
+          boardModelName: String(item?.boardModelName ?? item?.board_model_name ?? ''),
+          boardModelCode: String(item?.boardModelCode ?? item?.board_model_code ?? ''),
+          slotNo: Number(item?.slotNo ?? item?.slot_no),
+          status: Number(item?.status ?? 0),
+          statusText: String(item?.statusText ?? item?.status_text ?? ''),
+          participationSeconds: Number(item?.participationSeconds ?? item?.participation_seconds ?? 0),
+          joinedAt: item?.joinedAt ?? item?.joined_at ?? null,
+          exitedAt: item?.exitedAt ?? item?.exited_at ?? null,
+        }))
+      : [],
+  }
+}
+
+/**
+ * 获取当前工单可在客户端执行的已审核工艺版本。
+ * 工单本身不绑定工艺；每次未执行或复测前由操作人员选择。
+ */
+export async function listExecutionProcessOptions(
+  order: HaltHassOrder
+): Promise<ApiResponse<HaltHassExecutionProcessOption[]>> {
+  if (!order.id || !order.productModel?.id || !order.clientTestType || !order.boardGroup?.id) {
+    return { success: false, error: '工单缺少编号、产品、客户端测试类型或电路板组信息' }
+  }
+
+  const query: Record<string, string> = {
+    orderId: String(order.id),
+  }
+
+  const response = await http.get<BackendEnvelope<{
+    processes?: Array<Record<string, unknown>>
+  }>>('/test/halt-hass/order/options/', {}, query)
+  const unwrapped = unwrapBackendEnvelope(response, '获取可执行工艺版本失败')
+  if (!unwrapped.success) {
+    return apiFailure<HaltHassExecutionProcessOption[]>(unwrapped, '获取可执行工艺版本失败')
+  }
+
+  const processes = (unwrapped.data?.processes || [])
+    .map(item => ({
+      id: Number(item.id),
+      name: String(item.name || ''),
+        version: String(item.version || ''),
+        description: String(item.description || ''),
+      active: Number(item.active || 0),
+      productModelId: Number(item.productModelId || 0),
+      clientTestType: Number(item.clientTestType) as 1 | 2,
+      clientTestTypeName: String(item.clientTestTypeName || ''),
+      experimentType: String(item.experimentType || ''),
+    }))
+    .filter(item => item.id > 0 && item.name && item.version)
+    .filter(item => (
+      item.productModelId === order.productModel?.id
+      && item.clientTestType === order.clientTestType
+      && item.experimentType === order.experimentType
+    ))
+
+  return { success: true, data: processes, status: response.status }
+}
+
+export async function listEligibleSessionBoards(params: {
+  processId?: number
+  keyword?: string
+} = {}): Promise<ApiResponse<HaltHassTargetBoard[]>> {
+  const query: Record<string, string> = {}
+  if (params.processId) query.processId = String(params.processId)
+  if (params.keyword) query.keyword = params.keyword
+  const response = await http.get<BackendEnvelope<any[]>>(
+    '/test/halt-hass/session/eligible-boards/',
+    {},
+    query,
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '获取可测试目标板失败')
+  if (!unwrapped.success) return apiFailure<HaltHassTargetBoard[]>(unwrapped, '获取可测试目标板失败')
+  return {
+    success: true,
+    data: normalizeTargetBoards(unwrapped.data || []),
+    status: response.status,
+  }
+}
+
+export async function createHaltHassSession(data: {
+  clientSessionId: string
+  processId: number
+  orderIds: number[]
+  operatorId?: number
+  boards: HaltHassSessionBoardInput[]
+}): Promise<ApiResponse<HaltHassTestSession>> {
+  const response = await http.post<BackendEnvelope<any>>('/test/halt-hass/session/create/', data)
+  const unwrapped = unwrapBackendEnvelope(response, '创建测试场次失败')
+  if (!unwrapped.success) return apiFailure<HaltHassTestSession>(unwrapped, '创建测试场次失败')
+  return { success: true, data: normalizeSession(unwrapped.data), status: response.status }
+}
+
+export async function getHaltHassSessionByClientId(
+  clientSessionId: string,
+): Promise<ApiResponse<HaltHassTestSession>> {
+  const response = await http.get<BackendEnvelope<any>>(
+    '/test/halt-hass/session/by-client-id/',
+    {},
+    { clientSessionId },
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '恢复测试场次失败')
+  if (!unwrapped.success) return apiFailure<HaltHassTestSession>(unwrapped, '恢复测试场次失败')
+  return { success: true, data: normalizeSession(unwrapped.data), status: response.status }
+}
+
+export async function startHaltHassSession(
+  sessionId: number,
+  precheck: Record<string, unknown> = {},
+): Promise<ApiResponse<HaltHassTestSession>> {
+  const response = await http.post<BackendEnvelope<any>>(
+    `/test/halt-hass/session/start/${sessionId}/`,
+    { precheck },
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '开始测试场次失败')
+  if (!unwrapped.success) return apiFailure<HaltHassTestSession>(unwrapped, '开始测试场次失败')
+  return { success: true, data: normalizeSession(unwrapped.data), status: response.status }
+}
+
+export async function completeHaltHassSession(
+  sessionId: number,
+  data: {
+    powerOffCompleted: true
+    success: boolean
+    elapsedRuntimeSeconds: number
+    flowResult?: Record<string, unknown>
+    testData?: Record<string, unknown>
+    failureReason?: string
+  },
+): Promise<ApiResponse<HaltHassTestSession>> {
+  const response = await http.post<BackendEnvelope<any>>(
+    `/test/halt-hass/session/complete/${sessionId}/`,
+    data,
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '结束测试场次失败')
+  if (!unwrapped.success) return apiFailure<HaltHassTestSession>(unwrapped, '结束测试场次失败')
+  return { success: true, data: normalizeSession(unwrapped.data), status: response.status }
+}
+
+export async function cancelHaltHassSession(
+  sessionId: number,
+  data: {
+    reason?: string
+    powerOffCompleted?: boolean
+    forceExitConfirmed?: boolean
+  } = {},
+): Promise<ApiResponse<HaltHassTestSession>> {
+  const response = await http.post<BackendEnvelope<any>>(
+    `/test/halt-hass/session/cancel/${sessionId}/`,
+    data,
+  )
+  const unwrapped = unwrapBackendEnvelope(response, '取消测试场次失败')
+  if (!unwrapped.success) return apiFailure<HaltHassTestSession>(unwrapped, '取消测试场次失败')
+  return { success: true, data: normalizeSession(unwrapped.data), status: response.status }
+}
+
 // ==================== 报告 API ====================
 
 /**
@@ -497,18 +550,42 @@ export async function downloadProcessData(
  */
 export async function uploadReport(data: {
   orderId: number
+  sessionId: number
+  targetBoardId: number
+  clientSubmitId: string
   reportJson: HaltHassReportJson
-  result: number  // 1=正常, 2=异常, 3=疑问
+  result: number  // 1=正常, 2=异常
   operatorId: number
   remark?: string
+  chartFiles?: HaltHassChartUpload[]
 }): Promise<ApiResponse<{ id: number }>> {
-  const response = await http.post<BackendEnvelope<{ id: number }>>('/test/halt-hass/report/upload/', {
+  const payload = {
     orderId: data.orderId,
+    sessionId: data.sessionId,
+    targetBoardId: data.targetBoardId,
+    clientSubmitId: data.clientSubmitId,
     reportJson: data.reportJson,
     result: data.result,
     operatorId: data.operatorId,
     remark: data.remark || '',
-  })
+  }
+  let response: ApiResponse<BackendEnvelope<{ id: number }>>
+  if (data.chartFiles?.length) {
+    const formData = new FormData()
+    formData.append('payload', JSON.stringify(payload))
+    data.chartFiles.forEach((file) => {
+      formData.append('chart_image', file.blob, file.metadata.fileName)
+    })
+    response = await http.postFormData<BackendEnvelope<{ id: number }>>(
+      '/test/halt-hass/report/upload/',
+      formData,
+    )
+  } else {
+    response = await http.post<BackendEnvelope<{ id: number }>>(
+      '/test/halt-hass/report/upload/',
+      payload,
+    )
+  }
   return unwrapBackendEnvelope(response, '报告上传失败')
 }
 

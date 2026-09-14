@@ -36,7 +36,11 @@ import type {
   HaltHassFlowType,
   HaltHassProcessJson,
   CreateBoardGroupParams,
+  BoardModelItem,
+  RectifierProcessConfig,
+  SdsProcessConfig,
 } from './types'
+import { createDefaultRectifierProcessConfig, createDefaultSdsProcessConfig } from './types'
 import {
   prepareRunFlowchartArgs,
   deserializeFromStudioFormat,
@@ -78,7 +82,6 @@ const {
   editForm,
   canSave,
   isSaving,
-  isCurveUploading,
   isRuntimeConfigComplete,
   errorMessage,
   treeData,
@@ -91,8 +94,6 @@ const {
   resetProcess,
   updateMetadata,
   getRuntimeConfigError,
-  uploadCurveFile,
-  removeCurveFile,
   updateFlowchart,
   getRunSettings,
   getObserveBlocks,
@@ -124,7 +125,6 @@ const showJobDrawer = ref(false)
 const showCreateBoardGroupDialog = ref(false)
 const currentJobId = ref<string | null>(null)
 const boardGroupsLoading = ref(false)
-const curveFileInputRef = ref<HTMLInputElement | null>(null)
 
 // 步骤配置：安装指导、测试流、循环流分别独立编辑。
 const steps = [
@@ -166,20 +166,44 @@ const canStartEditing = computed(() => {
       && processJson.value.metadata.name.trim()
       && processJson.value.metadata.version.trim()
       && isRuntimeConfigComplete.value
-      && !isCurveUploading.value
   )
 })
 
-const durationValidationError = computed(() => {
-  const duration = processJson.value.metadata.durationHours
-  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
-    return '请填写试验时长'
-  }
-  if (Math.abs(duration * 100 - Math.round(duration * 100)) >= 1e-8) {
-    return '试验时长最多保留两位小数'
-  }
-  return ''
+const applicableBoardModelIds = computed(() => new Set(
+  (processJson.value.metadata.applicableBoardModels || []).map(item => item.id)
+))
+
+const productModelOptions = computed(() => treeData.value
+  .filter(item => item.id !== 1)
+  .map(item => ({
+    id: item.id,
+    name: item.label,
+    clientTestType: item.haltHassTestType || null,
+    clientTestTypeName: item.haltHassTestTypeName || '',
+  })))
+
+const selectedProductClientTestTypeName = computed(() => {
+  const productId = processJson.value.metadata.productModel?.id
+  return productModelOptions.value.find(item => item.id === productId)?.clientTestTypeName || ''
 })
+
+const selectedProductClientTestType = computed(() => {
+  const productId = processJson.value.metadata.productModel?.id
+  return productModelOptions.value.find(item => item.id === productId)?.clientTestType || null
+})
+
+const isSdsProcess = computed(() => selectedProductClientTestType.value === 2)
+const isRectifierProcess = computed(() => processJson.value.metadata.reportType === 'rectifier_regulator')
+
+const experimentModeOptions: Array<{ value: 'halt' | 'hass'; label: string }> = [
+  { value: 'halt', label: 'HALT' },
+  { value: 'hass', label: 'HASS' },
+]
+
+const reportTypeOptions = [
+  { value: 'drive_control', label: '驱动控制记录表' },
+  { value: 'rectifier_regulator', label: '整流稳压记录表' },
+] as const
 
 // 预览 JSON
 const previewJson = computed(() => {
@@ -264,41 +288,260 @@ function handleNew() {
   currentStep.value = 1
 }
 
-function handleDurationInput(event: Event) {
-  const rawValue = (event.target as HTMLInputElement).value
-  if (!rawValue.trim()) {
-    updateMetadata({ durationHours: undefined })
+function toggleApplicableBoardModel(board: BoardModelItem) {
+  const current = processJson.value.metadata.applicableBoardModels || []
+  const exists = current.some(item => item.id === board.id)
+  if (exists && current.length === 1) {
+    ElMessage.warning('工艺至少需要一种适用电路板型号')
     return
   }
-  const duration = Number(rawValue)
-  updateMetadata({ durationHours: Number.isFinite(duration) ? duration : undefined })
+  const nextModels = exists
+    ? current.filter(item => item.id !== board.id)
+    : [...current, { ...board }]
+  const nextModelIds = nextModels.map(item => item.id)
+  const assemblyRule = processJson.value.metadata.assemblyRule
+  updateMetadata({
+    applicableBoardModels: nextModels,
+    assemblyRule: {
+      ...assemblyRule,
+      slots: assemblyRule.slots.map(slot => {
+        const allowedIds = slot.allowedBoardModelIds.filter(id => nextModelIds.includes(id))
+        return {
+          ...slot,
+          allowedBoardModelIds: allowedIds.length ? allowedIds : [...nextModelIds],
+        }
+      }),
+    },
+  })
 }
 
-function chooseCurveFile() {
-  if (!isCurveUploading.value) {
-    curveFileInputRef.value?.click()
+function handleProductModelChange(event: Event) {
+  const productId = Number((event.target as HTMLSelectElement).value)
+  const product = productModelOptions.value.find(item => item.id === productId) || null
+  updateMetadata({
+    productModel: product,
+    sdsConfig: product?.clientTestType === 2
+      ? processJson.value.metadata.sdsConfig || createDefaultSdsProcessConfig()
+      : undefined,
+  })
+}
+
+function handleReportTypeChange(event: Event) {
+  const reportType = (event.target as HTMLSelectElement).value as 'drive_control' | 'rectifier_regulator'
+  updateMetadata({
+    reportType,
+    rectifierConfig: reportType === 'rectifier_regulator'
+      ? processJson.value.metadata.rectifierConfig || createDefaultRectifierProcessConfig()
+      : undefined,
+  })
+}
+
+function updateRectifierConfig(patch: Partial<RectifierProcessConfig>) {
+  const current = processJson.value.metadata.rectifierConfig || createDefaultRectifierProcessConfig()
+  updateMetadata({
+    rectifierConfig: {
+      ...current,
+      ...patch,
+    },
+  })
+}
+
+function updateRectifierVoltageSteps(rawValue: string) {
+  const inputVoltageSteps = rawValue
+    .split(/[,，\s]+/)
+    .map(item => Number(item))
+    .filter(value => Number.isFinite(value) && value > 0)
+  updateRectifierConfig({ inputVoltageSteps })
+}
+
+function updateRectifierLoad(
+  stage: 'halfLoad' | 'fullLoad',
+  field: 'load48Ohm' | 'load90Ohm',
+  value: number,
+) {
+  const current = processJson.value.metadata.rectifierConfig || createDefaultRectifierProcessConfig()
+  updateRectifierConfig({
+    [stage]: {
+      ...current[stage],
+      [field]: value,
+    },
+  })
+}
+
+function updateRectifierVoltageRange(
+  channel: 'output48VoltageRange' | 'output90VoltageRange',
+  field: 'min' | 'max',
+  value: number,
+) {
+  const current = processJson.value.metadata.rectifierConfig || createDefaultRectifierProcessConfig()
+  updateRectifierConfig({
+    [channel]: {
+      ...current[channel],
+      [field]: value,
+    },
+  })
+}
+
+type RectifierBoardRole = 'rectifier' | 'capacitor' | 'regulator90' | 'regulator48'
+
+function findRectifierBoardModel(role: RectifierBoardRole) {
+  const matchesRole = (board: BoardModelItem) => {
+    const text = `${board.name || ''} ${board.code || ''}`.toUpperCase()
+    if (role === 'rectifier') return text.includes('整流') && !text.includes('稳压')
+    if (role === 'capacitor') return text.includes('电容')
+    if (role === 'regulator90') return text.includes('90') && text.includes('稳压')
+    return text.includes('48') && text.includes('稳压')
   }
+  return processJson.value.metadata.applicableBoardModels.find(matchesRole)
 }
 
-async function handleCurveFileSelected(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
-  const success = await uploadCurveFile(file)
-  input.value = ''
-  if (success) {
-    ElMessage.success('曲线文件上传成功')
-  } else {
-    ElMessage.error(errorMessage.value || '曲线文件上传失败')
+function applyRectifierAssemblyTemplate(regulator48Count: 2 | 3) {
+  const models = {
+    rectifier: findRectifierBoardModel('rectifier'),
+    capacitor: findRectifierBoardModel('capacitor'),
+    regulator90: findRectifierBoardModel('regulator90'),
+    regulator48: findRectifierBoardModel('regulator48'),
   }
+  const missing = Object.entries(models)
+    .filter(([, model]) => !model)
+    .map(([role]) => ({
+      rectifier: '整流板',
+      capacitor: '电容板',
+      regulator90: '90V 稳压板',
+      regulator48: '48V 稳压板',
+    }[role]))
+  if (missing.length) {
+    ElMessage.warning(`请先在适用电路板型号中选择：${missing.join('、')}`)
+    return
+  }
+
+  const definitions = [
+    { name: '整流板', model: models.rectifier! },
+    { name: '电容板', model: models.capacitor! },
+    { name: '90V 稳压板 1', model: models.regulator90! },
+    { name: '90V 稳压板 2', model: models.regulator90! },
+    ...Array.from({ length: regulator48Count }, (_, index) => ({
+      name: `48V 稳压板 ${index + 1}`,
+      model: models.regulator48!,
+    })),
+  ]
+  updateMetadata({
+    reportType: 'rectifier_regulator',
+    rectifierConfig: processJson.value.metadata.rectifierConfig || createDefaultRectifierProcessConfig(),
+    assemblyRule: {
+      slotCount: definitions.length,
+      minimumTargetBoards: 1,
+      allowCompanionBoards: true,
+      allowEmptySlots: false,
+      slots: definitions.map((item, index) => ({
+        slotNo: index + 1,
+        name: item.name,
+        required: true,
+        allowCompanion: true,
+        allowedBoardModelIds: [item.model.id],
+      })),
+    },
+  })
+  ElMessage.success(`已应用${definitions.length}板整流稳压装配规则`)
 }
 
-function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+function updateSdsConfig(patch: Partial<SdsProcessConfig>) {
+  const current = processJson.value.metadata.sdsConfig || createDefaultSdsProcessConfig()
+  updateMetadata({
+    sdsConfig: {
+      ...current,
+      ...patch,
+    },
+  })
+}
+
+function updateSdsPower(field: 'voltage' | 'currentLimit', value: number) {
+  const current = processJson.value.metadata.sdsConfig || createDefaultSdsProcessConfig()
+  updateSdsConfig({ power: { ...current.power, [field]: value } })
+}
+
+function updateSdsSerial(field: 'baudRate' | 'responseTimeoutSeconds', value: number) {
+  const current = processJson.value.metadata.sdsConfig || createDefaultSdsProcessConfig()
+  updateSdsConfig({ serial: { ...current.serial, [field]: value } })
+}
+
+function updateSdsTemperatureTrigger(
+  field: 'toleranceC' | 'stableDurationSeconds' | 'mqttTimeoutSeconds',
+  value: number,
+) {
+  const current = processJson.value.metadata.sdsConfig || createDefaultSdsProcessConfig()
+  updateSdsConfig({
+    temperatureTrigger: {
+      ...current.temperatureTrigger,
+      [field]: value,
+    },
+  })
+}
+
+function updateSdsPressurePoints(rawValue: string) {
+  const values = rawValue
+    .split(/[,，\s]+/)
+    .map(item => Number(item))
+    .filter(item => Number.isFinite(item) && item > 0)
+  updateSdsConfig({ pressurePointsMpa: values })
+}
+
+function setExperimentMode(value: 'halt' | 'hass') {
+  updateMetadata({ experimentMode: value })
+}
+
+function updateAssemblyRule(patch: Partial<HaltHassProcessJson['metadata']['assemblyRule']>) {
+  updateMetadata({
+    assemblyRule: {
+      ...processJson.value.metadata.assemblyRule,
+      ...patch,
+    },
+  })
+}
+
+function handleAssemblySlotCount(event: Event) {
+  const value = Math.max(1, Math.min(32, Number((event.target as HTMLInputElement).value) || 1))
+  const current = processJson.value.metadata.assemblyRule
+  const applicableIds = processJson.value.metadata.applicableBoardModels.map(item => item.id)
+  updateAssemblyRule({
+    slotCount: value,
+    minimumTargetBoards: Math.min(current.minimumTargetBoards, value),
+    slots: Array.from({ length: value }, (_, index) => {
+      const previous = current.slots.find(slot => slot.slotNo === index + 1)
+      return previous || {
+        slotNo: index + 1,
+        name: `板位 ${index + 1}`,
+        required: !current.allowEmptySlots,
+        allowCompanion: current.allowCompanionBoards,
+        allowedBoardModelIds: [...applicableIds],
+      }
+    }),
+  })
+}
+
+function updateAssemblySlot(
+  slotNo: number,
+  patch: Partial<HaltHassProcessJson['metadata']['assemblyRule']['slots'][number]>,
+) {
+  const current = processJson.value.metadata.assemblyRule
+  updateAssemblyRule({
+    slots: current.slots.map(slot => slot.slotNo === slotNo ? { ...slot, ...patch } : slot),
+  })
+}
+
+function toggleSlotBoardModel(slotNo: number, boardModelId: number) {
+  const slot = processJson.value.metadata.assemblyRule.slots.find(item => item.slotNo === slotNo)
+  if (!slot) return
+  const exists = slot.allowedBoardModelIds.includes(boardModelId)
+  if (exists && slot.allowedBoardModelIds.length === 1) {
+    ElMessage.warning('每个板位至少保留一种允许型号')
+    return
+  }
+  updateAssemblySlot(slotNo, {
+    allowedBoardModelIds: exists
+      ? slot.allowedBoardModelIds.filter(id => id !== boardModelId)
+      : [...slot.allowedBoardModelIds, boardModelId],
+  })
 }
 
 function isFlowchartData(value: unknown): value is HaltHassFlowchart {
@@ -497,11 +740,7 @@ async function handleExportProcess() {
 // 暂存工艺到本地
 async function handleSaveTemp() {
   if (!canSave.value) {
-    ElMessage.warning(
-      isCurveUploading.value
-        ? '曲线文件正在上传，请稍候'
-        : getRuntimeConfigError() || '请先填写工艺名称'
-    )
+    ElMessage.warning(getRuntimeConfigError() || '请先填写工艺名称')
     return
   }
 
@@ -520,11 +759,7 @@ async function handleSaveTemp() {
 // 保存工艺到后端
 async function handleSave() {
   if (!canSave.value) {
-    ElMessage.warning(
-      isCurveUploading.value
-        ? '曲线文件正在上传，请稍候'
-        : getRuntimeConfigError() || '请先填写工艺名称'
-    )
+    ElMessage.warning(getRuntimeConfigError() || '请先填写工艺名称')
     return
   }
 
@@ -553,6 +788,10 @@ async function handleSave() {
 async function handleSubmitCheck() {
   if (editForm.processId <= 0) {
     ElMessage.warning('请先保存工艺到服务器')
+    return
+  }
+  if (isSdsProcess.value && !processJson.value.metadata.sdsConfig?.executionReady) {
+    ElMessage.warning('SDS 工艺协议尚未补齐，只能保存草稿，不能提交审核')
     return
   }
 
@@ -840,16 +1079,16 @@ async function handleCreateBoardGroup(data: CreateBoardGroupParams) {
 
 // 选择电路板组时获取版本列表，并同步到 processJson
 watch(selectedBoardGroup, async (group) => {
-  // 同步更新 processJson.metadata.boardGroup
   if (group) {
-    processJson.value.metadata.boardGroup = [{
-      id: group.id,
-      name: group.name,
-    }]
-    editForm.hasUnsavedChanges = true
+    const metadataGroupId = processJson.value.metadata.boardGroup?.[0]?.id
+    if (metadataGroupId !== group.id || !processJson.value.metadata.applicableBoardModels?.length) {
+      selectBoardGroup(group)
+    }
     await fetchVersionsByBoardGroup(group.id)
   } else {
-    processJson.value.metadata.boardGroup = []
+    if (processJson.value.metadata.boardGroup?.length) {
+      selectBoardGroup(null)
+    }
   }
 })
 
@@ -972,17 +1211,22 @@ watch(currentStep, (step) => {
                         {{ selectedBoardGroup.description }}
                       </div>
                       <div class="group-boards">
-                        <span class="boards-label">包含电路板型号：</span>
+                        <span class="boards-label">适用电路板型号（工艺只保存范围，不保存数量或 SN）：</span>
                         <div class="board-tags">
-                          <span
+                          <button
                             v-for="board in selectedBoardGroup.boards"
                             :key="board.id"
-                            class="board-tag-small"
+                            type="button"
+                            class="board-tag-small board-type-toggle"
+                            :class="{ selected: applicableBoardModelIds.has(board.id) }"
+                            :aria-pressed="applicableBoardModelIds.has(board.id)"
+                            @click="toggleApplicableBoardModel(board)"
                           >
-                            <Icon icon="mdi:chip" />
+                            <Icon :icon="applicableBoardModelIds.has(board.id) ? 'mdi:checkbox-marked-circle' : 'mdi:checkbox-blank-circle-outline'" />
                             {{ board.name }}
-                          </span>
+                          </button>
                         </div>
+                        <p class="board-type-hint">目标板数量和具体编号由工单决定，台架板位要求在下方单独配置。</p>
                       </div>
                     </div>
                     <button class="clear-selection-btn" @click="selectBoardGroup(null)">
@@ -1023,92 +1267,520 @@ watch(currentStep, (step) => {
                     />
                   </div>
 
-                  <div class="runtime-config-grid">
+                  <div class="runtime-config-grid process-classification-grid">
                     <div class="form-row">
-                      <label for="halt-hass-duration" class="required-label">试验时长</label>
-                      <div class="duration-input">
-                        <input
-                          id="halt-hass-duration"
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          inputmode="decimal"
-                          :value="processJson.metadata.durationHours ?? ''"
-                          placeholder="请输入试验时长"
-                          @input="handleDurationInput"
-                        />
-                        <span class="input-suffix">小时</span>
-                      </div>
-                      <p v-if="durationValidationError" class="field-error">
-                        {{ durationValidationError }}
-                      </p>
-                      <p v-else class="field-hint">最多保留两位小数</p>
-                    </div>
-
-                    <div class="form-row curve-file-row">
-                      <label for="halt-hass-curve-file" class="required-label">HALT-HASS 曲线文件</label>
-                      <input
-                        id="halt-hass-curve-file"
-                        ref="curveFileInputRef"
-                        class="visually-hidden-input"
-                        type="file"
-                        @change="handleCurveFileSelected"
-                      />
-
-                      <div v-if="processJson.metadata.curveFile" class="curve-file-card">
-                        <div class="curve-file-icon">
-                          <Icon icon="mdi:file-chart-outline" />
-                        </div>
-                        <div class="curve-file-info">
-                          <strong :title="processJson.metadata.curveFile.fileName">
-                            {{ processJson.metadata.curveFile.fileName }}
-                          </strong>
-                          <span>
-                            {{ formatFileSize(processJson.metadata.curveFile.fileSize) }}
-                            · SHA-256 已校验
-                          </span>
-                        </div>
-                        <div class="curve-file-actions">
-                          <button
-                            type="button"
-                            class="icon-action-btn"
-                            title="替换曲线文件"
-                            :disabled="isCurveUploading"
-                            @click="chooseCurveFile"
-                          >
-                            <Icon icon="mdi:file-replace-outline" />
-                          </button>
-                          <button
-                            type="button"
-                            class="icon-action-btn danger"
-                            title="移除曲线文件"
-                            :disabled="isCurveUploading"
-                            @click="removeCurveFile"
-                          >
-                            <Icon icon="mdi:delete-outline" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <button
-                        v-else
-                        type="button"
-                        class="curve-upload-btn"
-                        :disabled="isCurveUploading"
-                        @click="chooseCurveFile"
+                      <label for="halt-hass-product-model" class="required-label">产品大类</label>
+                      <select
+                        id="halt-hass-product-model"
+                        :value="processJson.metadata.productModel?.id || ''"
+                        @change="handleProductModelChange"
                       >
-                        <Icon
-                          :icon="isCurveUploading ? 'mdi:loading' : 'mdi:upload-outline'"
-                          :class="{ spinning: isCurveUploading }"
-                        />
-                        {{ isCurveUploading ? '正在上传...' : '上传曲线文件' }}
-                      </button>
-                      <p v-if="!processJson.metadata.curveFile" class="field-error">
-                        请上传 HALT-HASS 曲线文件
+                        <option value="" disabled>请选择 HSVP、SDS 等产品大类</option>
+                        <option
+                          v-for="item in productModelOptions"
+                          :key="item.id"
+                          :value="item.id"
+                        >
+                          {{ item.name }}
+                        </option>
+                      </select>
+                      <p class="field-hint">使用现有产品型号主数据，不在工艺中重复维护。</p>
+                      <p v-if="selectedProductClientTestTypeName" class="field-hint">
+                        客户端测试类型：{{ selectedProductClientTestTypeName }}（由产品型号确定）
                       </p>
-                      <p class="field-hint">支持设备可识别的曲线文件，单文件不超过 100 MB</p>
+                      <p v-else-if="processJson.metadata.productModel?.id" class="field-hint field-error">
+                        该产品尚未配置 HALT-HASS 客户端测试类型，工艺无法提交。
+                      </p>
                     </div>
+
+                    <div class="form-row">
+                      <label for="halt-hass-report-type" class="required-label">报告格式</label>
+                      <select
+                        id="halt-hass-report-type"
+                        :value="processJson.metadata.reportType"
+                        @change="handleReportTypeChange"
+                      >
+                        <option
+                          v-for="item in reportTypeOptions"
+                          :key="item.value"
+                          :value="item.value"
+                        >
+                          {{ item.label }}
+                        </option>
+                      </select>
+                      <p class="field-hint">只决定执行数据结构和报告渲染，不作为工单发起人的测试类型。</p>
+                    </div>
+
+                    <fieldset class="form-row experiment-mode-field">
+                      <legend class="required-label">实验模式</legend>
+                      <div class="experiment-mode-options" role="radiogroup" aria-label="实验模式">
+                        <button
+                          v-for="item in experimentModeOptions"
+                          :key="item.value"
+                          type="button"
+                          role="radio"
+                          class="experiment-mode-btn"
+                          :aria-checked="processJson.metadata.experimentMode === item.value"
+                          :class="{ active: processJson.metadata.experimentMode === item.value }"
+                          @click="setExperimentMode(item.value)"
+                        >
+                          {{ item.label }}
+                        </button>
+                      </div>
+                      <p class="field-hint">用于工单匹配，不再通过工艺名称推断。</p>
+                    </fieldset>
                   </div>
+
+                  <p class="field-hint">试验时长由工作台 MQTT 状态控制；温度、振动曲线在客户端开始测试时选择。</p>
+
+                  <section
+                    v-if="isSdsProcess && processJson.metadata.sdsConfig"
+                    class="sds-config-section"
+                    aria-labelledby="sds-config-title"
+                  >
+                    <div class="sds-config-header">
+                      <div>
+                        <strong id="sds-config-title">SDS 全套液压参数</strong>
+                        <p>参数随工艺版本保存，由客户端执行；服务端不参与温度阶段判断。</p>
+                      </div>
+                      <span
+                        class="sds-readiness-badge"
+                        :class="{ ready: processJson.metadata.sdsConfig.executionReady }"
+                      >
+                        {{ processJson.metadata.sdsConfig.executionReady ? '指令完整' : '协议待补充' }}
+                      </span>
+                    </div>
+
+                    <div class="sds-parameter-grid">
+                      <div class="form-row compact-form-row">
+                        <label for="sds-power-voltage">供电电压</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-power-voltage"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.sdsConfig.power.voltage"
+                            @change="updateSdsPower('voltage', Number(($event.target as HTMLInputElement).value))"
+                          />
+                          <span class="input-suffix">V</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-current-limit">电源限流</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-current-limit"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.sdsConfig.power.currentLimit"
+                            @change="updateSdsPower('currentLimit', Number(($event.target as HTMLInputElement).value))"
+                          />
+                          <span class="input-suffix">A</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-baud-rate">TBUS 波特率</label>
+                        <input
+                          id="sds-baud-rate"
+                          type="number"
+                          min="1"
+                          step="1"
+                          :value="processJson.metadata.sdsConfig.serial.baudRate"
+                          @change="updateSdsSerial('baudRate', Number(($event.target as HTMLInputElement).value))"
+                        />
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-serial-timeout">单次响应超时</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-serial-timeout"
+                            type="number"
+                            min="0.05"
+                            step="0.05"
+                            :value="processJson.metadata.sdsConfig.serial.responseTimeoutSeconds"
+                            @change="updateSdsSerial('responseTimeoutSeconds', Number(($event.target as HTMLInputElement).value))"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-temperature-tolerance">温度到位容差</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-temperature-tolerance"
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            :value="processJson.metadata.sdsConfig.temperatureTrigger.toleranceC"
+                            @change="updateSdsTemperatureTrigger('toleranceC', Number(($event.target as HTMLInputElement).value))"
+                          />
+                          <span class="input-suffix">°C</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-stable-duration">连续稳定时间</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-stable-duration"
+                            type="number"
+                            min="1"
+                            step="1"
+                            :value="processJson.metadata.sdsConfig.temperatureTrigger.stableDurationSeconds"
+                            @change="updateSdsTemperatureTrigger('stableDurationSeconds', Number(($event.target as HTMLInputElement).value))"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-mqtt-timeout">MQTT 断流告警</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-mqtt-timeout"
+                            type="number"
+                            min="1"
+                            step="1"
+                            :value="processJson.metadata.sdsConfig.temperatureTrigger.mqttTimeoutSeconds"
+                            @change="updateSdsTemperatureTrigger('mqttTimeoutSeconds', Number(($event.target as HTMLInputElement).value))"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="sds-point-hold">测试点稳定时间</label>
+                        <div class="duration-input">
+                          <input
+                            id="sds-point-hold"
+                            type="number"
+                            min="1"
+                            step="1"
+                            :value="processJson.metadata.sdsConfig.pointHoldSeconds"
+                            @change="updateSdsConfig({ pointHoldSeconds: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row sds-pressure-field">
+                        <label for="sds-pressure-points">压力点（MPa）</label>
+                        <input
+                          id="sds-pressure-points"
+                          type="text"
+                          :value="processJson.metadata.sdsConfig.pressurePointsMpa.join(', ')"
+                          placeholder="例如 2, 5, 10, 15, 20"
+                          @change="updateSdsPressurePoints(($event.target as HTMLInputElement).value)"
+                        />
+                      </div>
+                    </div>
+
+                    <div class="sds-comm-table" role="table" aria-label="SDS 通信角色">
+                      <div class="sds-comm-row sds-comm-heading" role="row">
+                        <span>通信角色</span>
+                        <span>期望值</span>
+                        <span>协议指令</span>
+                        <span>状态</span>
+                      </div>
+                      <div
+                        v-for="item in processJson.metadata.sdsConfig.communicationChecks"
+                        :key="item.role"
+                        class="sds-comm-row"
+                        role="row"
+                      >
+                        <span>{{ item.label }}</span>
+                        <code>{{ item.expectedValue }}</code>
+                        <code>{{ item.protocolCommand || '待补充' }}</code>
+                        <span :class="item.implemented ? 'comm-ready' : 'comm-pending'">
+                          {{ item.implemented ? '已配置' : '待协议' }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div v-if="processJson.metadata.sdsConfig.pendingProtocolItems.length" class="sds-pending-note">
+                      <Icon icon="mdi:alert-outline" />
+                      <div>
+                        <strong>提交审核前仍需补齐</strong>
+                        <p>{{ processJson.metadata.sdsConfig.pendingProtocolItems.join('；') }}</p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section
+                    v-if="isRectifierProcess && processJson.metadata.rectifierConfig"
+                    class="rectifier-config-section"
+                    aria-labelledby="rectifier-config-title"
+                  >
+                    <div class="sds-config-header">
+                      <div>
+                        <strong id="rectifier-config-title">整流稳压参数</strong>
+                        <p>工艺只保存逻辑角色和测试参数。串口、USB、VISA 地址由客户端设备配置绑定。</p>
+                      </div>
+                      <span class="sds-readiness-badge ready">单位 A</span>
+                    </div>
+
+                    <div class="rectifier-template-actions">
+                      <span>装配模板</span>
+                      <button type="button" @click="applyRectifierAssemblyTemplate(2)">6 板：2 块 48V 稳压板</button>
+                      <button type="button" @click="applyRectifierAssemblyTemplate(3)">7 板：3 块 48V 稳压板</button>
+                    </div>
+
+                    <div class="sds-parameter-grid rectifier-parameter-grid">
+                      <div class="form-row compact-form-row rectifier-wide-field">
+                        <label for="rectifier-voltage-steps">输入电压档位</label>
+                        <input
+                          id="rectifier-voltage-steps"
+                          type="text"
+                          :value="processJson.metadata.rectifierConfig.inputVoltageSteps.join(', ')"
+                          placeholder="150, 200, 250, 300, 350, 400"
+                          @change="updateRectifierVoltageSteps(($event.target as HTMLInputElement).value)"
+                        />
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="rectifier-current-limit">3123 输入限流</label>
+                        <div class="duration-input">
+                          <input
+                            id="rectifier-current-limit"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.rectifierConfig.sourceCurrentLimitA"
+                            @change="updateRectifierConfig({ sourceCurrentLimitA: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">A</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="rectifier-temperature-tolerance">温度到位容差</label>
+                        <div class="duration-input">
+                          <input
+                            id="rectifier-temperature-tolerance"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.rectifierConfig.temperatureToleranceC"
+                            @change="updateRectifierConfig({ temperatureToleranceC: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">℃</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="rectifier-temperature-stable">温度连续稳定</label>
+                        <div class="duration-input">
+                          <input
+                            id="rectifier-temperature-stable"
+                            type="number"
+                            min="1"
+                            step="1"
+                            :value="processJson.metadata.rectifierConfig.temperatureStableSeconds"
+                            @change="updateRectifierConfig({ temperatureStableSeconds: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="rectifier-voltage-wait">电压切换等待</label>
+                        <div class="duration-input">
+                          <input
+                            id="rectifier-voltage-wait"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.rectifierConfig.voltageSettleSeconds"
+                            @change="updateRectifierConfig({ voltageSettleSeconds: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="rectifier-half-wait">半载切换等待</label>
+                        <div class="duration-input">
+                          <input
+                            id="rectifier-half-wait"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.rectifierConfig.halfLoadSettleSeconds"
+                            @change="updateRectifierConfig({ halfLoadSettleSeconds: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="rectifier-full-wait">满载切换等待</label>
+                        <div class="duration-input">
+                          <input
+                            id="rectifier-full-wait"
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            :value="processJson.metadata.rectifierConfig.fullLoadSettleSeconds"
+                            @change="updateRectifierConfig({ fullLoadSettleSeconds: Number(($event.target as HTMLInputElement).value) })"
+                          />
+                          <span class="input-suffix">秒</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="rectifier-stage-grid">
+                      <article class="rectifier-stage-card">
+                        <strong>半载</strong>
+                        <label>
+                          <span>48V 负载</span>
+                          <input type="number" min="0.01" step="0.01" :value="processJson.metadata.rectifierConfig.halfLoad.load48Ohm" @change="updateRectifierLoad('halfLoad', 'load48Ohm', Number(($event.target as HTMLInputElement).value))" />
+                          <em>Ω</em>
+                        </label>
+                        <label>
+                          <span>90V 负载</span>
+                          <input type="number" min="0.01" step="0.01" :value="processJson.metadata.rectifierConfig.halfLoad.load90Ohm" @change="updateRectifierLoad('halfLoad', 'load90Ohm', Number(($event.target as HTMLInputElement).value))" />
+                          <em>Ω</em>
+                        </label>
+                      </article>
+                      <article class="rectifier-stage-card">
+                        <strong>满载</strong>
+                        <label>
+                          <span>48V 负载</span>
+                          <input type="number" min="0.01" step="0.01" :value="processJson.metadata.rectifierConfig.fullLoad.load48Ohm" @change="updateRectifierLoad('fullLoad', 'load48Ohm', Number(($event.target as HTMLInputElement).value))" />
+                          <em>Ω</em>
+                        </label>
+                        <label>
+                          <span>90V 负载</span>
+                          <input type="number" min="0.01" step="0.01" :value="processJson.metadata.rectifierConfig.fullLoad.load90Ohm" @change="updateRectifierLoad('fullLoad', 'load90Ohm', Number(($event.target as HTMLInputElement).value))" />
+                          <em>Ω</em>
+                        </label>
+                      </article>
+                      <article class="rectifier-stage-card">
+                        <strong>48V 合格范围</strong>
+                        <label>
+                          <span>下限</span>
+                          <input type="number" step="0.1" :value="processJson.metadata.rectifierConfig.output48VoltageRange.min" @change="updateRectifierVoltageRange('output48VoltageRange', 'min', Number(($event.target as HTMLInputElement).value))" />
+                          <em>V</em>
+                        </label>
+                        <label>
+                          <span>上限</span>
+                          <input type="number" step="0.1" :value="processJson.metadata.rectifierConfig.output48VoltageRange.max" @change="updateRectifierVoltageRange('output48VoltageRange', 'max', Number(($event.target as HTMLInputElement).value))" />
+                          <em>V</em>
+                        </label>
+                      </article>
+                      <article class="rectifier-stage-card">
+                        <strong>90V 合格范围</strong>
+                        <label>
+                          <span>下限</span>
+                          <input type="number" step="0.1" :value="processJson.metadata.rectifierConfig.output90VoltageRange.min" @change="updateRectifierVoltageRange('output90VoltageRange', 'min', Number(($event.target as HTMLInputElement).value))" />
+                          <em>V</em>
+                        </label>
+                        <label>
+                          <span>上限</span>
+                          <input type="number" step="0.1" :value="processJson.metadata.rectifierConfig.output90VoltageRange.max" @change="updateRectifierVoltageRange('output90VoltageRange', 'max', Number(($event.target as HTMLInputElement).value))" />
+                          <em>V</em>
+                        </label>
+                      </article>
+                    </div>
+
+                    <div class="rectifier-role-note">
+                      <Icon icon="mdi:information-outline" />
+                      <span>设备角色固定为 ITECH 3123 输入电源、48V 负载、90V 负载。48V/90V 负载不是电路板型号，不能按发现顺序绑定。</span>
+                    </div>
+                  </section>
+
+                  <section class="assembly-rule-section" aria-labelledby="assembly-rule-title">
+                    <div class="assembly-rule-header">
+                      <div>
+                        <strong id="assembly-rule-title">台架装配规则</strong>
+                        <p>描述一次物理测试的板位要求，与工单目标板数量分开。同一型号需要多块时，请配置多个允许该型号的板位，扫码后将按板位顺序依次占用。</p>
+                      </div>
+                      <div class="assembly-rule-toggles">
+                        <label class="switch-field">
+                          <input
+                            type="checkbox"
+                            :checked="processJson.metadata.assemblyRule.allowCompanionBoards"
+                            @change="updateAssemblyRule({ allowCompanionBoards: ($event.target as HTMLInputElement).checked })"
+                          />
+                          <span>允许陪测板</span>
+                        </label>
+                        <label class="switch-field">
+                          <input
+                            type="checkbox"
+                            :checked="processJson.metadata.assemblyRule.allowEmptySlots"
+                            @change="updateAssemblyRule({ allowEmptySlots: ($event.target as HTMLInputElement).checked })"
+                          />
+                          <span>允许空板位</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="assembly-summary-grid">
+                      <div class="form-row compact-form-row">
+                        <label for="assembly-slot-count">板位总数</label>
+                        <input
+                          id="assembly-slot-count"
+                          type="number"
+                          min="1"
+                          max="32"
+                          :value="processJson.metadata.assemblyRule.slotCount"
+                          @change="handleAssemblySlotCount"
+                        />
+                      </div>
+                      <div class="form-row compact-form-row">
+                        <label for="assembly-minimum-targets">最少目标板</label>
+                        <input
+                          id="assembly-minimum-targets"
+                          type="number"
+                          min="1"
+                          :max="processJson.metadata.assemblyRule.slotCount"
+                          :value="processJson.metadata.assemblyRule.minimumTargetBoards"
+                          @change="updateAssemblyRule({ minimumTargetBoards: Math.max(1, Math.min(processJson.metadata.assemblyRule.slotCount, Number(($event.target as HTMLInputElement).value) || 1)) })"
+                        />
+                      </div>
+                    </div>
+
+                    <div class="assembly-slot-list">
+                      <article
+                        v-for="slot in processJson.metadata.assemblyRule.slots"
+                        :key="slot.slotNo"
+                        class="assembly-slot-card"
+                      >
+                        <div class="assembly-slot-topline">
+                          <span class="slot-index">{{ slot.slotNo }}</span>
+                          <input
+                            class="slot-name-input"
+                            type="text"
+                            :value="slot.name"
+                            :aria-label="`板位 ${slot.slotNo} 名称`"
+                            @input="updateAssemblySlot(slot.slotNo, { name: ($event.target as HTMLInputElement).value })"
+                          />
+                          <label v-if="processJson.metadata.assemblyRule.allowEmptySlots" class="switch-field small">
+                            <input
+                              type="checkbox"
+                              :checked="slot.required"
+                              @change="updateAssemblySlot(slot.slotNo, { required: ($event.target as HTMLInputElement).checked })"
+                            />
+                            <span>必填</span>
+                          </label>
+                          <label v-if="processJson.metadata.assemblyRule.allowCompanionBoards" class="switch-field small">
+                            <input
+                              type="checkbox"
+                              :checked="slot.allowCompanion"
+                              @change="updateAssemblySlot(slot.slotNo, { allowCompanion: ($event.target as HTMLInputElement).checked })"
+                            />
+                            <span>可陪测</span>
+                          </label>
+                        </div>
+                        <div class="slot-model-options" aria-label="允许型号">
+                          <button
+                            v-for="model in processJson.metadata.applicableBoardModels"
+                            :key="model.id"
+                            type="button"
+                            class="slot-model-chip"
+                            :class="{ selected: slot.allowedBoardModelIds.includes(model.id) }"
+                            :aria-pressed="slot.allowedBoardModelIds.includes(model.id)"
+                            @click="toggleSlotBoardModel(slot.slotNo, model.id)"
+                          >
+                            <Icon :icon="slot.allowedBoardModelIds.includes(model.id) ? 'mdi:check-circle' : 'mdi:circle-outline'" />
+                            {{ model.name }}
+                          </button>
+                        </div>
+                      </article>
+                    </div>
+                  </section>
 
                   <!-- 版本迭代选择 -->
                   <div v-if="selectedBoardGroup && versionsByBoardGroup.length > 0" class="version-section">
@@ -1655,11 +2327,34 @@ watch(currentStep, (step) => {
   border-radius: 4px;
   font-size: 12px;
   color: var(--color-text-secondary, #64748b);
+  border: 1px solid transparent;
 }
 
 .board-tag-small :deep(svg) {
   font-size: 12px;
   color: var(--color-primary, #3b82f6);
+}
+
+.board-type-toggle {
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.board-type-toggle:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.board-type-toggle.selected {
+  color: var(--color-primary, #2563eb);
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.board-type-hint {
+  margin: 7px 0 0;
+  color: var(--color-text-tertiary, #94a3b8);
+  font-size: 12px;
 }
 
 .section-content .clear-selection-btn {
@@ -1701,7 +2396,8 @@ watch(currentStep, (step) => {
 }
 
 .form-row input,
-.form-row textarea {
+.form-row textarea,
+.form-row select {
   padding: 10px 14px;
   background: var(--color-bg-tertiary, #f8fafc);
   border: 1px solid var(--color-border, #e2e8f0);
@@ -1712,7 +2408,8 @@ watch(currentStep, (step) => {
 }
 
 .form-row input:focus,
-.form-row textarea:focus {
+.form-row textarea:focus,
+.form-row select:focus {
   outline: none;
   border-color: var(--color-primary, #3b82f6);
   background: var(--color-bg-primary, #fff);
@@ -1775,125 +2472,466 @@ watch(currentStep, (step) => {
   color: var(--color-text-tertiary, #94a3b8);
 }
 
-.visually-hidden-input {
-  display: none;
+.process-classification-grid {
+  margin: 16px 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.curve-upload-btn {
-  min-height: 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 9px 14px;
-  background: #eff6ff;
-  border: 1px dashed #93c5fd;
-  border-radius: 8px;
-  color: var(--color-primary, #2563eb);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
+.experiment-mode-field {
+  padding: 0;
+  border: 0;
 }
 
-.curve-upload-btn:hover:not(:disabled) {
-  background: #dbeafe;
-  border-color: #60a5fa;
+.experiment-mode-field legend {
+  margin-bottom: 6px;
+  color: var(--color-text-secondary, #64748b);
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.curve-upload-btn:disabled,
-.icon-action-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.curve-file-card {
-  min-height: 48px;
+.experiment-mode-options {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  background: #f8fafc;
-  border: 1px solid #dbe4ee;
-  border-radius: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.curve-file-icon {
-  width: 36px;
-  height: 36px;
+.experiment-mode-btn {
+  min-height: 42px;
+  color: var(--color-text-secondary, #64748b);
+  font-weight: 600;
+  background: var(--color-bg-tertiary, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.experiment-mode-btn:hover,
+.experiment-mode-btn:focus-visible {
+  color: var(--color-primary, #2563eb);
+  border-color: var(--color-primary, #3b82f6);
+  outline: none;
+}
+
+.experiment-mode-btn.active {
+  color: #fff;
+  background: var(--color-primary, #2563eb);
+  border-color: var(--color-primary, #2563eb);
+}
+
+.sds-config-section,
+.rectifier-config-section {
+  margin-top: 18px;
+  padding: 16px;
+  background: #f6fbff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+}
+
+.rectifier-config-section {
+  background: #f7fbf8;
+  border-color: #bbf7d0;
+}
+
+.sds-config-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.sds-config-header strong {
+  color: var(--color-text-primary, #1e293b);
+  font-size: 14px;
+}
+
+.sds-config-header p {
+  margin: 4px 0 0;
+  color: var(--color-text-tertiary, #64748b);
+  font-size: 12px;
+}
+
+.sds-readiness-badge {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sds-readiness-badge.ready {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.sds-parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.sds-pressure-field {
+  grid-column: span 2;
+}
+
+.rectifier-template-actions {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: #e0f2fe;
-  border-radius: 6px;
-  color: #0284c7;
-  font-size: 20px;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--color-text-secondary, #475569);
+  font-size: 12px;
 }
 
-.curve-file-info {
-  min-width: 0;
+.rectifier-template-actions button {
+  padding: 7px 10px;
+  color: #047857;
+  background: #fff;
+  border: 1px solid #86efac;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.rectifier-template-actions button:hover,
+.rectifier-template-actions button:focus-visible {
+  background: #ecfdf5;
+  border-color: #22c55e;
+  outline: none;
+}
+
+.rectifier-parameter-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.rectifier-wide-field {
+  grid-column: span 2;
+}
+
+.rectifier-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.rectifier-stage-card {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 9px;
+  padding: 12px;
+  background: var(--color-bg-primary, #fff);
+  border: 1px solid #d1fae5;
+  border-radius: 8px;
 }
 
-.curve-file-info strong {
-  overflow: hidden;
+.rectifier-stage-card strong {
   color: var(--color-text-primary, #1e293b);
   font-size: 13px;
+}
+
+.rectifier-stage-card label {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(64px, 0.8fr) 18px;
+  gap: 6px;
+  align-items: center;
+  color: var(--color-text-secondary, #64748b);
+  font-size: 12px;
+}
+
+.rectifier-stage-card input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  color: var(--color-text-primary, #1e293b);
+  background: var(--color-bg-tertiary, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.rectifier-stage-card em {
+  color: var(--color-text-tertiary, #94a3b8);
+  font-style: normal;
+}
+
+.rectifier-role-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: #166534;
+  background: #ecfdf5;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.rectifier-role-note > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  font-size: 17px;
+}
+
+.sds-comm-table {
+  margin-top: 16px;
+  overflow: hidden;
+  background: var(--color-bg-primary, #fff);
+  border: 1px solid var(--color-border, #dbeafe);
+  border-radius: 8px;
+}
+
+.sds-comm-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.2fr) minmax(80px, 0.5fr) minmax(180px, 1.3fr) minmax(70px, 0.4fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 12px;
+  color: var(--color-text-secondary, #475569);
+  border-top: 1px solid var(--color-border, #e2e8f0);
+  font-size: 12px;
+}
+
+.sds-comm-row:first-child {
+  border-top: 0;
+}
+
+.sds-comm-heading {
+  color: var(--color-text-primary, #1e293b);
+  background: #eff6ff;
   font-weight: 600;
+}
+
+.sds-comm-row code {
+  overflow: hidden;
+  color: #334155;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.curve-file-info span {
-  color: var(--color-text-tertiary, #94a3b8);
-  font-size: 11px;
+.comm-ready {
+  color: #047857;
 }
 
-.curve-file-actions {
+.comm-pending {
+  color: #b45309;
+}
+
+.sds-pending-note {
   display: flex;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  font-size: 12px;
 }
 
-.icon-action-btn {
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
+.sds-pending-note > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  font-size: 18px;
+}
+
+.sds-pending-note p {
+  margin: 4px 0 0;
+  line-height: 18px;
+}
+
+.assembly-rule-section {
+  margin-top: 18px;
+  padding: 16px;
+  background: var(--color-bg-tertiary, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 10px;
+}
+
+.assembly-rule-header,
+.assembly-rule-toggles,
+.assembly-slot-topline,
+.switch-field,
+.slot-model-chip {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
+}
+
+.assembly-rule-header {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.assembly-rule-header strong {
+  color: var(--color-text-primary, #1e293b);
+  font-size: 14px;
+}
+
+.assembly-rule-header p {
+  margin: 4px 0 0;
+  color: var(--color-text-tertiary, #94a3b8);
+  font-size: 12px;
+}
+
+.assembly-rule-toggles {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.switch-field {
+  gap: 6px;
+  min-height: 32px;
   color: var(--color-text-secondary, #64748b);
+  font-size: 12px;
   cursor: pointer;
 }
 
-.icon-action-btn:hover:not(:disabled) {
-  background: #e2e8f0;
+.switch-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-primary, #2563eb);
+}
+
+.switch-field.small {
+  flex: 0 0 auto;
+}
+
+.assembly-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 240px));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.compact-form-row {
+  margin-bottom: 0;
+}
+
+.compact-form-row input {
+  min-height: 40px;
+  box-sizing: border-box;
+}
+
+.assembly-slot-list {
+  display: grid;
+  gap: 8px;
+}
+
+.assembly-slot-card {
+  padding: 10px 12px;
+  background: var(--color-bg-primary, #fff);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 8px;
+}
+
+.assembly-slot-topline {
+  gap: 10px;
+}
+
+.slot-index {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   color: var(--color-primary, #2563eb);
+  font-size: 12px;
+  font-weight: 700;
+  background: #eff6ff;
+  border-radius: 7px;
 }
 
-.icon-action-btn.danger:hover:not(:disabled) {
-  background: #fee2e2;
-  color: var(--color-error, #dc2626);
+.slot-name-input {
+  min-width: 120px;
+  flex: 1;
+  min-height: 36px;
+  padding: 7px 10px !important;
 }
 
-.spinning {
-  animation: halt-hass-spin 0.8s linear infinite;
+.slot-model-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+  padding-left: 38px;
 }
 
-@keyframes halt-hass-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.slot-model-chip {
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 9px;
+  color: var(--color-text-secondary, #64748b);
+  font-size: 12px;
+  background: var(--color-bg-tertiary, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.slot-model-chip.selected {
+  color: var(--color-primary, #2563eb);
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.slot-model-chip:focus-visible {
+  outline: 2px solid var(--color-primary, #2563eb);
+  outline-offset: 2px;
 }
 
 @media (max-width: 980px) {
-  .runtime-config-grid {
+  .runtime-config-grid,
+  .process-classification-grid,
+  .sds-parameter-grid,
+  .rectifier-stage-grid {
     grid-template-columns: 1fr;
+  }
+
+  .sds-pressure-field,
+  .rectifier-wide-field {
+    grid-column: auto;
+  }
+
+  .rectifier-template-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sds-comm-table {
+    overflow-x: auto;
+  }
+
+  .sds-comm-row {
+    min-width: 640px;
+  }
+
+  .assembly-rule-header,
+  .assembly-slot-topline {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .assembly-rule-toggles {
+    justify-content: flex-start;
+  }
+
+  .assembly-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .slot-model-options {
+    padding-left: 0;
   }
 }
 

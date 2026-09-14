@@ -13,12 +13,20 @@ const props = withDefaults(defineProps<{
   scannerOk?: boolean
   cameraOk?: boolean
   items?: { label: string; ok: boolean }[]
+  showCamera?: boolean
+  showService?: boolean
+  serviceOk?: boolean
+  serviceLabel?: string
   errorMsg?: string
   accentColor?: 'green' | 'orange'
 }>(), {
   accentColor: 'green',
   scannerOk: false,
   cameraOk: false,
+  showCamera: true,
+  showService: false,
+  serviceOk: false,
+  serviceLabel: '后台服务',
 })
 
 // Emits
@@ -31,10 +39,12 @@ const emit = defineEmits<{
 // 计算属性
 const displayItems = computed(() => {
   if (props.items?.length) return props.items
-  return [
+  const items = [
     { label: '扫码枪', ok: props.scannerOk },
-    { label: '摄像头', ok: props.cameraOk },
   ]
+  if (props.showCamera) items.push({ label: '摄像头', ok: props.cameraOk })
+  if (props.showService) items.push({ label: props.serviceLabel, ok: props.serviceOk })
+  return items
 })
 
 const allDevicesOk = computed(() => displayItems.value.every((item) => item.ok))

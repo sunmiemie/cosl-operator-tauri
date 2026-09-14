@@ -18,7 +18,6 @@ import {
   createBoardGroup as createBoardGroupApi,
   getHaltHassMyJob,
   deleteHaltHassProcess,
-  uploadHaltHassCurveFile,
   type HaltHassProcessListItem,
   type HaltHassVersionItem,
 } from '@/services/halt-hass-api'
@@ -47,6 +46,8 @@ import {
 export interface TreeNode {
   id: number
   label: string
+  haltHassTestType?: 1 | 2 | null
+  haltHassTestTypeName?: string
   children?: TreeNode[]
 }
 
@@ -78,7 +79,6 @@ export function useHaltHassProcess() {
   const isSaving = ref(false)
 
   // 曲线文件上传状态
-  const isCurveUploading = ref(false)
 
   // 错误信息
   const errorMessage = ref<string | null>(null)
@@ -116,20 +116,104 @@ export function useHaltHassProcess() {
   const testFlow = computed(() => processJson.value.testFlow)
   const cycleFlow = computed(() => processJson.value.cycleFlow)
   
-  function hasAtMostTwoDecimalPlaces(value: number): boolean {
-    return Math.abs(value * 100 - Math.round(value * 100)) < 1e-8
-  }
-
   function getRuntimeConfigError(): string | null {
-    const duration = metadata.value.durationHours
-    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
-      return '请填写试验时长'
+    if (!metadata.value.boardGroup?.length) {
+      return '请选择电路板组'
     }
-    if (!hasAtMostTwoDecimalPlaces(duration)) {
-      return '试验时长最多保留两位小数'
+    if (!metadata.value.productModel?.id) {
+      return '请选择产品大类'
     }
-    if (!metadata.value.curveFile?.fileId || !metadata.value.curveFile.storageKey) {
-      return '请上传 HALT-HASS 曲线文件'
+    if (!['halt', 'hass'].includes(metadata.value.experimentMode)) {
+      return '请选择 HALT 或 HASS 实验模式'
+    }
+    if (!metadata.value.applicableBoardModels?.length) {
+      return '请至少选择一种适用电路板型号'
+    }
+    const assemblyRule = metadata.value.assemblyRule
+    if (!assemblyRule || assemblyRule.slotCount <= 0 || assemblyRule.slots.length !== assemblyRule.slotCount) {
+      return '请完整配置台架装配规则'
+    }
+    const applicableIds = new Set(metadata.value.applicableBoardModels.map(item => item.id))
+    if (assemblyRule.minimumTargetBoards <= 0 || assemblyRule.minimumTargetBoards > assemblyRule.slotCount) {
+      return '最少目标板数量必须在 1 到板位总数之间'
+    }
+    if (assemblyRule.slots.some(slot => (
+      !slot.allowedBoardModelIds.length
+      || slot.allowedBoardModelIds.some(id => !applicableIds.has(id))
+    ))) {
+      return '每个板位都必须配置工艺适用范围内的允许型号'
+    }
+    if (!['drive_control', 'rectifier_regulator'].includes(metadata.value.reportType)) {
+      return '请选择报告类型'
+    }
+    if (metadata.value.reportType === 'rectifier_regulator') {
+      const config = metadata.value.rectifierConfig
+      if (!config) {
+        return '请配置整流稳压工艺参数'
+      }
+      if (
+        config.inputVoltageSteps.length !== 6
+        || config.inputVoltageSteps.some(value => !Number.isFinite(value) || value <= 0)
+        || new Set(config.inputVoltageSteps).size !== config.inputVoltageSteps.length
+      ) {
+        return '整流稳压固定报告要求配置 6 个不重复的正数输入电压档位'
+      }
+      if (
+        !Number.isFinite(config.sourceCurrentLimitA)
+        || config.sourceCurrentLimitA <= 0
+        || !Number.isFinite(config.temperatureToleranceC)
+        || config.temperatureToleranceC <= 0
+        || !Number.isFinite(config.temperatureStableSeconds)
+        || config.temperatureStableSeconds <= 0
+        || !Number.isFinite(config.voltageSettleSeconds)
+        || config.voltageSettleSeconds <= 0
+        || !Number.isFinite(config.halfLoadSettleSeconds)
+        || config.halfLoadSettleSeconds <= 0
+        || !Number.isFinite(config.fullLoadSettleSeconds)
+        || config.fullLoadSettleSeconds <= 0
+      ) {
+        return '整流稳压限流值、温度到位参数和等待时间必须大于 0'
+      }
+      if (
+        Object.values(config.halfLoad).some(value => !Number.isFinite(value) || value <= 0)
+        || Object.values(config.fullLoad).some(value => !Number.isFinite(value) || value <= 0)
+      ) {
+        return '整流稳压半载和满载电阻必须大于 0'
+      }
+      if (
+        config.output48VoltageRange.min >= config.output48VoltageRange.max
+        || config.output90VoltageRange.min >= config.output90VoltageRange.max
+      ) {
+        return '整流稳压参考电压范围下限必须小于上限'
+      }
+      if (config.currentUnit !== 'A') {
+        return '整流稳压电流单位必须为 A'
+      }
+    }
+    const productId = metadata.value.productModel.id
+    const selectedProduct = treeData.value.find(item => item.id === productId)
+    if (selectedProduct?.haltHassTestType === 2) {
+      const config = metadata.value.sdsConfig
+      if (!config || config.method !== 'full_hydraulic') {
+        return '请配置 SDS 全套液压工艺参数'
+      }
+      if (config.power.voltage <= 0 || config.power.currentLimit <= 0) {
+        return 'SDS 供电电压和限流值必须大于 0'
+      }
+      if (config.serial.baudRate <= 0 || config.serial.responseTimeoutSeconds <= 0) {
+        return 'SDS 串口波特率和响应超时必须大于 0'
+      }
+      const trigger = config.temperatureTrigger
+      if (
+        trigger.toleranceC < 0
+        || trigger.stableDurationSeconds <= 0
+        || trigger.mqttTimeoutSeconds <= 0
+      ) {
+        return '请完整配置 SDS 温度触发参数'
+      }
+      if (config.communicationChecks.length !== 7) {
+        return 'SDS 工艺必须保留 7 个通信角色'
+      }
     }
     return null
   }
@@ -141,7 +225,6 @@ export function useHaltHassProcess() {
     return metadata.value.name.trim() !== ''
       && isRuntimeConfigComplete.value
       && !isSaving.value
-      && !isCurveUploading.value
   })
 
   // ========== 方法 ==========
@@ -160,38 +243,6 @@ export function useHaltHassProcess() {
       ...updates,
     }
     editForm.hasUnsavedChanges = true
-  }
-
-  async function uploadCurveFile(file: File): Promise<boolean> {
-    if (file.size <= 0) {
-      errorMessage.value = '曲线文件不能为空'
-      return false
-    }
-    if (file.size > 100 * 1024 * 1024) {
-      errorMessage.value = '曲线文件不能超过 100 MB'
-      return false
-    }
-
-    try {
-      isCurveUploading.value = true
-      errorMessage.value = null
-      const result = await uploadHaltHassCurveFile(file, getAuthHeaders())
-      if (!result.success || !result.data) {
-        errorMessage.value = result.error || '曲线文件上传失败'
-        return false
-      }
-      updateMetadata({ curveFile: result.data })
-      return true
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '曲线文件上传失败'
-      return false
-    } finally {
-      isCurveUploading.value = false
-    }
-  }
-
-  function removeCurveFile() {
-    updateMetadata({ curveFile: undefined })
   }
 
   // ========== 安装指导相关方法 ==========
@@ -728,6 +779,10 @@ export function useHaltHassProcess() {
 
   // 选择电路板组
   function selectBoardGroup(group: BoardGroup | null) {
+    const previousGroupId = processJson.value.metadata.boardGroup?.[0]?.id
+    const previousApplicableModels = Array.isArray(processJson.value.metadata.applicableBoardModels)
+      ? processJson.value.metadata.applicableBoardModels
+      : []
     selectedBoardGroup.value = group
     if (group) {
       // 更新 metadata 中的 boardGroup
@@ -735,9 +790,48 @@ export function useHaltHassProcess() {
         id: group.id,
         name: group.name,
       }]
+      const previousById = new Map(previousApplicableModels.map(item => [item.id, item]))
+      const keepPreviousSelection = previousGroupId === group.id && previousApplicableModels.length > 0
+      processJson.value.metadata.applicableBoardModels = group.boards
+        .filter(board => !keepPreviousSelection || previousById.has(board.id))
+        .map((board) => ({
+          id: board.id,
+          name: board.name,
+          code: board.code,
+        }))
+      const applicableIds = processJson.value.metadata.applicableBoardModels.map(item => item.id)
+      const previousRule = processJson.value.metadata.assemblyRule
+      const slotCount = Math.max(1, Math.min(32, Number(previousRule?.slotCount) || 5))
+      processJson.value.metadata.assemblyRule = {
+        slotCount,
+        minimumTargetBoards: Math.max(
+          1,
+          Math.min(slotCount, Number(previousRule?.minimumTargetBoards) || 1),
+        ),
+        allowCompanionBoards: previousRule?.allowCompanionBoards ?? true,
+        allowEmptySlots: previousRule?.allowEmptySlots ?? false,
+        slots: Array.from({ length: slotCount }, (_, index) => {
+          const previousSlot = previousRule?.slots?.find(item => item.slotNo === index + 1)
+          const allowedBoardModelIds = (previousSlot?.allowedBoardModelIds || [])
+            .filter(id => applicableIds.includes(id))
+          return {
+            slotNo: index + 1,
+            name: previousSlot?.name || `板位 ${index + 1}`,
+            required: previousRule?.allowEmptySlots ? (previousSlot?.required ?? true) : true,
+            allowCompanion: (previousRule?.allowCompanionBoards ?? true)
+              && (previousSlot?.allowCompanion ?? true),
+            allowedBoardModelIds: allowedBoardModelIds.length
+              ? allowedBoardModelIds
+              : [...applicableIds],
+          }
+        }),
+      }
       editForm.hasUnsavedChanges = true
     } else {
       processJson.value.metadata.boardGroup = []
+      processJson.value.metadata.applicableBoardModels = []
+      processJson.value.metadata.assemblyRule.slots = processJson.value.metadata.assemblyRule.slots
+        .map(slot => ({ ...slot, allowedBoardModelIds: [] }))
     }
   }
 
@@ -782,7 +876,6 @@ export function useHaltHassProcess() {
     editForm,
     isLoading,
     isSaving,
-    isCurveUploading,
     errorMessage,
     tempList,
     treeData,
@@ -804,8 +897,6 @@ export function useHaltHassProcess() {
     resetProcess,
     updateMetadata,
     getRuntimeConfigError,
-    uploadCurveFile,
-    removeCurveFile,
 
     // 安装指导方法
     updateInstallGuide,

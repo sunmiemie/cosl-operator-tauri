@@ -20,6 +20,11 @@ export const SerialDeviceSchema = z.object({
   hwid: z.string(),
   port: z.string(),
   manufacturer: z.nullable(z.string()),
+  vid: z.number().nullable().optional(),
+  pid: z.number().nullable().optional(),
+  serialNumber: z.string().nullable().optional(),
+  interfaceName: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
 })
 
 export type SerialDevice = z.infer<typeof SerialDeviceSchema>

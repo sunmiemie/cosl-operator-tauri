@@ -8,6 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "prepare:ocr-runtime": "node scripts/prepare-ocr-runtime.mjs",
     "test:halt-hass": "node tests/halt-hass-real-link.test.mjs",
+    "test:halt-hass-session": "node --experimental-strip-types --test tests/halt-hass-session-acceptance.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

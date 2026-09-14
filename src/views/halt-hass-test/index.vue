@@ -4,12 +4,13 @@
  * 完整的测试流程：设备检测 -> 扫码 -> 下载工艺 -> 安装指导 -> 流程图运行 -> 上传报告 -> 完成
  */
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 // 导入组件
 import DeviceCheckOverlay from '@/components/visual-test/DeviceCheckOverlay.vue'
-import ScanProgress from './components/ScanProgress.vue'
+import SessionBoardSelector from './components/SessionBoardSelector.vue'
 import InstallGuideViewer from './components/InstallGuideViewer.vue'
 import FlowchartRunner from './components/FlowchartRunner.vue'
 import TestResultPanel from './components/TestResultPanel.vue'
@@ -28,42 +29,59 @@ import {
   useFlojoySocket,
 } from '@/composables/useFlojoySocket'
 import { useLayout } from '@/composables/useLayout'
+import { useAuth } from '@/composables/useAuth'
 import {
   runFlowchart,
   cancelFlowchartRun,
-  cancelCurrentFlowchartRun,
+  gracefulStopCurrentFlowchartRun,
   configureApi,
   checkHealth,
   runHassHardwarePreflight,
   runHassHardwareShutdown,
+  appendExecutionLog,
+  resolveHassRectifierBindings,
+  runHassRectifierCommand,
   type HassHardwarePreflightResponse,
 } from '@/services/flojoy-api'
 import {
-  buildHassCycleRunSettings,
+  buildWorkbenchControlledCycleRunSettings,
   hasHassDurationLoop,
-  resolveRemainingRuntimeSeconds,
 } from '@/services/hass-cycle-runtime'
 import { prepareRunFlowchartArgs } from '@/services/flojoy-adapter'
-import { getOrderDetail, resetRunningOrderExecution } from '@/services/halt-hass-order'
+import {
+  completeHaltHassSession,
+  cancelHaltHassSession,
+  getHaltHassSessionByClientId,
+  getOrderDetail,
+  listExecutionProcessOptions,
+} from '@/services/halt-hass-order'
 import { v4 as uuidv4 } from 'uuid'
 import {
-  getMockScannedBoards,
-  isMockHaltHassOrder,
-  MOCK_HALT_HASS_ORDER,
-} from './mock-halt-hass-fixture'
+  clearHaltHassLocalSession,
+  loadHaltHassLocalSession,
+  saveHaltHassLocalSession,
+} from './utils/sessionState'
+import { registerActiveSafeExitHandler } from '@/services/active-safe-exit'
 
 // 导入类型
-import type { HaltHassOrder, PagePhase } from './types'
+import type {
+  HaltHassExecutionProcessOption,
+  HaltHassOrder,
+  PagePhase,
+} from './types'
 import type { BlockData } from '@/views/process-halt-hass/types'
 import type { Node } from '@vue-flow/core'
 
 // 布局控制
 const { enterEditMode, exitEditMode } = useLayout()
+const { userInfo } = useAuth()
+const router = useRouter()
 
 // 测试流程管理
 const {
   phase,
   currentOrder,
+  currentSession,
   processJson,
   deviceStatus,
   installStep,
@@ -81,6 +99,8 @@ const {
   updateDeviceStatus,
   onDeviceCheckPass,
   setOrder,
+  setSession,
+  setProcess,
   startTest,
   downloadProcess,
   prevInstallStep,
@@ -88,14 +108,11 @@ const {
   goToInstallStep,
   startFlowchartTest,
   beginFlowchartRun,
-  activateCycleRuntime,
-  pauseCycleRuntime,
   updateNodeResult,
   advanceToCycleFlow,
   onFlowchartComplete,
   stopFlowchart,
-  restoreTemp,
-  loadFeedback,
+  restoreLocalExecution,
   reset: resetTest,
 } = useHaltHassTest()
 
@@ -104,31 +121,63 @@ const schedule = useHaltHassSchedule()
 // 多板扫码
 const {
   currentOrder: scannedOrder,
+  eligibleBoards,
+  availableOrders,
+  selectedOrderIds,
+  assignments,
   scannedBoards,
+  confirmedSerials,
   lastScanError,
   isComplete: isScanComplete,
+  validation: sessionSelectionValidation,
+  isProcessing: isSessionSelectionLoading,
+  initializeSelection,
+  updateAssignment,
+  setRole: setAssignmentRole,
+  toggleSelectedOrder,
+  createSession,
+  restoreSessionSelection,
   handleScan,
-  removeScannedBoard,
   reset: resetScan,
   setOrder: setScanOrder,
-  getAllSerials,
 } = useMultiBoardScan()
 
 // 报告管理
 const {
   reportJson,
+  reportJobs,
   testResult,
-  remark,
   isUploading,
   uploadProgress,
   uploadError,
   uploadedReportId,
+  uploadedCount,
+  activeReportIndex,
+  reportStage,
+  reviewConfirmed,
+  completedReportCount,
+  allReportsCompleted,
+  canUploadReports,
   generateReport,
-  setTestResult,
-  setRemark,
   upload: uploadReport,
+  retryPending: retryPendingReports,
+  restorePendingForSession,
+  selectReport,
+  updateActiveResult,
+  updateActiveRecordStatus,
+  updateActiveRectifierRecordStatus,
+  updateActiveBoardConclusion,
+  completeActiveReport,
+  enterReportReview,
+  editReportFromReview,
+  setReviewConfirmed,
   reset: resetReport,
 } = useHaltHassReport()
+
+const flowchartRunnerRef = ref<{
+  finalizeTelemetry: () => import('./types').HaltHassTelemetrySnapshot | null
+  waitForRectifierStages: () => Promise<void>
+} | null>(null)
 
 // 扫码枪
 const {
@@ -155,6 +204,8 @@ const {
   runningBlock,
   failedBlocks,
   lastMessage,
+  socketId,
+  executionLogs,
   clearNodeStatuses,
 } = useFlojoySocket()
 
@@ -164,28 +215,45 @@ const deviceCheckError = ref('')
 
 // 当前运行的 Job ID
 const currentJobId = ref<string>('')
-let mockFlowchartRunToken = 0
+// 当前流程停止后仍保留最后一次 Job ID，方便日志小窗继续查看和定位落盘记录。
+const latestExecutionJobId = ref<string>('')
+let criticalPulserAbortActive = false
+let rectifierAbortActive = false
+
+const CRITICAL_PULSER_SETUP_FUNCTIONS = new Set([
+  'READ_ZERO_POSITION',
+  'SET_ZERO_POSITION',
+  'SET_STARTEND_ANGLES',
+])
 
 type CycleFinishState = 'idle' | 'running' | 'finishing' | 'recovering'
 
-// 循环流由软件总时长统一收口。倒计时归零后立即取消当前拓扑并执行
-// 独立关闭流程，不等待工艺 end 分支自行结束。
+// 循环流时长由工作台曲线控制；客户端只展示 MQTT 时间并在 Stopped 后收尾。
 const cycleRemainingSeconds = ref<number | null>(null)
 const cycleFinishState = ref<CycleFinishState>('idle')
-let cycleDeadlineMs: number | null = null
-let cycleCountdownTimer: ReturnType<typeof setInterval> | null = null
 let cycleRecoveryActive = false
 let flowchartCompletionActive = false
+const isSafeExitInProgress = ref(false)
+let flojoyConnectPromise: Promise<boolean> | null = null
+let deviceCheckGeneration = 0
+let enteringScan = false
+let safeExitPromise: Promise<boolean> | null = null
+let safeExitCompleted = false
+let unregisterActiveSafeExit: (() => void) | null = null
+
+const processSelectorVisible = ref(false)
+const processSelectorLoading = ref(false)
+const processOptions = ref<HaltHassExecutionProcessOption[]>([])
+const selectedProcessId = ref<number | null>(null)
+const selectedProcessDescription = computed(() =>
+  processOptions.value.find(item => item.id === selectedProcessId.value)?.description?.trim() || ''
+)
+const pendingExecutionOrder = ref<HaltHassOrder | null>(null)
 
 // 正式测试流之前的设备通信门禁
 const hardwarePreflightResult = ref<HassHardwarePreflightResponse | null>(null)
 const isHardwarePreflightChecking = ref(false)
-const isHardwarePreflightReady = computed(() => {
-  if (isMockHaltHassOrder(currentOrder.value)) {
-    return hardwarePreflightResult.value?.ready === true
-  }
-  return hardwarePreflightResult.value?.ready === true && socketConnected.value
-})
+const isHardwarePreflightReady = computed(() => hardwarePreflightResult.value?.ready === true && socketConnected.value)
 
 // 阶段标签配置
 const phaseLabels: Record<PagePhase, { label: string; icon: string }> = {
@@ -201,26 +269,12 @@ const phaseLabels: Record<PagePhase, { label: string; icon: string }> = {
 
 // 计算属性
 const currentPhaseLabel = computed(() => phaseLabels[phase.value])
-const flowchartStatusText = computed(() => {
-  if (!isMockHaltHassOrder(currentOrder.value)) return serverStatus.value
-  return isFlowchartRunning.value ? '本地演示运行中' : '演示流程就绪'
-})
+const flowchartStatusText = computed(() => serverStatus.value)
 const activeFlowchart = computed(() => {
   if (!processJson.value) return null
   return activeFlowType.value === 'test'
     ? processJson.value.testFlow
     : processJson.value.cycleFlow
-})
-const cycleTotalSeconds = computed(() => {
-  const requiredSeconds = Number(currentOrder.value?.requiredRuntimeSeconds)
-  if (Number.isFinite(requiredSeconds) && requiredSeconds > 0) {
-    return Math.ceil(requiredSeconds)
-  }
-
-  const totalHours = Number(currentOrder.value?.totalCycleDurationHours)
-  return Number.isFinite(totalHours) && totalHours > 0
-    ? Math.ceil(totalHours * 3600)
-    : null
 })
 
 // ==================== 设备检测 ====================
@@ -230,87 +284,56 @@ function wait(milliseconds: number): Promise<void> {
 }
 
 async function ensureFlojoyConnected(): Promise<boolean> {
-  configureApi('127.0.0.1', backendPort.value)
+  if (flojoyConnectPromise) return flojoyConnectPromise
 
-  let backendHealthy = await checkHealth()
-  if (!backendHealthy) {
-    await startBackend()
-    for (let attempt = 0; attempt < 12 && !backendHealthy; attempt++) {
-      await wait(500)
-      backendHealthy = await checkHealth()
+  const connectionAttempt = (async () => {
+    configureApi('127.0.0.1', backendPort.value)
+
+    let backendHealthy = await checkHealth()
+    if (!backendHealthy) {
+      await startBackend()
+      for (let attempt = 0; attempt < 12 && !backendHealthy; attempt++) {
+        await wait(500)
+        backendHealthy = await checkHealth()
+      }
+    }
+
+    if (!backendHealthy) {
+      return false
+    }
+
+    if (!socketConnected.value) {
+      connectSocket()
+    }
+
+    for (let attempt = 0; attempt < 20 && !socketConnected.value; attempt++) {
+      await wait(250)
+    }
+
+    return socketConnected.value
+  })()
+
+  flojoyConnectPromise = connectionAttempt
+  try {
+    return await connectionAttempt
+  } finally {
+    if (flojoyConnectPromise === connectionAttempt) {
+      flojoyConnectPromise = null
     }
   }
-
-  if (!backendHealthy) {
-    return false
-  }
-
-  if (!socketConnected.value) {
-    connectSocket()
-  }
-
-  for (let attempt = 0; attempt < 20 && !socketConnected.value; attempt++) {
-    await wait(250)
-  }
-
-  return socketConnected.value
 }
 
 function clearCycleRuntimeTimers(resetDisplay = true) {
-  if (cycleCountdownTimer) {
-    clearInterval(cycleCountdownTimer)
-    cycleCountdownTimer = null
-  }
-  cycleDeadlineMs = null
   if (resetDisplay) {
     cycleRemainingSeconds.value = null
     cycleFinishState.value = 'idle'
   }
 }
 
-function updateCycleRuntimeCountdown() {
-  if (
-    !isFlowchartRunning.value
-    || activeFlowType.value !== 'cycle'
-    || cycleDeadlineMs === null
-  ) {
-    return
-  }
-
-  const remaining = Math.max(
-    0,
-    Math.ceil((cycleDeadlineMs - Date.now()) / 1000)
-  )
-  cycleRemainingSeconds.value = remaining
-  if (remaining > 0 || cycleFinishState.value !== 'running') return
-
-  cycleFinishState.value = 'finishing'
-  if (cycleCountdownTimer) {
-    clearInterval(cycleCountdownTimer)
-    cycleCountdownTimer = null
-  }
-  ElMessage.info('循环时长已到，正在执行停止、下电和连接释放流程')
-  void recoverTimedOutCycleFlow()
-}
-
-function startCycleRuntimeCountdown(durationSeconds: number) {
-  clearCycleRuntimeTimers(false)
-  const duration = Math.max(0, Math.ceil(durationSeconds))
-  cycleRemainingSeconds.value = duration
-  cycleFinishState.value = duration > 0 ? 'running' : 'finishing'
-  cycleDeadlineMs = Date.now() + duration * 1000
-
-  if (duration === 0) {
-    void recoverTimedOutCycleFlow()
-    return
-  }
-
-  cycleCountdownTimer = setInterval(updateCycleRuntimeCountdown, 250)
-}
-
-async function recoverTimedOutCycleFlow() {
+async function recoverTimedOutCycleFlow(completionMode = 'software-runtime-complete') {
   if (
     cycleRecoveryActive
+    || isSafeExitInProgress.value
     || !isFlowchartRunning.value
     || activeFlowType.value !== 'cycle'
   ) {
@@ -322,7 +345,12 @@ async function recoverTimedOutCycleFlow() {
   const cycleNodeErrors = Object.entries(failedBlocks.value).map(
     ([nodeId, error]) => ({ nodeId, error })
   )
-  ElMessage.info('循环测试已完成，软件正在停止流程并执行下电')
+  const finishingJobId = currentJobId.value || latestExecutionJobId.value
+  ElMessage.info(
+    completionMode === 'workbench-auto-stop'
+      ? '工作台测试已结束，正在停止循环采集并执行设备下电'
+      : '工艺自然收尾等待超时，正在停止新任务并等待当前节点释放连接'
+  )
 
   try {
     const flojoyReady = await ensureFlojoyConnected()
@@ -330,16 +358,24 @@ async function recoverTimedOutCycleFlow() {
       throw new Error('Flojoy 后端无法恢复，不能确认设备已安全下电')
     }
 
-    // jobId 为 null 时只取消当前拓扑，不提前广播 STANDBY。取消动作可能
-    // 写入节点失败状态，因此测试结论已在取消前冻结到 cycleNodeErrors。
-    await cancelCurrentFlowchartRun()
+    const stopResult = await gracefulStopCurrentFlowchartRun(
+      finishingJobId || null,
+      CYCLE_IN_FLIGHT_STOP_TIMEOUT_SECONDS,
+    )
+    if (!stopResult.success) {
+      throw new Error(stopResult.message || 'Flojoy 循环流停止失败')
+    }
     currentJobId.value = ''
-    // cancel_fc 返回后拓扑清理是异步的，给 DeviceManager 一个很短的释放窗口，
-    // 随后立即由独立关闭接口重新枚举设备并下电。
-    await wait(600)
+    if (stopResult.forced) {
+      console.warn('[HALT-HASS] 当前节点未在期限内结束，已强制释放连接:', stopResult)
+    }
 
     const cycleNodes = processJson.value?.cycleFlow.nodes || []
-    const shutdown = await runHassHardwareShutdown(cycleNodes as any)
+    const shutdown = await runHassHardwareShutdown(
+      cycleNodes as any,
+      finishingJobId,
+      processJson.value?.metadata.reportType || 'drive_control',
+    )
     if (!shutdown.success) {
       const failedMessages = shutdown.results
         .filter(item => !item.success)
@@ -349,21 +385,16 @@ async function recoverTimedOutCycleFlow() {
     }
 
     await completeActiveFlowchartRun({
-      completionMode: 'software-runtime-complete',
+      completionMode,
       cycleNodeErrors,
+      flowchartStop: stopResult,
       shutdownResults: shutdown.results,
     }, {
       completionSuccess: true,
-      allowRuntimePauseFailure: true,
     })
     ElMessage.success('下电完成，已进入报告保存阶段')
   } catch (error) {
     const message = error instanceof Error ? error.message : '未知错误'
-    try {
-      await pauseCycleRuntime()
-    } catch (pauseError) {
-      console.error('[HALT-HASS] 安全收尾失败后冻结计时失败:', pauseError)
-    }
     stopFlowchart()
     clearCycleRuntimeTimers()
     ElMessage.error(`循环流关闭失败：${message}`)
@@ -374,13 +405,23 @@ async function recoverTimedOutCycleFlow() {
 }
 
 async function checkDevices() {
+  const generation = ++deviceCheckGeneration
   deviceCheckStatus.value = 'checking'
   deviceCheckError.value = ''
+  updateDeviceStatus({ flojoyBackend: false, scanner: false })
 
-  const flojoyOk = await ensureFlojoyConnected()
-
-  // 检查扫码枪
-  const scannerOk = await checkScanner()
+  // Flojoy 启动与 USB 扫码枪检测互不依赖，并行执行，避免 Flojoy 冷启动
+  // 把扫码枪检测串行阻塞十几秒。
+  const flojoyPromise = ensureFlojoyConnected().then((ok) => {
+    if (generation === deviceCheckGeneration) updateDeviceStatus({ flojoyBackend: ok })
+    return ok
+  })
+  const scannerPromise = checkScanner().then((ok) => {
+    if (generation === deviceCheckGeneration) updateDeviceStatus({ scanner: ok })
+    return ok
+  })
+  const [flojoyOk, scannerOk] = await Promise.all([flojoyPromise, scannerPromise])
+  if (generation !== deviceCheckGeneration) return
 
   // 更新状态
   updateDeviceStatus({
@@ -398,22 +439,101 @@ async function checkDevices() {
   }
 }
 
-function onDeviceCheckEnter() {
-  if (isDeviceReady.value) {
-    onDeviceCheckPass()
-    // 开始扫码监听
-    startScanning(onScanData)
+async function prepareSessionSelection() {
+  if (!currentOrder.value) {
+    ElMessage.error('未选择工单，无法准备测试')
+    return false
+  }
+  const loaded = await downloadProcess(false)
+  if (!loaded || !processJson.value) {
+    ElMessage.error(errorMessage.value || '下载工艺失败')
+    return false
+  }
+  const initialized = await initializeSelection(currentOrder.value, processJson.value)
+  if (!initialized) {
+    ElMessage.error(lastScanError.value || '加载可测试目标板失败')
+    return false
+  }
+  return true
+}
+
+async function handleWorkbenchFinished(payload: {
+  status: string
+  elapsedSeconds: number
+  remainingSeconds: number
+}) {
+  if (!isFlowchartRunning.value || activeFlowType.value !== 'cycle') return
+  await flowchartRunnerRef.value?.waitForRectifierStages()
+  cycleRemainingSeconds.value = Math.max(0, payload.remainingSeconds)
+  cycleFinishState.value = 'finishing'
+  await appendExecutionLog({
+    eventType: 'workbench-test-finished',
+    message: `工作台状态变为 ${payload.status || 'Stopped'}，开始停止采集并下电`,
+    jobsetId: currentJobId.value || latestExecutionJobId.value,
+    function: 'HALT_HASS_WORKBENCH_FINISH',
+    data: payload,
+  }).catch(error => console.warn('[HALT-HASS] 工作台结束日志写入失败:', error))
+  await recoverTimedOutCycleFlow('workbench-auto-stop')
+}
+
+async function handleRectifierFailure(payload: { message: string }) {
+  if (rectifierAbortActive) return
+  rectifierAbortActive = true
+  try {
+    if (currentJobId.value) {
+      await cancelFlowchartRun(currentJobId.value).catch(error => {
+        console.warn('[HALT-HASS] 整流稳压采集失败后停止流程失败:', error)
+      })
+    }
+    stopFlowchart()
+    clearCycleRuntimeTimers()
+    const shutdown = await shutdownHardwareForSafeExit()
+    const suffix = shutdown.success
+      ? '两路负载和输入源已执行关闭。'
+      : `自动关闭未完全成功：${shutdown.message || '未知错误'}，请由工作人员现场处置。`
+    await ElMessageBox.alert(
+      `整流稳压测试已停止：${payload.message}。${suffix}`,
+      '整流稳压测试异常',
+      { confirmButtonText: '知道了', type: 'error' },
+    )
+  } finally {
+    rectifierAbortActive = false
   }
 }
+
+async function onDeviceCheckEnter() {
+  if (!isDeviceReady.value || enteringScan) return
+  enteringScan = true
+  try {
+    if (await prepareSessionSelection()) {
+      const scannerStarted = await startScanning(onScanData)
+      if (!scannerStarted) {
+        updateDeviceStatus({ scanner: false })
+        deviceCheckStatus.value = 'error'
+        deviceCheckError.value = '扫码枪监听启动失败，请重新检测'
+        return
+      }
+      // 只有扫码监听真正就绪后才显示扫码页面，避免用户在 USB 监听尚未
+      // 建立时扫码，数据滞留到下一次进入工单才被消费。
+      onDeviceCheckPass()
+    }
+  } finally {
+    enteringScan = false
+  }
+}
+
+const CYCLE_IN_FLIGHT_STOP_TIMEOUT_SECONDS = 15
 
 function onDeviceCheckRecheck() {
   checkDevices()
 }
 
-function onDeviceCheckSkip() {
+async function onDeviceCheckSkip() {
   // 跳过设备检测，直接进入扫码阶段
-  setPhase('scan')
-  startScanning(onScanData)
+  if (await prepareSessionSelection()) {
+    await startScanning(onScanData)
+    setPhase('scan')
+  }
 }
 
 // ==================== 扫码处理 ====================
@@ -433,123 +553,77 @@ async function onScanData(data: string) {
 }
 
 async function handleStartScheduledTest(order: HaltHassOrder) {
+  safeExitCompleted = false
   let targetOrder = order
-  if (!isMockHaltHassOrder(order)) {
-    try {
-      const detailResult = await getOrderDetail(order.id)
-      if (detailResult.success && detailResult.data) {
-        targetOrder = detailResult.data
-        if (targetOrder.status !== order.status) {
-          void schedule.refreshWorkOrders()
-        }
+  try {
+    const detailResult = await getOrderDetail(order.id)
+    if (detailResult.success && detailResult.data) {
+      targetOrder = detailResult.data
+      if (targetOrder.status !== order.status) {
+        void schedule.refreshWorkOrders()
       }
-    } catch (error) {
-      console.warn('刷新 HALT-HASS 工单详情失败，继续使用当前排程数据:', error)
     }
+  } catch (error) {
+    console.warn('刷新 HALT-HASS 工单详情失败，继续使用当前排程数据:', error)
   }
 
-  if (targetOrder.status === 2) {
-    const confirmed = await ElMessageBox.confirm(
-      '将停止当前 Flojoy 任务并清空上一轮执行和扫码记录，原有排程保持不变。随后从设备检测和 5 块电路板扫码重新开始。',
-      '确认从头开始',
-      {
-        confirmButtonText: '开始测试',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    ).catch(() => false)
-    if (!confirmed) return
+  if (![1, 2].includes(Number(targetOrder.clientTestType)) || !targetOrder.productModel?.id) {
+    ElMessage.error('工单缺少产品型号或客户端测试类型，不能开始测试')
+    return
+  }
+
+  processSelectorLoading.value = true
+  const result = await listExecutionProcessOptions(targetOrder)
+  processSelectorLoading.value = false
+  if (!result.success || !result.data) {
+    ElMessage.error(result.error || '读取可执行工艺版本失败')
+    return
+  }
+  if (!result.data.length) {
+    ElMessage.error('当前产品、测试类型和目标板没有已审核的适用工艺版本')
+    return
+  }
+
+  pendingExecutionOrder.value = targetOrder
+  processOptions.value = result.data
+  selectedProcessId.value = (
+    result.data.find(item => item.active === 1) || result.data[0]
+  ).id
+  processSelectorVisible.value = true
+}
+
+async function confirmExecutionProcess() {
+  const targetOrder = pendingExecutionOrder.value
+  const selected = processOptions.value.find(item => item.id === selectedProcessId.value)
+  if (!targetOrder || !selected) {
+    ElMessage.warning('请选择本次执行的工艺版本')
+    return
+  }
+
+  targetOrder.process = {
+    id: selected.id,
+    name: selected.name,
+    version: selected.version,
+  }
+  processSelectorVisible.value = false
+
+  if (targetOrder.clientTestType === 2) {
+    await router.push({
+      name: 'HaltHassSdsTest',
+      query: {
+        orderId: String(targetOrder.id),
+        processId: String(selected.id),
+      },
+    })
+    return
   }
 
   resetHardwarePreflight()
   clearCycleRuntimeTimers()
-  stopScanning()
+  await stopScanning()
   resetTest()
   resetScan()
   resetReport()
-
-  if (isMockHaltHassOrder(targetOrder)) {
-    const boards = getMockScannedBoards(targetOrder)
-    const hydratedOrder = { ...targetOrder, scannedBoards: boards }
-    setOrder(hydratedOrder)
-    setScanOrder(hydratedOrder, boards)
-    setPhase('scan')
-    ElMessage.success('已载入演示工单 HH-DEMO-001，可直接测试全流程')
-    return
-  }
-
-  if (targetOrder.status === 7) {
-    setScanOrder(targetOrder, targetOrder.scannedBoards || [])
-    const restored = await restoreTemp(targetOrder)
-    if (restored) {
-      ElMessage.success('已恢复 HALT-HASS 暂存测试')
-    } else {
-      ElMessage.error(errorMessage.value || '恢复暂存测试失败')
-      setPhase('schedule')
-    }
-    return
-  }
-
-  if (targetOrder.status === 4) {
-    setScanOrder(targetOrder, targetOrder.scannedBoards || [])
-    const loaded = await loadFeedback(targetOrder)
-    if (loaded) {
-      ElMessage.success('已加载 HALT-HASS 打回反馈')
-    } else {
-      ElMessage.error(errorMessage.value || '加载打回反馈失败')
-      setPhase('schedule')
-    }
-    return
-  }
-
-  if (targetOrder.status === 2) {
-    // 原排程不变，只清空上一轮执行状态；随后按普通待领取工单重新检测和扫码。
-    const flojoyReady = await ensureFlojoyConnected()
-    updateDeviceStatus({ flojoyBackend: flojoyReady })
-    if (!flojoyReady) {
-      ElMessage.error('Flojoy 后端连接失败，工单尚未清空')
-      setPhase('schedule')
-      return
-    }
-
-    try {
-      await cancelCurrentFlowchartRun()
-    } catch (error) {
-      console.error('停止 Flojoy 当前任务失败:', error)
-      ElMessage.error('无法停止 Flojoy 当前任务，工单尚未清空')
-      setPhase('schedule')
-      return
-    }
-
-    const resetResult = await resetRunningOrderExecution(targetOrder.id)
-    if (!resetResult.success) {
-      ElMessage.error(resetResult.error || '清空上一轮执行状态失败')
-      setPhase('schedule')
-      return
-    }
-
-    const freshOrder: HaltHassOrder = {
-      ...targetOrder,
-      status: 1,
-      scannedBoards: [],
-      startedAt: undefined,
-      completedAt: undefined,
-      elapsedRuntimeSeconds: 0,
-      remainingRuntimeSeconds: targetOrder.requiredRuntimeSeconds,
-      runtimeProgress: 0,
-      runtimeCompleted: false,
-      currentRunStartedAt: null,
-    }
-    setOrder(freshOrder)
-    setScanOrder(freshOrder, [])
-    currentJobId.value = ''
-    clearNodeStatuses()
-    resetHardwarePreflight()
-    setPhase('detect')
-    void checkDevices()
-    ElMessage.success('原排程已保留，请完成设备检测并重新扫描 5 块电路板')
-    return
-  }
 
   setOrder(targetOrder)
   setScanOrder(targetOrder)
@@ -557,24 +631,23 @@ async function handleStartScheduledTest(order: HaltHassOrder) {
   void checkDevices()
 }
 
-function handleRemoveBoard(serial: string) {
-  removeScannedBoard(serial)
-}
-
 async function handleStartTest() {
   if (!isScanComplete.value) {
-    ElMessage.warning('请先完成所有电路板的扫码')
+    ElMessage.warning(sessionSelectionValidation.value.message)
     return
   }
 
-  const serials = getAllSerials()
-  const success = await startTest(serials)
+  const session = await createSession(userInfo.value?.id)
+  if (!session) {
+    ElMessage.error(lastScanError.value || '准备测试数据失败')
+    return
+  }
+  setSession(session)
+  const success = await startTest(session)
 
   if (success) {
-    // 停止扫码
-    stopScanning()
-    // 下载工艺
-    await downloadProcess()
+    await stopScanning()
+    ElMessage.success(`${scannedBoards.value.length} 块电路板扫码完成，已开始测试`)
   }
 }
 
@@ -604,7 +677,7 @@ async function handleHardwarePreflight() {
     ElMessage.warning('工艺数据不存在，无法执行设备通信检测')
     return
   }
-  if (!socketConnected.value && !isMockHaltHassOrder(currentOrder.value)) {
+  if (!socketConnected.value) {
     ElMessage.warning('Flojoy 后端未连接，请先恢复后端连接')
     return
   }
@@ -613,38 +686,12 @@ async function handleHardwarePreflight() {
   hardwarePreflightResult.value = null
 
   try {
-    if (isMockHaltHassOrder(currentOrder.value)) {
-      hardwarePreflightResult.value = {
-        ready: true,
-        powerMaintained: false,
-        powerResource: '',
-        message: '演示设备通信正常',
-        results: [
-          {
-            role: 'itech6723',
-            displayName: 'ITECH 6723G',
-            success: true,
-            message: '演示模式：48 V / 1 A 输出正常',
-            details: {},
-          },
-          {
-            role: 'ifbox',
-            displayName: 'IFBOX',
-            success: true,
-            message: '演示模式：设备在线，串口可用',
-            details: {},
-          },
-        ],
-      }
-      ElMessage.success('演示设备通信检测通过')
-      return
-    }
-
     const result = await runHassHardwarePreflight(
       [
         ...processJson.value.testFlow.nodes,
         ...processJson.value.cycleFlow.nodes,
-      ] as any
+      ] as any,
+      processJson.value.metadata.reportType || 'drive_control',
     )
     hardwarePreflightResult.value = result
 
@@ -655,48 +702,18 @@ async function handleHardwarePreflight() {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : '设备通信检测失败'
+    hardwarePreflightResult.value = {
+      ready: false,
+      powerMaintained: false,
+      powerResource: '',
+      results: [],
+      message,
+    }
     ElMessage.error(message)
     console.error('[HALT-HASS] 设备通信检测失败:', error)
   } finally {
     isHardwarePreflightChecking.value = false
   }
-}
-
-async function simulateMockFlowchartRun() {
-  if (!processJson.value || !currentOrder.value || !flowchartStartTime.value) {
-    ElMessage.warning('演示工单数据不存在')
-    return
-  }
-
-  const runToken = ++mockFlowchartRunToken
-  clearNodeStatuses()
-  const nodes = activeFlowchart.value?.nodes || []
-
-  for (const node of nodes) {
-    const startTime = new Date()
-    await new Promise(resolve => setTimeout(resolve, 800))
-    if (runToken !== mockFlowchartRunToken || !isFlowchartRunning.value) return
-
-    const endTime = new Date()
-    const nodeData = node.data as { label?: unknown } | undefined
-    const nodeName = typeof nodeData?.label === 'string' ? nodeData.label : node.id
-
-    updateNodeResult({
-      flowType: activeFlowType.value,
-      nodeId: node.id,
-      nodeName,
-      status: 'success',
-      startTime: startTime.toISOString(),
-      endTime: endTime.toISOString(),
-      duration: endTime.getTime() - startTime.getTime(),
-      output: { source: 'mock' },
-    })
-  }
-
-  await completeActiveFlowchartRun({
-    mode: 'mock',
-    note: 'HALT-HASS 演示工单模拟完成',
-  })
 }
 
 async function handleRunFlowchart() {
@@ -719,7 +736,6 @@ async function handleRunFlowchart() {
   }
 
   const isCycleFlow = activeFlowType.value === 'cycle'
-  let remainingDurationSeconds: number | undefined
   let runSettings = flowchartData.runSettings
 
   if (isCycleFlow) {
@@ -728,41 +744,47 @@ async function handleRunFlowchart() {
       return
     }
     if (!hasHassDurationLoop(flowchartData.nodes as any)) {
-      ElMessage.warning('循环流缺少 HALT_HASS_DURATION_LOOP 时长控制节点')
+      ElMessage.warning('循环流缺少 HALT_HASS_DURATION_LOOP 循环控制节点')
       return
     }
-    if (!currentOrder.value?.runtimeConfigured) {
-      ElMessage.warning('当前工单没有配置 HALT-HASS 循环总时长')
-      return
-    }
-
-    remainingDurationSeconds = resolveRemainingRuntimeSeconds(currentOrder.value)
-    if (remainingDurationSeconds <= 0) {
-      beginFlowchartRun()
-      startCycleRuntimeCountdown(0)
-      return
-    }
-    runSettings = buildHassCycleRunSettings(
-      flowchartData.runSettings,
-      remainingDurationSeconds
-    )
+    // 台架曲线携带完整试验时长。客户端持续采集，直到 MQTT
+    // RequestTestStatus 返回非 Running，再取消拓扑并安全下电。
+    runSettings = buildWorkbenchControlledCycleRunSettings(flowchartData.runSettings)
   }
 
   if (!isCycleFlow) {
     clearCycleRuntimeTimers()
+  } else {
+    cycleRemainingSeconds.value = null
+    cycleFinishState.value = 'running'
   }
   beginFlowchartRun()
 
-  if (isMockHaltHassOrder(currentOrder.value)) {
-    await simulateMockFlowchartRun()
-    return
-  }
-
   const jobId = uuidv4()
   currentJobId.value = jobId
+  latestExecutionJobId.value = jobId
+  criticalPulserAbortActive = false
   clearNodeStatuses()
 
   try {
+    if (
+      !isCycleFlow
+      && processJson.value.metadata.reportType === 'rectifier_regulator'
+    ) {
+      const bindings = await resolveHassRectifierBindings()
+      const initialized = await runHassRectifierCommand(
+        'initialize',
+        bindings,
+        {
+          sourceCurrentLimitA: processJson.value.metadata.rectifierConfig?.sourceCurrentLimitA ?? 5,
+        },
+        jobId,
+      )
+      if (!initialized.success) {
+        throw new Error(initialized.message || '整流稳压设备初始化失败')
+      }
+    }
+
     const runArgs = prepareRunFlowchartArgs(
       flowchartData.nodes as Node<BlockData>[],
       flowchartData.edges,
@@ -777,32 +799,21 @@ async function handleRunFlowchart() {
       jobId: runArgs.jobId,
       observeBlocks: runArgs.observeBlocks,
       settings: runArgs.settings,
-      haltHassRemainingDurationSeconds: remainingDurationSeconds,
     })
-
-    if (isCycleFlow) {
-      const runtimeActivated = await activateCycleRuntime()
-      if (!runtimeActivated) {
-        try {
-          await cancelFlowchartRun(jobId)
-        } catch (cancelError) {
-          console.error('[HALT-HASS] 循环计时启动失败后停止 Flojoy 失败:', cancelError)
-        }
-        throw new Error(errorMessage.value || '启动循环流计时失败')
-      }
-
-      const runtimeRemaining = currentOrder.value
-        ? resolveRemainingRuntimeSeconds(currentOrder.value)
-        : remainingDurationSeconds || 0
-      startCycleRuntimeCountdown(runtimeRemaining)
-    }
 
     ElMessage.success(
       activeFlowType.value === 'test'
         ? '测试流开始运行'
-        : `循环流开始运行，剩余 ${remainingDurationSeconds} 秒`
+        : '循环流开始运行，测试时间由工作台曲线控制'
     )
   } catch (e) {
+    if (processJson.value.metadata.reportType === 'rectifier_regulator') {
+      await runHassHardwareShutdown(
+        (processJson.value.cycleFlow.nodes || []) as any,
+        jobId,
+        'rectifier_regulator',
+      ).catch(error => console.error('[HALT-HASS] 整流稳压启动失败后的下电操作失败:', error))
+    }
     stopFlowchart()
     if (isCycleFlow) {
       clearCycleRuntimeTimers()
@@ -814,25 +825,13 @@ async function handleRunFlowchart() {
 }
 
 async function handleStopFlowchart() {
-  if (isMockHaltHassOrder(currentOrder.value)) {
-    mockFlowchartRunToken++
-    stopFlowchart()
-    ElMessage.info('已停止演示流程')
-    return
-  }
-
   if (currentJobId.value) {
     try {
       await cancelFlowchartRun(currentJobId.value)
       stopFlowchart()
       currentJobId.value = ''
       if (activeFlowType.value === 'cycle') {
-        const paused = await pauseCycleRuntime()
         clearCycleRuntimeTimers()
-        if (!paused) {
-          ElMessage.error(errorMessage.value || '循环流已停止，但累计时长冻结失败')
-          return
-        }
       }
       ElMessage.info('已停止运行')
     } catch (e) {
@@ -859,6 +858,9 @@ watch(runningBlock, (nodeId, previousNodeId) => {
       status: 'success',
     })
   }
+  // 当前节点只以 Flojoy 的 RUNNING_NODE 为准。节点结果消息可能与下一节点
+  // 启动消息连续到达，不能让“刚完成节点”覆盖正在执行的节点。
+  currentNodeId.value = nodeId
 })
 
 // NODE_RESULTS 是节点成功完成的权威消息，同时保留实际输出供报告使用。
@@ -879,6 +881,45 @@ watch(
   { immediate: true }
 )
 
+async function abortOnCriticalPulserSetupFailure(
+  functionName: string,
+  error: string,
+): Promise<void> {
+  if (
+    criticalPulserAbortActive
+    || !isFlowchartRunning.value
+    || activeFlowType.value !== 'test'
+  ) return
+
+  criticalPulserAbortActive = true
+  try {
+    if (currentJobId.value) {
+      try {
+        await cancelFlowchartRun(currentJobId.value)
+      } catch (cancelError) {
+        console.warn('[HALT-HASS] 脉冲器关键节点失败后停止 Flojoy 失败:', cancelError)
+      }
+    }
+    currentJobId.value = ''
+    stopFlowchart()
+    await wait(600)
+
+    const shutdown = await shutdownHardwareForSafeExit()
+    const shutdownMessage = shutdown.success
+      ? '设备已执行安全下电。'
+      : `安全下电未完全成功：${shutdown.message || '未知错误'}。`
+    await ElMessageBox.alert(
+      `${functionName} 执行失败：${error || '未收到有效设备回执'}。`
+      + '零位读取、零位写入和起止角写入是必做步骤，本次测试已中止，不能进入后续流程。'
+      + shutdownMessage,
+      '脉冲器初始化失败',
+      { confirmButtonText: '知道了', type: 'error' },
+    )
+  } finally {
+    criticalPulserAbortActive = false
+  }
+}
+
 watch(failedBlocks, (failed) => {
   for (const [nodeId, error] of Object.entries(failed)) {
     updateNodeResult({
@@ -888,12 +929,17 @@ watch(failedBlocks, (failed) => {
       status: 'error',
       error,
     })
+
+    const node = activeFlowchart.value?.nodes.find(item => item.id === nodeId)
+    const functionName = String(node?.data?.func || '').toUpperCase()
+    if (CRITICAL_PULSER_SETUP_FUNCTIONS.has(functionName)) {
+      void abortOnCriticalPulserSetupFailure(functionName, error)
+    }
   }
 })
 
 interface FlowchartCompletionOptions {
   completionSuccess?: boolean
-  allowRuntimePauseFailure?: boolean
 }
 
 async function completeActiveFlowchartRun(
@@ -904,8 +950,11 @@ async function completeActiveFlowchartRun(
 
   flowchartCompletionActive = true
   try {
+    const hasRecordedNodeError = nodeResults.value.some(
+      result => result.flowType === activeFlowType.value && result.status === 'error'
+    )
     const hasError = options.completionSuccess === undefined
-      ? Object.keys(failedBlocks.value).length > 0
+      ? hasRecordedNodeError || Object.keys(failedBlocks.value).length > 0
       : !options.completionSuccess
     if (activeFlowType.value === 'test') {
       stopFlowchart()
@@ -920,31 +969,70 @@ async function completeActiveFlowchartRun(
     }
 
     clearCycleRuntimeTimers(false)
-    const paused = await pauseCycleRuntime()
-    if (!paused && !options.allowRuntimePauseFailure) {
-      stopFlowchart()
-      clearCycleRuntimeTimers()
-      ElMessage.error(errorMessage.value || '循环流完成，但累计时长冻结失败')
-      return
+    let completionData: Record<string, unknown> = { ...(testData || {}) }
+    const telemetrySnapshot = flowchartRunnerRef.value?.finalizeTelemetry()
+    if (telemetrySnapshot) {
+      completionData = {
+        ...completionData,
+        periodicRecords: telemetrySnapshot.periodicRecords,
+        chartSummary: telemetrySnapshot.chartSummary,
+        rectifierReport: telemetrySnapshot.rectifierReport,
+        telemetryGeneratedAt: telemetrySnapshot.generatedAt,
+      }
     }
-    if (!paused) {
-      console.warn(
-        '[HALT-HASS] 循环测试已经到时并完成下电，但累计时长冻结接口失败，继续进入报告阶段',
-        errorMessage.value,
+    if (!completionData.shutdownResults) {
+      const shutdown = await runHassHardwareShutdown(
+        (processJson.value?.cycleFlow.nodes || []) as any,
+        currentJobId.value || latestExecutionJobId.value,
+        processJson.value?.metadata.reportType || 'drive_control',
       )
+      if (!shutdown.success) {
+        stopFlowchart()
+        clearCycleRuntimeTimers()
+        ElMessage.error(shutdown.message || '设备下电失败，场次尚未结束')
+        return
+      }
+      completionData = { ...completionData, shutdownResults: shutdown.results }
+    }
+
+    if (currentSession.value) {
+      const endTime = new Date()
+      const elapsedRuntimeSeconds = flowchartStartTime.value
+        ? Math.max(0, Math.floor((endTime.getTime() - flowchartStartTime.value.getTime()) / 1000))
+        : 0
+      const sessionResult = await completeHaltHassSession(currentSession.value.id, {
+        powerOffCompleted: true,
+        success: !hasError,
+        elapsedRuntimeSeconds,
+        flowResult: {
+          nodes: [...testFlowResults.value, ...nodeResults.value],
+          failedBlocks: { ...failedBlocks.value },
+        },
+        testData: completionData,
+        failureReason: hasError ? '循环流存在失败节点' : '',
+      })
+      if (!sessionResult.success || !sessionResult.data) {
+        stopFlowchart()
+        clearCycleRuntimeTimers()
+        ElMessage.error(sessionResult.error || '场次结束状态保存失败')
+        return
+      }
+      setSession(sessionResult.data)
     }
 
     onFlowchartComplete(!hasError)
     clearCycleRuntimeTimers()
 
-    if (currentOrder.value && flowchartStartTime.value) {
+    if (currentOrder.value && currentSession.value && processJson.value && flowchartStartTime.value) {
       generateReport({
         order: currentOrder.value,
+        session: currentSession.value,
+        process: processJson.value,
         boards: [...scannedBoards.value],
         startTime: flowchartStartTime.value,
         endTime: new Date(),
         nodeResults: [...testFlowResults.value, ...nodeResults.value],
-        testData,
+        testData: completionData,
       })
     }
   } finally {
@@ -991,17 +1079,16 @@ watch(
       && status === ServerStatus.STANDBY
       && previousStatus !== ServerStatus.STANDBY
     ) {
-      // STANDBY 是 Flojoy 整个拓扑完成的最终信号。
-      // 测试流用它兜底快速节点的结果同步，循环流等待 end 清理分支结束。
-      if (
-        activeFlowType.value === 'cycle'
-        && (cycleRemainingSeconds.value ?? 0) > 0
-        && Object.keys(failedBlocks.value).length === 0
-      ) {
+      // 循环流由工作台 MQTT 状态决定结束。工作台尚未确认 Stopped 时，
+      // Flojoy 进入 STANDBY 只能视为拓扑提前退出，不能误判为测试完成。
+      if (activeFlowType.value === 'cycle') {
         clearCycleRuntimeTimers()
         stopFlowchart()
-        void pauseCycleRuntime()
-        ElMessage.error('循环流在倒计时结束前提前退出，未判定为测试完成')
+        ElMessage.error(
+          Object.keys(failedBlocks.value).length > 0
+            ? '循环流执行失败，工作台测试未判定为完成'
+            : '循环流在工作台结束前提前退出，未判定为测试完成'
+        )
         return
       }
       void completeActiveFlowchartRun()
@@ -1015,6 +1102,7 @@ watch(
 async function handleUploadReport() {
   const success = await uploadReport()
   if (success) {
+    clearHaltHassLocalSession()
     ElMessage.success('报告上传成功')
   } else {
     ElMessage.error(uploadError.value || '上传失败')
@@ -1026,31 +1114,202 @@ function handleRetryUpload() {
 }
 
 function handleComplete() {
+  clearHaltHassLocalSession()
   setPhase('complete')
+}
+
+function handleCompleteReportReview() {
+  if (!completeActiveReport()) {
+    ElMessage.warning(uploadError.value || '当前报告尚未完成复核')
+    return
+  }
+  ElMessage.success(allReportsCompleted.value ? '全部报告已复核，请确认审核汇总' : '本份报告已保存')
+}
+
+function handleEnterReportReview() {
+  if (!enterReportReview()) {
+    ElMessage.warning(uploadError.value || '请先完成全部逐板报告复核')
+  }
+}
+
+function handleReviewConfirmed(confirmed: boolean) {
+  if (!setReviewConfirmed(confirmed)) return
+  if (confirmed) ElMessage.success('测试人员审核已确认，可以上传报告')
 }
 
 // ==================== 退出和重置 ====================
 
-async function handleExit() {
-  const isCompletedReturn = phase.value === 'complete'
-  if (!isCompletedReturn) {
-    const confirmed = await ElMessageBox.confirm(
-      '确定要退出测试吗？未保存的数据将丢失。',
-      '退出确认',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    ).catch(() => false)
+function hasProtectedTestContext(): boolean {
+  return !safeExitCompleted
+    && phase.value !== 'schedule'
+    && phase.value !== 'complete'
+    && Boolean(currentOrder.value || currentSession.value)
+}
 
-    if (!confirmed) return
+async function confirmSafeExit(): Promise<boolean> {
+  if (!hasProtectedTestContext()) return true
+
+  return ElMessageBox.confirm(
+    currentSession.value?.status === 5
+      ? '当前场次已完成下电，未上传的逐板报告将保留在本机并在联网后重传。确定退出吗？'
+      : '测试流程不允许中途继续。安全退出后将停止当前流程并完成下电，当前场次会取消，相关工单退回待重做；下次必须重新扫码并从头测试。',
+    'HALT-HASS 安全退出确认',
+    {
+      confirmButtonText: '安全退出',
+      cancelButtonText: '继续测试',
+      type: 'warning',
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+    },
+  ).then(() => true).catch(() => false)
+}
+
+function formatShutdownFailure(
+  shutdown: Awaited<ReturnType<typeof runHassHardwareShutdown>>,
+): string {
+  const details = shutdown.results
+    .filter(item => !item.success)
+    .map(item => `${item.displayName}：${item.message}`)
+    .join('；')
+  return details || shutdown.message || '无法确认设备已安全下电'
+}
+
+async function ensureFlojoyBackendForSafeExit(): Promise<boolean> {
+  configureApi('127.0.0.1', backendPort.value)
+  let healthy = await checkHealth()
+  if (healthy) return true
+
+  await startBackend()
+  for (let attempt = 0; attempt < 12 && !healthy; attempt++) {
+    await wait(500)
+    healthy = await checkHealth()
+  }
+  return healthy
+}
+
+async function shutdownHardwareForSafeExit(): Promise<{
+  success: boolean
+  message?: string
+}> {
+  if (!await ensureFlojoyBackendForSafeExit()) {
+    return { success: false, message: 'Flojoy 后端无法启动，不能执行设备安全下电' }
   }
 
-  // 停止所有操作
-  clearCycleRuntimeTimers()
-  stopScanning()
-  disconnectSocket()
+  let lastFailure = '设备安全下电失败'
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const shutdown = await runHassHardwareShutdown(
+        (processJson.value?.cycleFlow.nodes || []) as any,
+        currentJobId.value || latestExecutionJobId.value,
+        processJson.value?.metadata.reportType || 'drive_control',
+      )
+      if (shutdown.success) return { success: true }
+      lastFailure = formatShutdownFailure(shutdown)
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error)
+    }
+    if (attempt === 0) await wait(800)
+  }
+  return { success: false, message: lastFailure }
+}
+
+async function confirmForcedExitAfterShutdownFailure(message: string): Promise<boolean> {
+  return ElMessageBox.confirm(
+    `自动安全收尾未完成：${message || '无法确认设备已安全下电'}。`
+    + '如果现场已经处理完毕，可以坚持退出；当前场次将取消，工单退回待重做，下次必须重新扫码并从头测试。',
+    '安全退出存在失败项',
+    {
+      confirmButtonText: '坚持退出',
+      cancelButtonText: '返回检查',
+      type: 'warning',
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+    },
+  ).then(() => true).catch(() => false)
+}
+
+async function performSafeExit(): Promise<boolean> {
+  if (safeExitPromise) return safeExitPromise
+
+  safeExitPromise = (async () => {
+    isSafeExitInProgress.value = true
+    clearCycleRuntimeTimers(false)
+
+    const session = currentSession.value
+    if (session) {
+      if ([2, 3, 4].includes(session.status)) {
+        try {
+          const stopResult = await gracefulStopCurrentFlowchartRun(
+            currentJobId.value || latestExecutionJobId.value || null,
+            CYCLE_IN_FLIGHT_STOP_TIMEOUT_SECONDS,
+          )
+          if (!stopResult.success) throw new Error(stopResult.message)
+        } catch (error) {
+          // 独立安全下电接口不依赖运行拓扑。流程已经结束时停止接口可能返回失败，
+          // 这里只记录日志，避免把幂等停止误报给用户。
+          console.warn('[HALT-HASS] 退出前停止 Flojoy 失败，继续执行独立下电:', error)
+        }
+
+        const shutdown = await shutdownHardwareForSafeExit()
+        const powerOffCompleted = shutdown.success
+        let forceExitConfirmed = false
+        if (!shutdown.success) {
+          forceExitConfirmed = await confirmForcedExitAfterShutdownFailure(shutdown.message || '')
+          if (!forceExitConfirmed) return false
+        }
+
+        const cancelled = await cancelHaltHassSession(session.id, {
+          reason: powerOffCompleted
+            ? '用户中途退出，场次作废并从头重测'
+            : `用户查看安全收尾失败原因后坚持退出，场次作废并从头重测：${shutdown.message || '无法确认设备已安全下电'}`,
+          powerOffCompleted,
+          forceExitConfirmed,
+        })
+        if (!cancelled.success) {
+          ElMessage.error(cancelled.error || '场次取消状态保存失败，已取消退出')
+          return false
+        }
+        clearHaltHassLocalSession()
+        if (!powerOffCompleted) {
+          ElMessage.warning('已按坚持退出处理；本次未能自动确认设备下电状态，工单已退回待重做')
+        }
+      } else if ([0, 1].includes(session.status)) {
+        const cancelled = await cancelHaltHassSession(session.id, {
+          reason: '用户退出未开始场次，重新扫码测试',
+        })
+        if (!cancelled.success) {
+          ElMessage.error(cancelled.error || '场次取消失败，已取消退出')
+          return false
+        }
+        clearHaltHassLocalSession()
+      }
+    }
+
+    clearCycleRuntimeTimers()
+    await stopScanning()
+    disconnectSocket()
+    safeExitCompleted = true
+    return true
+  })()
+
+  try {
+    return await safeExitPromise
+  } finally {
+    safeExitPromise = null
+    isSafeExitInProgress.value = false
+  }
+}
+
+async function requestSafeExit(): Promise<boolean> {
+  if (safeExitPromise) return safeExitPromise
+  if (!await confirmSafeExit()) return false
+  return performSafeExit()
+}
+
+async function handleExit() {
+  const isCompletedReturn = phase.value === 'complete'
+  if (!isCompletedReturn && !await requestSafeExit()) return
+  if (isCompletedReturn && !await performSafeExit()) return
 
   // 返回排程页前重新读取后端状态，避免已上传报告的工单仍残留在客户端缓存中。
   await schedule.refreshWorkOrders()
@@ -1076,6 +1335,107 @@ async function handleNewTest() {
 
 // ==================== 生命周期 ====================
 
+watch(
+  [
+    currentSession,
+    phase,
+    installStep,
+    activeFlowType,
+    testFlowPassed,
+    testFlowResults,
+    nodeResults,
+    completedNodes,
+    currentNodeId,
+    flowchartStartTime,
+  ],
+  () => {
+    if (
+      !currentOrder.value
+      || !currentSession.value
+      || !processJson.value
+      || phase.value === 'schedule'
+      || phase.value === 'complete'
+    ) return
+    saveHaltHassLocalSession({
+      order: currentOrder.value,
+      session: currentSession.value,
+      processJson: processJson.value,
+      phase: phase.value,
+      installStep: installStep.value,
+      activeFlowType: activeFlowType.value,
+      testFlowPassed: testFlowPassed.value,
+      testFlowResults: [...testFlowResults.value],
+      nodeResults: [...nodeResults.value],
+      completedNodes: [...completedNodes.value],
+      currentNodeId: currentNodeId.value,
+      flowchartStartTime: flowchartStartTime.value?.toISOString() || null,
+      savedAt: new Date().toISOString(),
+    })
+  },
+  { deep: true },
+)
+
+async function restoreLocalSessionIfAvailable() {
+  const saved = loadHaltHassLocalSession()
+  if (!saved) return
+
+  let session = saved.session
+  const result = await getHaltHassSessionByClientId(saved.session.clientSessionId)
+  if (result.success && result.data) session = result.data
+  if ([6, 7, 8].includes(session.status)) {
+    clearHaltHassLocalSession()
+    ElMessage.info('该场次已在服务端关闭，本地运行状态已清理')
+    return
+  }
+
+  setOrder(saved.order)
+  setSession(session)
+  setProcess(saved.processJson)
+  setScanOrder(saved.order)
+  restoreSessionSelection(saved.order, saved.processJson, session)
+  restoreLocalExecution(saved)
+
+  if (session.status === 5 && saved.phase === 'upload') {
+    restorePendingForSession(session.id)
+    ElMessage.info('已恢复完成下电的待上传报告，可继续重传报告')
+    return
+  }
+
+  await ElMessageBox.alert(
+    `检测到异常中断的场次 ${session.sessionNo}。HALT-HASS 不允许从中断位置续跑，将先执行安全下电并把工单退回待重做。`,
+    '需要安全复位',
+    { confirmButtonText: '执行安全复位', type: 'warning', closeOnPressEscape: false },
+  )
+  if (!await performSafeExit()) return
+
+  await schedule.refreshWorkOrders()
+  resetTest()
+  resetScan()
+  resetReport()
+  exitEditMode()
+  ElMessage.success('异常场次已安全退出，请重新扫码并从头测试')
+}
+
+async function retryReportsWhenOnline() {
+  if (!userInfo.value) return
+  try {
+    await retryPendingReports()
+  } catch (error) {
+    console.warn('[HALT-HASS] 网络恢复后重传逐板报告失败:', error)
+  }
+}
+
+onBeforeRouteLeave(async () => {
+  if (!hasProtectedTestContext()) return true
+  return requestSafeExit()
+})
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasProtectedTestContext() || isSafeExitInProgress.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
 // 监听阶段变化，只在特定阶段隐藏侧边栏
 watch(phase, (newPhase) => {
   if (newPhase === 'install' || newPhase === 'test' || newPhase === 'upload') {
@@ -1086,15 +1446,31 @@ watch(phase, (newPhase) => {
 })
 
 onMounted(() => {
+  window.addEventListener('online', retryReportsWhenOnline)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  unregisterActiveSafeExit = registerActiveSafeExitHandler(async () => {
+    if (!hasProtectedTestContext()) return null
+    return requestSafeExit()
+  })
+  void restoreLocalSessionIfAvailable()
+  // 用户停留在排程页时后台预热 Flojoy；进入工单后通常只剩一次快速健康检查。
+  void ensureFlojoyConnected().catch(error => {
+    console.warn('[HALT-HASS] Flojoy 后台预热失败，将在进入工单时重试:', error)
+  })
   // 排程页不提前弹出设备检测，进入已排程工单后再检测设备。
   if (phase.value !== 'schedule') {
-    checkDevices()
+    void checkDevices()
   }
 })
 
 onUnmounted(() => {
+  deviceCheckGeneration += 1
+  window.removeEventListener('online', retryReportsWhenOnline)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  unregisterActiveSafeExit?.()
+  unregisterActiveSafeExit = null
   clearCycleRuntimeTimers()
-  stopScanning()
+  void stopScanning()
   disconnectSocket()
   exitEditMode()
 })
@@ -1107,7 +1483,11 @@ onUnmounted(() => {
       :visible="phase === 'detect'"
       :status="deviceCheckStatus"
       :scanner-ok="deviceStatus.scanner"
-      :camera-ok="deviceStatus.flojoyBackend"
+      :camera-ok="false"
+      :show-camera="false"
+      :show-service="true"
+      :service-ok="deviceStatus.flojoyBackend"
+      service-label="Flojoy 后端"
       :error-msg="deviceCheckError"
       accent-color="orange"
       @enter="onDeviceCheckEnter"
@@ -1126,16 +1506,6 @@ onUnmounted(() => {
             <h1 class="header-title">HALT-HASS 测试</h1>
             <p class="header-subtitle">HALT-HASS 测试排程管理</p>
           </div>
-        </div>
-        <div class="header-actions">
-          <button
-            class="btn-secondary schedule-demo-btn"
-            type="button"
-            @click="handleStartScheduledTest(MOCK_HALT_HASS_ORDER)"
-          >
-            <Icon icon="mdi:monitor-eye" />
-            无扫码枪演示
-          </button>
         </div>
       </header>
 
@@ -1158,11 +1528,11 @@ onUnmounted(() => {
             <p class="header-subtitle">
               <span v-if="isScanning && !isScanComplete" class="scan-status">
                 <span class="scan-dot"></span>
-                等待扫描电路板
+                等待扫描测试板卡
               </span>
               <span v-else-if="isScanComplete" class="scan-status complete">
                 <Icon icon="mdi:check-circle" />
-                扫码完成
+                电路板扫码完成
               </span>
               <span v-else>{{ currentPhaseLabel.label }}</span>
             </p>
@@ -1182,20 +1552,27 @@ onUnmounted(() => {
 
       <!-- 主布局 -->
       <div class="main-layout">
-        <!-- 左侧：扫码区域 -->
+        <!-- 左侧：扫码确认区域 -->
         <div class="scan-section">
           <div class="section-card">
             <div class="card-header">
-              <Icon icon="mdi:barcode-scan" />
-              <span>扫描电路板</span>
+              <Icon icon="mdi:view-grid-plus-outline" />
+              <span>电路板扫码确认</span>
             </div>
             <div class="card-content">
-              <ScanProgress
-                :order="currentOrder"
-                :scanned-boards="scannedBoards"
-                :is-scanning="isScanning"
-                :last-error="lastScanError"
-                @remove="handleRemoveBoard"
+              <SessionBoardSelector
+                :assignments="assignments"
+                :eligible-boards="eligibleBoards"
+                :available-orders="availableOrders"
+                :selected-order-ids="selectedOrderIds"
+                :applicable-board-models="processJson?.metadata.applicableBoardModels || []"
+                :confirmed-serials="confirmedSerials"
+                :valid="isScanComplete"
+                :validation-message="lastScanError || sessionSelectionValidation.message"
+                :loading="isSessionSelectionLoading"
+                @role="setAssignmentRole"
+                @update="updateAssignment"
+                @order="toggleSelectedOrder"
               />
             </div>
           </div>
@@ -1220,24 +1597,22 @@ onUnmounted(() => {
                   <span class="info-value">{{ currentOrder.boardGroup?.name || '-' }}</span>
                 </div>
                 <div class="info-item">
-                  <span class="info-label">工艺</span>
-                  <span class="info-value">{{ currentOrder.process?.name || '-' }}</span>
+                  <span class="info-label">本次工艺</span>
+                  <span class="info-value">
+                    {{ currentOrder.process ? `${currentOrder.process.name} · ${currentOrder.process.version}` : '-' }}
+                  </span>
                 </div>
                 <div class="info-item">
-                  <span class="info-label">需扫描数量</span>
+                  <span class="info-label">工单目标板总数</span>
                   <span class="info-value">{{ currentOrder.boardCount }} 块</span>
                 </div>
                 <div class="info-item">
                   <span class="info-label">循环次数</span>
                   <span class="info-value">{{ currentOrder.cycleCount }} 次</span>
                 </div>
-                <div class="info-item">
-                  <span class="info-label">单循环时长</span>
-                  <span class="info-value">{{ currentOrder.singleCycleDurationHours.toFixed(2) }} 小时</span>
-                </div>
-                <div class="info-item">
-                  <span class="info-label">循环总时长</span>
-                  <span class="info-value">{{ currentOrder.totalCycleDurationHours.toFixed(2) }} 小时</span>
+                <div class="info-item task-flow-info">
+                  <span class="info-label">任务执行流程</span>
+                  <span class="info-value">{{ currentOrder.taskExecutionDescription || '-' }}</span>
                 </div>
               </div>
               <div v-else class="empty-state">
@@ -1250,22 +1625,13 @@ onUnmounted(() => {
           <!-- 操作按钮 -->
           <div class="action-section">
             <button
-              v-if="!scannerConnected && !isMockHaltHassOrder(currentOrder)"
-              class="btn-secondary btn-lg"
-              type="button"
-              @click="handleStartScheduledTest(MOCK_HALT_HASS_ORDER)"
-            >
-              <Icon icon="mdi:monitor-eye" />
-              无扫码枪，进入演示流程
-            </button>
-            <button
               class="btn-primary btn-lg"
-              :disabled="!isScanComplete || phase === 'download'"
+              :disabled="!isScanComplete || phase === 'download' || isSessionSelectionLoading"
               @click="handleStartTest"
             >
               <Icon v-if="phase === 'download'" icon="mdi:loading" class="spin" />
               <Icon v-else icon="mdi:arrow-right" />
-              {{ phase === 'download' ? '下载工艺中...' : '开始测试' }}
+              {{ phase === 'download' || isSessionSelectionLoading ? '正在开始...' : '开始测试' }}
             </button>
           </div>
         </div>
@@ -1280,9 +1646,9 @@ onUnmounted(() => {
         :class="{ 'cycle-mode': phase === 'test' && activeFlowType === 'cycle' }"
       >
         <div class="top-left">
-          <button class="exit-btn" @click="handleExit">
-            <Icon icon="mdi:arrow-left" />
-            退出
+          <button class="exit-btn" :disabled="isSafeExitInProgress" @click="handleExit">
+            <Icon :icon="isSafeExitInProgress ? 'mdi:loading' : 'mdi:arrow-left'" :class="{ spin: isSafeExitInProgress }" />
+            {{ isSafeExitInProgress ? '安全退出中...' : '退出' }}
           </button>
           <div class="phase-indicator">
             <Icon :icon="currentPhaseLabel.icon" />
@@ -1324,11 +1690,11 @@ onUnmounted(() => {
       <!-- 流程图运行阶段 -->
       <div v-if="phase === 'test'" class="phase-content test-phase">
         <FlowchartRunner
+          ref="flowchartRunnerRef"
           :process-json="processJson"
           :active-flow-type="activeFlowType"
           :test-flow-passed="testFlowPassed"
           :is-running="isFlowchartRunning"
-          :cycle-total-seconds="cycleTotalSeconds"
           :cycle-remaining-seconds="cycleRemainingSeconds"
           :cycle-finish-state="cycleFinishState"
           :current-node-id="currentNodeId"
@@ -1339,9 +1705,17 @@ onUnmounted(() => {
           :is-preflight-checking="isHardwarePreflightChecking"
           :preflight-ready="isHardwarePreflightReady"
           :last-socket-message="lastMessage"
+          :jobset-id="latestExecutionJobId"
+          :session-id="currentSession?.id ?? null"
+          :default-workbench-test-name="currentOrder?.workbenchTestName || ''"
+          :socket-id="socketId"
+          :execution-logs="executionLogs"
           @preflight="handleHardwarePreflight"
+          @hardware-config-changed="resetHardwarePreflight"
           @run="handleRunFlowchart"
           @stop="handleStopFlowchart"
+          @workbench-finished="handleWorkbenchFinished"
+          @rectifier-failure="handleRectifierFailure"
         />
       </div>
 
@@ -1350,10 +1724,22 @@ onUnmounted(() => {
         <div class="upload-layout">
           <TestResultPanel
             :report="reportJson"
+            :report-jobs="reportJobs"
+            :active-report-index="activeReportIndex"
+            :report-stage="reportStage"
+            :review-confirmed="reviewConfirmed"
+            :completed-report-count="completedReportCount"
+            :all-reports-completed="allReportsCompleted"
             :test-result="testResult"
-            :remark="remark"
-            @update:test-result="setTestResult"
-            @update:remark="setRemark"
+            @select-report="selectReport"
+            @update-result="updateActiveResult"
+            @update-record-status="updateActiveRecordStatus"
+            @update-rectifier-record-status="updateActiveRectifierRecordStatus"
+            @update-board-conclusion="updateActiveBoardConclusion"
+            @complete-report="handleCompleteReportReview"
+            @enter-review="handleEnterReportReview"
+            @edit-report="editReportFromReview"
+            @update-review-confirmed="handleReviewConfirmed"
           />
           <ReportUploader
             :is-uploading="isUploading"
@@ -1361,8 +1747,9 @@ onUnmounted(() => {
             :upload-error="uploadError"
             :upload-success="!!uploadedReportId"
             :cycle-count="currentOrder?.cycleCount || 1"
-            :single-cycle-duration-hours="currentOrder?.singleCycleDurationHours || 0"
-            :total-cycle-duration-hours="currentOrder?.totalCycleDurationHours || 0"
+            :report-count="reportJobs.length || uploadedCount"
+            :uploaded-count="uploadedCount"
+            :can-upload="canUploadReports"
             @upload="handleUploadReport"
             @retry="handleRetryUpload"
             @complete="handleComplete"
@@ -1383,7 +1770,7 @@ onUnmounted(() => {
               <Icon icon="mdi:plus" />
               开始新测试
             </button>
-            <button class="btn-secondary" @click="handleExit">
+            <button class="btn-secondary" :disabled="isSafeExitInProgress" @click="handleExit">
               <Icon icon="mdi:arrow-left" />
               返回首页
             </button>
@@ -1392,6 +1779,50 @@ onUnmounted(() => {
       </div>
       </div>
     </template>
+
+    <el-dialog
+      v-model="processSelectorVisible"
+      title="选择本次执行工艺"
+      width="620px"
+      :close-on-click-modal="false"
+    >
+      <div v-if="pendingExecutionOrder" class="process-selector-summary">
+        <div><span>工单</span><strong>{{ pendingExecutionOrder.orderNo }}</strong></div>
+        <div><span>产品类型</span><strong>{{ pendingExecutionOrder.productModel?.name || '-' }}</strong></div>
+        <div><span>测试类型</span><strong>{{ pendingExecutionOrder.clientTestTypeName || '-' }}</strong></div>
+        <div><span>实验模式</span><strong>{{ pendingExecutionOrder.experimentType.toUpperCase() || '-' }}</strong></div>
+        <div class="task-description">
+          <span>工艺描述</span>
+          <p>{{ selectedProcessDescription || '所选工艺暂未填写试验执行说明' }}</p>
+        </div>
+      </div>
+      <el-form label-width="100px" class="process-selector-form">
+        <el-form-item label="工艺版本" required>
+          <el-select
+            v-model="selectedProcessId"
+            filterable
+            style="width: 100%"
+            placeholder="请选择本次实际执行的工艺版本"
+            :loading="processSelectorLoading"
+          >
+            <el-option
+              v-for="item in processOptions"
+              :key="item.id"
+              :value="item.id"
+              :label="`${item.name} · ${item.version}${item.active === 1 ? '（当前版本）' : ''}`"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="process-selector-actions">
+        <button class="btn-secondary" @click="processSelectorVisible = false">取消</button>
+        <button class="btn-primary" :disabled="!selectedProcessId" @click="confirmExecutionProcess">
+          确认并进入测试
+        </button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1486,10 +1917,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.schedule-demo-btn {
-  white-space: nowrap;
 }
 
 .status-chip {
@@ -1684,6 +2111,60 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 500;
   color: rgb(251, 146, 60);
+}
+
+.process-selector-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.process-selector-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--color-border, #334155);
+  border-radius: 8px;
+  background: var(--color-bg-secondary, #172033);
+}
+
+.process-selector-summary span {
+  color: var(--color-text-secondary, #94a3b8);
+  font-size: 12px;
+}
+
+.process-selector-summary strong,
+.process-selector-summary p {
+  margin: 0;
+  color: var(--color-text-primary, #f1f5f9);
+}
+
+.process-selector-summary .task-description {
+  grid-column: 1 / -1;
+}
+
+.task-description p {
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.process-selector-form {
+  margin-top: 4px;
+}
+
+.process-selector-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.process-selector-actions > button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .top-center {

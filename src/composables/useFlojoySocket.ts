@@ -3,9 +3,10 @@
  * 用于接收流程图运行状态和结果
  * 对齐 Studio socket-receiver 实现
  */
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, shallowRef, computed, onUnmounted } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { getApiUrl } from '@/services/flojoy-api'
+import type { FlojoyExecutionLogEntry } from '@/services/flojoy-api'
 import type { BlockResult } from '@/views/process-halt-hass/types'
 
 // ========== 类型定义（对齐 Studio） ==========
@@ -34,7 +35,12 @@ export enum ServerStatus {
 
 // WebSocket 消息类型（对齐 Studio WorkerJobResponse）
 export interface WorkerJobResponse {
-  type: 'worker_response' | 'connection_established' | 'manifest_update'
+  type: 'worker_response'
+    | 'connection_established'
+    | 'manifest_update'
+    | 'execution_log'
+    | 'execution_log_batch'
+    | 'execution_log_connection_established'
   jobsetId?: string
   socketId?: string
   SYSTEM_STATUS?: ServerStatus
@@ -45,6 +51,8 @@ export interface WorkerJobResponse {
     id: string
     result: BlockResult
   }
+  event?: FlojoyExecutionLogEntry
+  events?: FlojoyExecutionLogEntry[]
 }
 
 // 节点运行状态
@@ -60,6 +68,7 @@ export interface NodeRunStatus {
 export function useFlojoySocket() {
   // 状态
   const socket = ref<WebSocket | null>(null)
+  const logSocket = shallowRef<WebSocket | null>(null)
   const socketId = ref<string>('')
   const serverStatus = ref<ServerStatus>(ServerStatus.CONNECTING)
   const blockResults = ref<Record<string, BlockResult>>({})
@@ -69,12 +78,117 @@ export function useFlojoySocket() {
   // 消息队列（用于调试）
   const messageQueue = ref<WorkerJobResponse[]>([])
   const lastMessage = ref<WorkerJobResponse | null>(null)
+  const executionLogs = shallowRef<FlojoyExecutionLogEntry[]>([])
+  const executionLogIds = new Set<string>()
+  const pendingExecutionLogs = new Map<string, FlojoyExecutionLogEntry>()
+  let executionLogFlushTimer: ReturnType<typeof setTimeout> | null = null
+  const executionLogFlushInterval = 250
+  const maxExecutionLogs = 1000
   
   // 重连配置
   let reconnectAttempts = 0
   const maxReconnectAttempts = 5
   const reconnectDelay = 2000
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let logReconnectAttempts = 0
+  let logReconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let manuallyDisconnected = false
+
+  function flushExecutionLogs() {
+    executionLogFlushTimer = null
+    if (!pendingExecutionLogs.size) return
+
+    const next = [...executionLogs.value]
+    for (const entry of pendingExecutionLogs.values()) {
+      if (executionLogIds.has(entry.id)) continue
+      executionLogIds.add(entry.id)
+      next.push(entry)
+    }
+    pendingExecutionLogs.clear()
+    next.sort((left, right) => left.timestampMs - right.timestampMs)
+    if (next.length > maxExecutionLogs) {
+      const removed = next.splice(0, next.length - maxExecutionLogs)
+      removed.forEach(entry => executionLogIds.delete(entry.id))
+    }
+    executionLogs.value = next
+  }
+
+  function queueExecutionLogs(entries: FlojoyExecutionLogEntry[]) {
+    for (const entry of entries) {
+      if (!entry?.id || executionLogIds.has(entry.id)) continue
+      pendingExecutionLogs.set(entry.id, entry)
+    }
+    if (!executionLogFlushTimer && pendingExecutionLogs.size) {
+      executionLogFlushTimer = setTimeout(
+        flushExecutionLogs,
+        executionLogFlushInterval,
+      )
+    }
+  }
+
+  function closeLogSocket() {
+    if (logReconnectTimer) {
+      clearTimeout(logReconnectTimer)
+      logReconnectTimer = null
+    }
+    const current = logSocket.value
+    logSocket.value = null
+    if (current) {
+      current.onclose = null
+      current.close()
+    }
+  }
+
+  function scheduleLogReconnect() {
+    if (manuallyDisconnected || logReconnectTimer) return
+    const delay = Math.min(1000 * 2 ** logReconnectAttempts, 30_000)
+    logReconnectTimer = setTimeout(() => {
+      logReconnectTimer = null
+      logReconnectAttempts++
+      connectLogSocket()
+    }, delay)
+  }
+
+  function connectLogSocket() {
+    if (
+      logSocket.value?.readyState === WebSocket.OPEN
+      || logSocket.value?.readyState === WebSocket.CONNECTING
+    ) {
+      return
+    }
+    const apiUrl = getApiUrl()
+    const logClientId = `${socketId.value || uuidv4()}-logs-${uuidv4()}`
+    const wsUrl = `${apiUrl.replace(/^http/, 'ws')}/ws/logs/${logClientId}`
+    try {
+      const nextSocket = new WebSocket(wsUrl)
+      logSocket.value = nextSocket
+      nextSocket.onopen = () => {
+        logReconnectAttempts = 0
+      }
+      nextSocket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as WorkerJobResponse
+          if (data.type === 'execution_log_batch' && data.events?.length) {
+            queueExecutionLogs(data.events)
+          } else if (data.type === 'execution_log' && data.event) {
+            queueExecutionLogs([data.event])
+          }
+        } catch (error) {
+          console.error('[Flojoy Log WS] Failed to parse message:', error)
+        }
+      }
+      nextSocket.onclose = () => {
+        if (logSocket.value === nextSocket) logSocket.value = null
+        scheduleLogReconnect()
+      }
+      nextSocket.onerror = (error) => {
+        console.error('[Flojoy Log WS] Error:', error)
+      }
+    } catch (error) {
+      console.error('[Flojoy Log WS] Connection failed:', error)
+      scheduleLogReconnect()
+    }
+  }
 
   // 计算属性
   const isConnected = computed(() =>
@@ -108,6 +222,8 @@ export function useFlojoySocket() {
       return
     }
 
+    manuallyDisconnected = false
+
     // 生成唯一的 socket ID
     const newSocketId = uuidv4()
     socketId.value = newSocketId
@@ -124,6 +240,7 @@ export function useFlojoySocket() {
       socket.value.onopen = () => {
         console.log('[Flojoy WS] Connected with socketId:', newSocketId)
         reconnectAttempts = 0
+        connectLogSocket()
       }
 
       socket.value.onmessage = (event) => {
@@ -141,7 +258,7 @@ export function useFlojoySocket() {
         socket.value = null
 
         // 尝试重连
-        if (reconnectAttempts < maxReconnectAttempts) {
+        if (!manuallyDisconnected && reconnectAttempts < maxReconnectAttempts) {
           reconnectTimer = setTimeout(() => {
             reconnectAttempts++
             console.log(`[Flojoy WS] Reconnecting (${reconnectAttempts}/${maxReconnectAttempts})...`)
@@ -164,15 +281,18 @@ export function useFlojoySocket() {
    * 断开连接
    */
   function disconnect() {
+    manuallyDisconnected = true
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
 
     if (socket.value) {
+      socket.value.onclose = null
       socket.value.close()
       socket.value = null
     }
+    closeLogSocket()
 
     serverStatus.value = ServerStatus.OFFLINE
   }
@@ -181,6 +301,14 @@ export function useFlojoySocket() {
    * 处理 WebSocket 消息（对齐 Studio processWorkerResponse）
    */
   function handleMessage(data: WorkerJobResponse) {
+    if (data.type === 'execution_log_batch' && data.events?.length) {
+      queueExecutionLogs(data.events)
+      return
+    }
+    if (data.type === 'execution_log' && data.event?.id) {
+      queueExecutionLogs([data.event])
+      return
+    }
     lastMessage.value = data
     messageQueue.value.push(data)
 
@@ -214,6 +342,11 @@ export function useFlojoySocket() {
         // 可以在这里触发 manifest 刷新
         break
 
+      case 'execution_log':
+      case 'execution_log_batch':
+      case 'execution_log_connection_established':
+        break
+
       default:
         console.log('[Flojoy WS] Unknown message type:', data)
     }
@@ -244,9 +377,13 @@ export function useFlojoySocket() {
       runningBlock.value = res.RUNNING_NODE
     }
 
-    // 更新失败的节点
-    if (res.FAILED_NODES) {
-      failedBlocks.value = res.FAILED_NODES
+    // 失败状态在同一次执行中必须保持。Flojoy 后续状态帧可能携带空对象，
+    // 不能因此抹掉先前失败并把整条测试流误判为成功。
+    if (res.FAILED_NODES && Object.keys(res.FAILED_NODES).length > 0) {
+      failedBlocks.value = {
+        ...failedBlocks.value,
+        ...res.FAILED_NODES,
+      }
     }
   }
 
@@ -305,6 +442,9 @@ export function useFlojoySocket() {
   // 清理
   onUnmounted(() => {
     disconnect()
+    if (executionLogFlushTimer) clearTimeout(executionLogFlushTimer)
+    executionLogFlushTimer = null
+    flushExecutionLogs()
   })
 
   return {
@@ -316,6 +456,7 @@ export function useFlojoySocket() {
     failedBlocks,
     lastMessage,
     messageQueue,
+    executionLogs,
 
     // 计算属性
     isConnected,

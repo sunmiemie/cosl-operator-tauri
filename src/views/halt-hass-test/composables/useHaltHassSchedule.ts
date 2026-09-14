@@ -9,7 +9,6 @@ import {
 } from '@/services/halt-hass-order'
 import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
 import type { HaltHassOrder } from '../types'
-import { isMockHaltHassOrder, MOCK_HALT_HASS_ORDER } from '../mock-halt-hass-fixture'
 
 type ScheduledEvent = {
   eventId: string
@@ -73,9 +72,8 @@ export function useHaltHassSchedule() {
   const calBase = ref(getMonday(new Date()))
   const slotHeightPx = 44
   const scheduledEvents = ref<Record<string, ScheduledEvent>>({})
-  // 报告提交前的工单都应留在客户端工作台：
-  // 待领取、测试中、待重做、暂存。
-  const visibleOrderStatuses = [1, 2, 4, 7]
+  // 工艺由客户端在每次执行前重新选择，只展示可从头执行的未执行/待重做工单。
+  const visibleOrderStatuses = [1, 4]
 
   const currentWeekDays = computed<HaltHassWeekDay[]>(() => {
     const days: HaltHassWeekDay[] = []
@@ -136,8 +134,9 @@ export function useHaltHassSchedule() {
       return [
         order.orderNo,
         order.boardGroup?.name,
-        order.process?.name,
-        order.process?.version,
+        order.productModel?.name,
+        order.clientTestTypeName,
+        order.taskExecutionDescription,
         order.remark,
         boardNames,
       ].some((value) => String(value || '').toLowerCase().includes(keyword))
@@ -291,10 +290,6 @@ export function useHaltHassSchedule() {
       }
 
       const nextOrders = Array.from(byId.values())
-      const shouldUseFallbackMock = requestFailed && !nextOrders.length && !byId.has(MOCK_HALT_HASS_ORDER.id)
-      if (shouldUseFallbackMock) {
-        nextOrders.push(MOCK_HALT_HASS_ORDER)
-      }
       workOrders.value = nextOrders
       restoreScheduledEvents(nextOrders)
       syncActiveHostDeviceName()
@@ -302,17 +297,15 @@ export function useHaltHassSchedule() {
         && isScheduledEventVisibleInActiveHost(selectedScheduledOrder.value)
         ? selectedScheduledOrder.value
         : null
-      if (shouldUseFallbackMock) {
-        ElMessage.warning('未获取到真实 HALT-HASS 工单，已载入演示工单用于流程测试')
-      } else if (requestFailed) {
+      if (requestFailed) {
         ElMessage.warning('部分 HALT-HASS 工单加载失败，请稍后重新读取本周排程')
       }
     } catch (error) {
       console.error('[halt-hass schedule] refresh failed:', error)
-      workOrders.value = [MOCK_HALT_HASS_ORDER]
+      workOrders.value = []
       restoreScheduledEvents(workOrders.value)
       syncActiveHostDeviceName()
-      ElMessage.warning('未获取到真实 HALT-HASS 工单，已载入演示工单用于流程测试')
+      ElMessage.warning('HALT-HASS 工单加载失败，请稍后重试')
     } finally {
       workOrdersLoading.value = false
     }
@@ -473,10 +466,6 @@ export function useHaltHassSchedule() {
   async function persistScheduledEvent(orderId: string, eventId: string | null, fallback: ScheduledEvent[]) {
     const order = getOrderById(orderId)
     if (!order?.id) return true
-
-    if (isMockHaltHassOrder(order)) {
-      return true
-    }
 
     const schedule = eventId ? getScheduleChangePayload(eventId) : null
     const scheduleHostDeviceName = activeHostDeviceName.value.trim()

@@ -11,16 +11,43 @@ import {
 } from 'vue'
 import VChart from 'vue-echarts'
 import { Icon } from '@iconify/vue'
-import { ElDialog } from 'element-plus'
+import { ElDialog, ElMessage } from 'element-plus'
 
 import type { WorkerJobResponse } from '@/composables/useFlojoySocket'
 import {
   useHaltHassMqtt,
+  type HaltHassMqttCommand,
   type HaltHassMqttConfig,
 } from '@/composables/useHaltHassMqtt'
-import type { HassHardwarePreflightResponse } from '@/services/flojoy-api'
+import {
+  appendExecutionLog,
+  resolveHassRectifierBindings,
+  runHassRectifierCommand,
+  type HassHardwarePreflightResponse,
+} from '@/services/flojoy-api'
+import type { ResolvedHassHardwareBinding } from '@/services/hass-hardware-binding'
+import {
+  createRectifierStageTracker,
+  executeRectifierTemperatureStage,
+  type RectifierStageTrigger,
+} from '@/services/hass-rectifier-runtime'
 import { parseHassMqttTelemetry } from '@/services/hass-mqtt-telemetry'
+import {
+  loadHassWorkbenchConfig,
+  saveHassWorkbenchConfig,
+} from '@/services/hass-workbench-config'
 import type { HaltHassProcessJson } from '@/views/process-halt-hass/types'
+import type {
+  HaltHassDualCurvePoint,
+  HaltHassPeriodicRecord,
+  HaltHassRectifierTemperatureStageRecord,
+  HaltHassScalarCurvePoint,
+  HaltHassTelemetrySnapshot,
+} from '../types'
+import {
+  loadHaltHassPeriodicRecords,
+  saveHaltHassPeriodicRecords,
+} from '../utils/telemetryPersistence'
 import '@/utils/echarts'
 
 const props = defineProps<{
@@ -28,20 +55,26 @@ const props = defineProps<{
   lastMessage: WorkerJobResponse | null
   isRunning: boolean
   canRun: boolean
-  cycleTotalSeconds: number | null
   cycleRemainingSeconds: number | null
   cycleFinishState: 'idle' | 'running' | 'finishing' | 'recovering'
   serverStatus: string
   preflightResult: HassHardwarePreflightResponse | null
+  jobsetId: string
+  sessionId: number | null
+  defaultWorkbenchTestName?: string
 }>()
 const emit = defineEmits<{
   run: []
   stop: []
+  workbenchFinished: [{ status: string; elapsedSeconds: number; remainingSeconds: number }]
+  rectifierFailure: [{ message: string }]
 }>()
 
 const MAX_MQTT_POINTS = 21_600
 const MQTT_POINT_TRIM_CHUNK = 1_800
 const MQTT_UI_FLUSH_INTERVAL_MS = 100
+const MQTT_TELEMETRY_TIMEOUT_MS = 10_000
+const WORKBENCH_LIST_TIMEOUT_MS = 5_000
 const MAX_PULSER_HISTORY_SECONDS = 21_600
 const PULSER_RECENT_RAW_SECONDS = 300
 const PULSER_COMPACTION_THRESHOLD = 180_000
@@ -49,25 +82,85 @@ const MIN_CHART_DISPLAY_POINTS = 600
 const MAX_CHART_DISPLAY_POINTS = 2400
 const TELEMETRY_STALE_AFTER_MS = 3000
 const DEVICE_ONLINE_STALE_AFTER_MS = 8000
+const PERIODIC_RECORD_SECONDS = 180
+const REPORT_CHART_MAX_POINTS = 2400
 
-type DualCurvePoint = {
-  time: number
-  actual: number | null
-  target: number | null
-}
+type DualCurvePoint = HaltHassDualCurvePoint
 
 type ChartWindow = 300 | 3600 | 14_400 | 'all'
+type PulserSampleWindow = 50 | 100 | 250
+
+function lastOf<T>(values: T[]): T | undefined {
+  return values[values.length - 1]
+}
 
 const pulserPoints = shallowRef<DualCurvePoint[]>([])
 const temperaturePoints = shallowRef<DualCurvePoint[]>([])
 const vibrationPoints = shallowRef<DualCurvePoint[]>([])
+const reportPulserPoints: DualCurvePoint[] = []
+const reportTemperaturePoints: DualCurvePoint[] = []
+const reportVibrationPoints: DualCurvePoint[] = []
+const current48vPoints = shallowRef<HaltHassScalarCurvePoint[]>([])
+const current90vPoints = shallowRef<HaltHassScalarCurvePoint[]>([])
+const periodicRecords = ref<HaltHassPeriodicRecord[]>(
+  loadHaltHassPeriodicRecords(props.sessionId),
+)
+const rectifierStages = ref<HaltHassRectifierTemperatureStageRecord[]>([])
+const isRectifierProcess = computed(() => (
+  props.processJson?.metadata.reportType === 'rectifier_regulator'
+))
+let rectifierBindings: ResolvedHassHardwareBinding[] | null = null
+let rectifierStageExecution: Promise<void> = Promise.resolve()
+let rectifierExecutionFailed = false
+let rectifierStageTracker = createRectifierStageTracker(5, 120)
+
+function rectifierStorageKey(sessionId: number | null): string {
+  return `halt-hass-rectifier-stages-v1:${sessionId ?? 'pending'}`
+}
+
+function loadRectifierStages(sessionId: number | null): HaltHassRectifierTemperatureStageRecord[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(rectifierStorageKey(sessionId)) || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function persistRectifierStages(): void {
+  localStorage.setItem(
+    rectifierStorageKey(props.sessionId),
+    JSON.stringify(rectifierStages.value),
+  )
+}
+
+function configureRectifierStageTracker(): void {
+  const config = props.processJson?.metadata.rectifierConfig
+  const latestStageIndex = rectifierStages.value.reduce(
+    (maximum, stage) => Math.max(maximum, Number(stage.stageIndex) || 0),
+    0,
+  )
+  rectifierStageTracker = createRectifierStageTracker(
+    config?.temperatureToleranceC ?? 5,
+    config?.temperatureStableSeconds ?? 120,
+    10,
+    latestStageIndex,
+  )
+}
 const chartWindow = ref<ChartWindow>('all')
+const pulserSampleWindow = ref<PulserSampleWindow>(100)
 const chartViewportWidth = ref(1000)
 const chartRegionElement = ref<HTMLElement | null>(null)
 const freshnessClock = ref(Date.now())
 let freshnessTimer: ReturnType<typeof setInterval> | null = null
 let chartResizeObserver: ResizeObserver | null = null
 let mqttUiFlushTimer: ReturnType<typeof setTimeout> | null = null
+let mqttTelemetryWatchStartedAt = 0
+let mqttTemperatureReceivedAt = 0
+let mqttVibrationReceivedAt = 0
+let mqttTrendStartedAtMs = 0
+let mqttWatchdogNextRetryAt = 0
+let mqttDetailRetryInFlight = false
 let pulserRunStartedAtMs = 0
 let pulserLastSequence = 0
 let pulserLastFrameTime = 0
@@ -80,6 +173,8 @@ const pulserStream = reactive({
   sequence: 0,
   sampleCount: 0,
   lastSampleAt: 0,
+  movementConfirmed: false,
+  movementActualSpan: 0,
   error: '',
 })
 const chartWindowOptions: ReadonlyArray<{
@@ -91,14 +186,37 @@ const chartWindowOptions: ReadonlyArray<{
   { value: 14_400, label: '4 小时' },
   { value: 'all', label: '全部' },
 ]
+const pulserSampleWindowOptions: ReadonlyArray<{
+  value: PulserSampleWindow
+  label: string
+}> = [
+  { value: 50, label: '50 点' },
+  { value: 100, label: '100 点' },
+  { value: 250, label: '250 点' },
+]
 const mqttConfig = reactive<HaltHassMqttConfig>({
-  broker: '192.168.1.20',
+  broker: '192.168.1.54',
   port: 1883,
   topicPrefix: 'EDM',
   username: 'Admin',
   password: '123456',
 })
 const mqttSettingsOpen = ref(false)
+const mqttTelemetryWarning = ref('')
+const workbenchTests = ref<Array<{ name: string; type: string; createdTime: string }>>([])
+const workbenchListLoading = ref(false)
+const workbenchListError = ref('')
+let workbenchListRequestToken = 0
+let workbenchListTimeout: ReturnType<typeof setTimeout> | null = null
+const selectedWorkbenchTest = ref(props.defaultWorkbenchTestName?.trim() || '')
+const loadedWorkbenchTest = ref('')
+const workbenchStarting = ref(false)
+let workbenchStartToken = 0
+const workbenchElapsedSeconds = ref<number | null>(null)
+const workbenchRemainingSeconds = ref<number | null>(null)
+let hasSeenWorkbenchRunning = false
+let workbenchFinishEmitted = false
+let nextWorkbenchStatusRequestAt = 0
 const workbenchReadings = reactive({
   systemStatus: '',
   testStatus: '',
@@ -107,22 +225,82 @@ const {
   connectionState: mqttConnectionState,
   statusMessage: mqttStatusMessage,
   lastMessage: lastMqttMessage,
+  lastCommunication: lastMqttCommunication,
   isConnected: mqttConnected,
   isConnecting: mqttConnecting,
   connect: connectMqtt,
   disconnect: disconnectMqtt,
+  publishCommand: publishMqttCommandRaw,
 } = useHaltHassMqtt()
+
+function persistClientCommunicationLog(input: {
+  eventType: string
+  message: string
+  level?: 'info' | 'warning' | 'error'
+  direction?: 'send' | 'receive'
+  data?: unknown
+}): void {
+  void appendExecutionLog({
+    ...input,
+    jobsetId: props.jobsetId,
+    function: 'HALT_HASS_MQTT_CLIENT',
+  }).catch((error) => {
+    console.error('[HALT-HASS] MQTT 通信日志落盘失败', error)
+  })
+}
+
+async function publishMqttCommand(
+  topicPrefix: string,
+  command: HaltHassMqttCommand,
+  argument?: string,
+): Promise<void> {
+  const topicSuffix = command === 'RequestDetailStatus'
+    ? 'THV/Test/Command'
+    : 'App/Test/Command'
+  const topic = `${topicPrefix.replace(/^\/+|\/+$/g, '')}/${topicSuffix}`
+  const payload = command === 'LoadTest' ? `LoadTest;${argument || ''}` : command
+  persistClientCommunicationLog({
+    eventType: 'device-command',
+    message: `MQTT ${topic} 发送 ${payload}`,
+    direction: 'send',
+    data: { transport: 'MQTT', topic, payload },
+  })
+  try {
+    await publishMqttCommandRaw(topicPrefix, command, argument)
+    persistClientCommunicationLog({
+      eventType: 'device-response',
+      message: `MQTT ${command} 指令已提交`,
+      direction: 'receive',
+      data: { transport: 'MQTT', topic, payload, submitted: true },
+    })
+  } catch (error) {
+    persistClientCommunicationLog({
+      eventType: 'device-response',
+      message: `MQTT ${command} 指令发送失败`,
+      level: 'error',
+      direction: 'receive',
+      data: {
+        transport: 'MQTT',
+        topic,
+        payload,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    })
+    throw error
+  }
+}
 const mqttDisplayStatus = computed(() => {
+  if (mqttTelemetryWarning.value) return mqttTelemetryWarning.value
   if (!props.isRunning && mqttConnectionState.value === 'disconnected') {
     return '随循环测试自动订阅和退出'
   }
   return mqttStatusMessage.value
 })
 const powerReadings = reactive({
-  voltage3124: null as number | null,
-  current3124: null as number | null,
-  voltage6723: null as number | null,
-  current6723: null as number | null,
+  voltage90v: null as number | null,
+  current90v: null as number | null,
+  voltage48v: null as number | null,
+  current48v: null as number | null,
 })
 type PowerReadingKey = keyof typeof powerReadings
 const powerFreshness = reactive<Record<
@@ -134,10 +312,10 @@ const powerFreshness = reactive<Record<
     error: string
   }
 >>({
-  voltage3124: { valid: false, fresh: false, lastValueAt: 0, error: '' },
-  current3124: { valid: false, fresh: false, lastValueAt: 0, error: '' },
-  voltage6723: { valid: false, fresh: false, lastValueAt: 0, error: '' },
-  current6723: { valid: false, fresh: false, lastValueAt: 0, error: '' },
+  voltage90v: { valid: false, fresh: false, lastValueAt: 0, error: '' },
+  current90v: { valid: false, fresh: false, lastValueAt: 0, error: '' },
+  voltage48v: { valid: false, fresh: false, lastValueAt: 0, error: '' },
+  current48v: { valid: false, fresh: false, lastValueAt: 0, error: '' },
 })
 const ifboxReadings = reactive({
   communication: '',
@@ -208,25 +386,45 @@ function resetTelemetry() {
   pulserPoints.value = []
   temperaturePoints.value = []
   vibrationPoints.value = []
-  const initialElapsed = Math.max(
-    0,
-    Number(props.cycleTotalSeconds ?? 0)
-      - Number(props.cycleRemainingSeconds ?? props.cycleTotalSeconds ?? 0),
-  )
-  pulserRunStartedAtMs = Date.now() - initialElapsed * 1000
+  reportPulserPoints.length = 0
+  reportTemperaturePoints.length = 0
+  reportVibrationPoints.length = 0
+  current48vPoints.value = []
+  current90vPoints.value = []
+  periodicRecords.value = loadHaltHassPeriodicRecords(props.sessionId)
+  rectifierStages.value = isRectifierProcess.value
+    ? loadRectifierStages(props.sessionId)
+    : []
+  rectifierBindings = null
+  rectifierStageExecution = Promise.resolve()
+  rectifierExecutionFailed = false
+  configureRectifierStageTracker()
+  pulserRunStartedAtMs = Date.now()
   pulserLastSequence = 0
   pulserLastFrameTime = 0
   pulserLastCompactionAt = 0
   pendingTemperaturePoints.length = 0
   pendingVibrationPoints.length = 0
+  mqttTelemetryWatchStartedAt = 0
+  mqttTemperatureReceivedAt = 0
+  mqttVibrationReceivedAt = 0
+  mqttTrendStartedAtMs = 0
+  mqttWatchdogNextRetryAt = 0
+  mqttDetailRetryInFlight = false
+  mqttTelemetryWarning.value = ''
+  workbenchReadings.testStatus = ''
+  workbenchElapsedSeconds.value = null
+  workbenchRemainingSeconds.value = null
+  hasSeenWorkbenchRunning = false
+  workbenchFinishEmitted = false
   if (mqttUiFlushTimer) {
     clearTimeout(mqttUiFlushTimer)
     mqttUiFlushTimer = null
   }
-  powerReadings.voltage3124 = null
-  powerReadings.current3124 = null
-  powerReadings.voltage6723 = null
-  powerReadings.current6723 = null
+  powerReadings.voltage90v = null
+  powerReadings.current90v = null
+  powerReadings.voltage48v = null
+  powerReadings.current48v = null
   for (const freshness of Object.values(powerFreshness)) {
     freshness.valid = false
     freshness.fresh = false
@@ -251,6 +449,8 @@ function resetTelemetry() {
   pulserStream.sequence = 0
   pulserStream.sampleCount = 0
   pulserStream.lastSampleAt = 0
+  pulserStream.movementConfirmed = false
+  pulserStream.movementActualSpan = 0
   pulserStream.error = ''
   for (const freshness of Object.values(ifboxFreshness)) {
     freshness.lastSuccessAt = 0
@@ -260,28 +460,98 @@ function resetTelemetry() {
 }
 
 function loadMqttConfig() {
+  Object.assign(mqttConfig, loadHassWorkbenchConfig().mqtt)
+}
+
+function rectifierDelay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds))
+}
+
+async function executeRectifierStage(trigger: RectifierStageTrigger): Promise<void> {
+  const config = props.processJson?.metadata.rectifierConfig
+  if (!config || rectifierExecutionFailed) return
+
   try {
-    const stored = localStorage.getItem('halt-hass-mqtt-config')
-    if (!stored) return
-    const config = JSON.parse(stored) as Partial<HaltHassMqttConfig>
-    if (typeof config.broker === 'string') mqttConfig.broker = config.broker
-    if (Number.isInteger(config.port)) mqttConfig.port = Number(config.port)
-    if (typeof config.topicPrefix === 'string') {
-      mqttConfig.topicPrefix = config.topicPrefix
+    if (!rectifierBindings) rectifierBindings = await resolveHassRectifierBindings()
+    const runCommand = async (
+      action: 'set_input' | 'set_loads' | 'measure',
+      input: {
+        inputVoltage?: number
+        sourceCurrentLimitA?: number
+        load48Ohm?: number
+        load90Ohm?: number
+      } = {},
+    ) => {
+      const response = await runHassRectifierCommand(
+        action,
+        rectifierBindings!,
+        input,
+        props.jobsetId,
+      )
+      if (!response.success) throw new Error(response.message || `整流稳压 ${action} 执行失败`)
+      return response
     }
-    if (typeof config.username === 'string') mqttConfig.username = config.username
-  } catch {
-    // 配置损坏时继续使用工作台默认参数。
+
+    const stage = await executeRectifierTemperatureStage(
+      trigger,
+      config,
+      {
+        setInputVoltage: async (voltage, currentLimitA) => {
+          await runCommand('set_input', {
+            inputVoltage: voltage,
+            sourceCurrentLimitA: currentLimitA,
+          })
+        },
+        setLoads: async (load48Ohm, load90Ohm) => {
+          await runCommand('set_loads', { load48Ohm, load90Ohm })
+        },
+        measure: async () => {
+          const response = await runCommand('measure')
+          if (!response.measurement) throw new Error('整流稳压测量未返回数据')
+          return response.measurement
+        },
+      },
+      rectifierDelay,
+    )
+    rectifierStages.value.push(stage)
+    persistRectifierStages()
+    await persistClientCommunicationLog({
+      eventType: 'rectifier-stage-complete',
+      message: `整流稳压温度阶段 ${stage.stageIndex} 已完成`,
+      direction: 'receive',
+      data: {
+        stageIdentity: stage.stageIdentity,
+        targetTemperature: stage.targetTemperature,
+        actualTemperature: stage.actualTemperature,
+        voltageStepCount: stage.voltageSteps.length,
+      },
+    })
+  } catch (error) {
+    rectifierExecutionFailed = true
+    const message = error instanceof Error ? error.message : String(error)
+    await persistClientCommunicationLog({
+      eventType: 'rectifier-stage-failed',
+      message: `整流稳压温度阶段执行失败：${message}`,
+      level: 'error',
+      direction: 'receive',
+      data: { stageIdentity: trigger.stageIdentity, error: message },
+    })
+    emit('rectifierFailure', { message })
   }
 }
 
+function queueRectifierStage(trigger: RectifierStageTrigger): void {
+  if (rectifierStages.value.some(stage => stage.stageIdentity === trigger.stageIdentity)) return
+  rectifierStageExecution = rectifierStageExecution.then(
+    () => executeRectifierStage(trigger),
+    () => executeRectifierStage(trigger),
+  )
+}
+
 function saveMqttConfig() {
-  localStorage.setItem('halt-hass-mqtt-config', JSON.stringify({
-    broker: mqttConfig.broker,
-    port: mqttConfig.port,
-    topicPrefix: mqttConfig.topicPrefix,
-    username: mqttConfig.username,
-  }))
+  const config = loadHassWorkbenchConfig()
+  config.mqtt = { ...mqttConfig }
+  saveHassWorkbenchConfig(config)
 }
 
 function saveMqttSettings() {
@@ -300,6 +570,149 @@ async function startMqttTelemetrySession() {
 
 async function stopMqttTelemetrySession() {
   await disconnectMqtt()
+}
+
+async function connectWorkbench(): Promise<void> {
+  await startMqttTelemetrySession()
+  if (!mqttConnected.value && !mqttConnecting.value) return
+  await publishMqttCommand(mqttConfig.topicPrefix, 'Connect')
+}
+
+async function readWorkbenchTests(): Promise<void> {
+  if (!mqttConnected.value) {
+    ElMessage.warning('请先连接工作台 MQTT')
+    return
+  }
+  const requestToken = ++workbenchListRequestToken
+  if (workbenchListTimeout) clearTimeout(workbenchListTimeout)
+  workbenchListLoading.value = true
+  workbenchListError.value = ''
+  workbenchTests.value = []
+  try {
+    await publishMqttCommand(mqttConfig.topicPrefix, 'ListTest')
+    workbenchListTimeout = setTimeout(() => {
+      if (requestToken !== workbenchListRequestToken || !workbenchListLoading.value) return
+      workbenchListLoading.value = false
+      workbenchListError.value = '5 秒内未收到 EDM/App/Test/List 回包'
+      ElMessage.warning('曲线列表读取超时，请确认工作台服务已启动并订阅命令主题')
+      persistClientCommunicationLog({
+        eventType: 'device-response',
+        message: 'MQTT ListTest 等待回包超时',
+        level: 'warning',
+        direction: 'receive',
+        data: {
+          transport: 'MQTT',
+          expectedTopic: `${mqttConfig.topicPrefix.replace(/^\/+|\/+$/g, '')}/App/Test/List`,
+          timeoutMs: WORKBENCH_LIST_TIMEOUT_MS,
+        },
+      })
+    }, WORKBENCH_LIST_TIMEOUT_MS)
+  } catch (error) {
+    workbenchListLoading.value = false
+    workbenchListError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function loadWorkbenchTest(): Promise<void> {
+  const name = selectedWorkbenchTest.value.trim()
+  if (!name) {
+    ElMessage.warning('请选择温度、振动曲线')
+    return
+  }
+  await publishMqttCommand(mqttConfig.topicPrefix, 'LoadTest', name)
+}
+
+async function runWorkbenchTest(): Promise<void> {
+  if (!props.canRun) {
+    ElMessage.warning('当前工艺尚未满足运行条件')
+    return
+  }
+  if (!mqttConnected.value) {
+    ElMessage.warning('请先连接工作台 MQTT')
+    return
+  }
+  if (!selectedWorkbenchTest.value || loadedWorkbenchTest.value !== selectedWorkbenchTest.value) {
+    ElMessage.warning('请先加载当前选择的温度、振动曲线')
+    return
+  }
+  hasSeenWorkbenchRunning = false
+  workbenchFinishEmitted = false
+  const startToken = ++workbenchStartToken
+  workbenchStarting.value = true
+  try {
+    await publishMqttCommand(mqttConfig.topicPrefix, 'Run')
+    const deadline = Date.now() + 20_000
+    while (
+      startToken === workbenchStartToken
+      && !isWorkbenchRunning()
+      && Date.now() < deadline
+    ) {
+      await publishMqttCommand(mqttConfig.topicPrefix, 'RequestTestStatus')
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    if (startToken !== workbenchStartToken) return
+    if (!isWorkbenchRunning()) {
+      throw new Error('工作台在 20 秒内未确认 Running')
+    }
+    await publishMqttCommand(mqttConfig.topicPrefix, 'RequestDetailStatus')
+    emit('run')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    if (startToken === workbenchStartToken) workbenchStarting.value = false
+  }
+}
+
+async function stopWorkbenchTest(): Promise<void> {
+  if (!mqttConnected.value) return
+  workbenchStartToken += 1
+  workbenchStarting.value = false
+  await publishMqttCommand(mqttConfig.topicPrefix, 'Stop')
+  await publishMqttCommand(mqttConfig.topicPrefix, 'RequestTestStatus')
+}
+
+function isWorkbenchRunning(): boolean {
+  return workbenchReadings.testStatus.trim().toLowerCase() === 'running'
+}
+
+function missingMqttTelemetryChannels(now: number): string[] {
+  if (!mqttTelemetryWatchStartedAt) return []
+  const missing: string[] = []
+  const temperatureReference = mqttTemperatureReceivedAt || mqttTelemetryWatchStartedAt
+  const vibrationReference = mqttVibrationReceivedAt || mqttTelemetryWatchStartedAt
+  if (now - temperatureReference >= MQTT_TELEMETRY_TIMEOUT_MS) missing.push('温度')
+  if (now - vibrationReference >= MQTT_TELEMETRY_TIMEOUT_MS) missing.push('振动')
+  return missing
+}
+
+async function retryMissingMqttTelemetry(missing: string[]): Promise<void> {
+  if (mqttDetailRetryInFlight) return
+  mqttDetailRetryInFlight = true
+  const channelText = missing.join('、')
+  mqttTelemetryWarning.value = `10 秒未收到${channelText}数据，已重新请求`
+  ElMessage.warning(mqttTelemetryWarning.value)
+  try {
+    await publishMqttCommand(mqttConfig.topicPrefix, 'RequestDetailStatus')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    mqttTelemetryWarning.value = `重新请求${channelText}数据失败：${message}`
+    ElMessage.error(mqttTelemetryWarning.value)
+  } finally {
+    mqttDetailRetryInFlight = false
+  }
+}
+
+function checkMqttTelemetryWatchdog(): void {
+  if (!props.isRunning || !mqttConnected.value || !isWorkbenchRunning()) return
+  const now = Date.now()
+  const missing = missingMqttTelemetryChannels(now)
+  if (!missing.length) {
+    mqttTelemetryWarning.value = ''
+    return
+  }
+  if (now < mqttWatchdogNextRetryAt) return
+  mqttWatchdogNextRetryAt = now + MQTT_TELEMETRY_TIMEOUT_MS
+  void retryMissingMqttTelemetry(missing)
 }
 
 function toNumberArray(value: unknown): number[] {
@@ -338,6 +751,22 @@ function queueMqttPoint(
   if (actual === null && target === null) return
   queue.push({ time, actual, target })
   scheduleMqttUiFlush()
+}
+
+function resetMqttTrendData(startedAtMs = 0) {
+  temperaturePoints.value = []
+  vibrationPoints.value = []
+  reportTemperaturePoints.length = 0
+  reportVibrationPoints.length = 0
+  pendingTemperaturePoints.length = 0
+  pendingVibrationPoints.length = 0
+  mqttTrendStartedAtMs = startedAtMs
+}
+
+function mqttTrendElapsedSeconds(receivedAtMs: number): number {
+  const receivedAt = Number.isFinite(receivedAtMs) ? receivedAtMs : Date.now()
+  if (!mqttTrendStartedAtMs) mqttTrendStartedAtMs = receivedAt
+  return Math.max(0, (receivedAt - mqttTrendStartedAtMs) / 1000)
 }
 
 function appendMqttBatch(
@@ -402,8 +831,234 @@ function updatePowerReading(
   freshness.error = typeof metadata.error === 'string' ? metadata.error : ''
 
   const value = scalarValue(data.c)
-  if (freshness.valid && value !== null) powerReadings[key] = value
+  if (freshness.valid && value !== null) {
+    powerReadings[key] = value
+    if (key === 'current48v' || key === 'current90v') {
+      const point = { time: currentElapsedSeconds(), value }
+      const points = key === 'current48v'
+        ? current48vPoints.value
+        : current90vPoints.value
+      points.push(point)
+    }
+  }
 }
+
+function currentElapsedSeconds(): number {
+  if (workbenchElapsedSeconds.value !== null) return workbenchElapsedSeconds.value
+  return Math.max(
+    0,
+    pulserLastFrameTime,
+    lastOf(temperaturePoints.value)?.time ?? 0,
+    lastOf(pendingTemperaturePoints)?.time ?? 0,
+    lastOf(vibrationPoints.value)?.time ?? 0,
+    lastOf(pendingVibrationPoints)?.time ?? 0,
+  )
+}
+
+function latestDualValueAtOrBefore(
+  points: HaltHassDualCurvePoint[],
+  elapsedSeconds: number,
+): number | null {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    const point = points[index]
+    if (point.time <= elapsedSeconds && point.actual !== null) return point.actual
+  }
+  return null
+}
+
+function latestScalarValueAtOrBefore(
+  points: HaltHassScalarCurvePoint[],
+  elapsedSeconds: number,
+): number | null {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    const point = points[index]
+    if (point.time <= elapsedSeconds && point.value !== null) return point.value
+  }
+  return null
+}
+
+function hasStorageTest(): boolean {
+  return [
+    ...(props.processJson?.testFlow.nodes || []),
+    ...(props.processJson?.cycleFlow.nodes || []),
+  ].some(node => (
+    String(node.data?.func || '').toUpperCase() === 'READ_MEMORY_ADDRESS'
+    || String(node.data?.label || '').includes('存储板')
+  ))
+}
+
+function communicationResult(
+  freshness: { lastAttemptAt: number; lastAttemptOk: boolean },
+): '正常' | '异常' {
+  return freshness.lastAttemptAt > 0 && freshness.lastAttemptOk ? '正常' : '异常'
+}
+
+function buildPeriodicRecord(
+  elapsedSeconds: number,
+  isPartialInterval: boolean,
+): HaltHassPeriodicRecord {
+  const temperature = latestDualValueAtOrBefore(
+    reportTemperaturePoints.length ? reportTemperaturePoints : temperaturePoints.value,
+    elapsedSeconds,
+  )
+  const vibration = latestDualValueAtOrBefore(
+    reportVibrationPoints.length ? reportVibrationPoints : vibrationPoints.value,
+    elapsedSeconds,
+  )
+  const current48v = latestScalarValueAtOrBefore(current48vPoints.value, elapsedSeconds)
+  const current90v = latestScalarValueAtOrBefore(current90vPoints.value, elapsedSeconds)
+  const interfaceBoard = communicationResult(ifboxFreshness.communication)
+  const controlBoard = communicationResult(ifboxFreshness.controlBoard)
+  const storageBoard = hasStorageTest()
+    ? communicationResult(storageReading)
+    : '不适用'
+  const pulserSummary = (
+    pulserStream.movementConfirmed
+    && pulserStream.lastSampleAt > 0
+    && !pulserStream.error
+  ) ? '正常' : '异常'
+  const missingReasons: string[] = []
+  if (temperature === null) missingReasons.push('未取得温度末值')
+  if (vibration === null) missingReasons.push('未取得振动末值')
+  if (current48v === null) missingReasons.push('未取得 48V 电流末值')
+  if (current90v === null) missingReasons.push('未取得 90V 电流末值')
+  if (interfaceBoard === '异常') missingReasons.push('接口板通信异常')
+  if (controlBoard === '异常') missingReasons.push('控制板通信异常')
+  if (storageBoard === '异常') missingReasons.push('存储板通信异常')
+  if (pulserSummary === '异常') missingReasons.push('脉冲器波形或运动异常')
+
+  const runStartMs = pulserRunStartedAtMs || Date.now() - elapsedSeconds * 1000
+  return {
+    intervalIndex: periodicRecords.value.length + 1,
+    recordedAt: new Date(runStartMs + elapsedSeconds * 1000).toISOString(),
+    elapsedSeconds: Math.max(0, Math.round(elapsedSeconds)),
+    isPartialInterval,
+    temperature,
+    vibration,
+    communications: { interfaceBoard, controlBoard, storageBoard },
+    pulserSummary,
+    current48v,
+    current90v,
+    missingReasons,
+  }
+}
+
+function persistPeriodicRecords(): void {
+  saveHaltHassPeriodicRecords(props.sessionId, periodicRecords.value)
+}
+
+function generateDuePeriodicRecords(elapsed = currentElapsedSeconds()): void {
+  const lastElapsed = lastOf(periodicRecords.value)?.elapsedSeconds ?? 0
+  let nextBoundary = Math.floor(lastElapsed / PERIODIC_RECORD_SECONDS + 1)
+    * PERIODIC_RECORD_SECONDS
+  let changed = false
+  while (nextBoundary <= Math.floor(elapsed)) {
+    periodicRecords.value.push(buildPeriodicRecord(nextBoundary, false))
+    nextBoundary += PERIODIC_RECORD_SECONDS
+    changed = true
+  }
+  if (changed) persistPeriodicRecords()
+}
+
+function downsampleDual(
+  points: HaltHassDualCurvePoint[],
+  limit = REPORT_CHART_MAX_POINTS,
+): HaltHassDualCurvePoint[] {
+  if (points.length <= limit) return points.map(point => ({ ...point }))
+  const step = Math.ceil(points.length / Math.max(1, Math.floor(limit / 2)))
+  const output: HaltHassDualCurvePoint[] = []
+  for (let index = 0; index < points.length; index += step) {
+    const bucket = points.slice(index, index + step)
+    const candidates = bucket.filter(point => point.actual !== null)
+    if (!candidates.length) {
+      output.push(lastOf(bucket)!)
+      continue
+    }
+    let minimum = candidates[0]
+    let maximum = candidates[0]
+    for (const point of candidates) {
+      if ((point.actual ?? Infinity) < (minimum.actual ?? Infinity)) minimum = point
+      if ((point.actual ?? -Infinity) > (maximum.actual ?? -Infinity)) maximum = point
+    }
+    output.push(...[minimum, maximum].sort((a, b) => a.time - b.time))
+  }
+  return output.slice(0, limit)
+}
+
+function downsampleScalar(
+  points: HaltHassScalarCurvePoint[],
+  limit = REPORT_CHART_MAX_POINTS,
+): HaltHassScalarCurvePoint[] {
+  if (points.length <= limit) return points.map(point => ({ ...point }))
+  const step = Math.ceil(points.length / Math.max(1, Math.floor(limit / 2)))
+  const output: HaltHassScalarCurvePoint[] = []
+  for (let index = 0; index < points.length; index += step) {
+    const bucket = points.slice(index, index + step)
+    const candidates = bucket.filter(point => point.value !== null)
+    if (!candidates.length) {
+      output.push(lastOf(bucket)!)
+      continue
+    }
+    let minimum = candidates[0]
+    let maximum = candidates[0]
+    for (const point of candidates) {
+      if ((point.value ?? Infinity) < (minimum.value ?? Infinity)) minimum = point
+      if ((point.value ?? -Infinity) > (maximum.value ?? -Infinity)) maximum = point
+    }
+    output.push(...[minimum, maximum].sort((a, b) => a.time - b.time))
+  }
+  return output.slice(0, limit)
+}
+
+function getTelemetrySnapshot(): HaltHassTelemetrySnapshot {
+  flushMqttUi()
+  return {
+    periodicRecords: periodicRecords.value.map(record => ({
+      ...record,
+      communications: { ...record.communications },
+      missingReasons: [...record.missingReasons],
+    })),
+    chartSummary: {
+      pulser: downsampleDual(reportPulserPoints),
+      temperature: downsampleDual(reportTemperaturePoints),
+      vibration: downsampleDual(reportVibrationPoints),
+      current48v: downsampleScalar(current48vPoints.value),
+      current90v: downsampleScalar(current90vPoints.value),
+    },
+    rectifierReport: isRectifierProcess.value
+      ? {
+          currentUnit: 'A',
+          stages: rectifierStages.value.map(stage => ({
+            ...stage,
+            voltageSteps: stage.voltageSteps.map(step => ({
+              ...step,
+              halfLoad: { ...step.halfLoad, missingReasons: [...step.halfLoad.missingReasons] },
+              fullLoad: { ...step.fullLoad, missingReasons: [...step.fullLoad.missingReasons] },
+            })),
+          })),
+          boardConclusions: [],
+        }
+      : undefined,
+    generatedAt: new Date().toISOString(),
+  }
+}
+
+function finalizeTelemetry(): HaltHassTelemetrySnapshot {
+  const elapsed = currentElapsedSeconds()
+  generateDuePeriodicRecords(elapsed)
+  const lastElapsed = lastOf(periodicRecords.value)?.elapsedSeconds ?? 0
+  if (elapsed > lastElapsed && elapsed % PERIODIC_RECORD_SECONDS !== 0) {
+    periodicRecords.value.push(buildPeriodicRecord(elapsed, true))
+    persistPeriodicRecords()
+  }
+  return getTelemetrySnapshot()
+}
+
+async function waitForRectifierStages(): Promise<void> {
+  await rectifierStageExecution
+}
+
+defineExpose({ finalizeTelemetry, getTelemetrySnapshot, waitForRectifierStages })
 
 function updateIfboxReading(key: IfboxReadingKey, value: string) {
   const now = Date.now()
@@ -549,6 +1204,25 @@ function appendPulserFrame(
 
   const currentPoints = pulserPoints.value
   currentPoints.push(...appended)
+  const reportCandidates: DualCurvePoint[] = []
+  const actualValues = appended.filter(point => point.actual !== null)
+  const targetValues = appended.filter(point => point.target !== null)
+  if (actualValues.length) {
+    reportCandidates.push(
+      actualValues.reduce((left, right) => (left.actual ?? Infinity) <= (right.actual ?? Infinity) ? left : right),
+      actualValues.reduce((left, right) => (left.actual ?? -Infinity) >= (right.actual ?? -Infinity) ? left : right),
+    )
+  }
+  if (targetValues.length) {
+    reportCandidates.push(
+      targetValues.reduce((left, right) => (left.target ?? Infinity) <= (right.target ?? Infinity) ? left : right),
+      targetValues.reduce((left, right) => (left.target ?? -Infinity) >= (right.target ?? -Infinity) ? left : right),
+    )
+  }
+  reportCandidates
+    .filter((point, index, values) => values.indexOf(point) === index)
+    .sort((left, right) => left.time - right.time)
+    .forEach(point => reportPulserPoints.push({ ...point }))
   let nextPoints = currentPoints
   const oldestTime = nextPoints[0]?.time ?? frameEnd
   const compactionDue = (
@@ -598,7 +1272,7 @@ const pulserStreamText = computed(() => {
 })
 
 type DeviceConnectionStatus = {
-  id: 'itech6723' | 'itech3123' | 'ifbox' | 'storage' | 'pulser'
+  id: 'itech3123_48v' | 'itech3123' | 'ifbox' | 'storage' | 'pulser'
   name: string
   icon: string
   online: boolean
@@ -661,13 +1335,13 @@ function storageIsOnline(): boolean {
 }
 
 const deviceConnectionStatuses = computed<DeviceConnectionStatus[]>(() => {
-  const itech6723Online = powerDeviceIsOnline([
-    'voltage6723',
-    'current6723',
+  const itech3123_48vOnline = powerDeviceIsOnline([
+    'voltage48v',
+    'current48v',
   ])
   const itech3123Online = powerDeviceIsOnline([
-    'voltage3124',
-    'current3124',
+    'voltage90v',
+    'current90v',
   ])
   const ifboxOnline = ifboxIsOnline()
   const storageOnline = storageIsOnline()
@@ -681,25 +1355,25 @@ const deviceConnectionStatuses = computed<DeviceConnectionStatus[]>(() => {
 
   return [
     {
-      id: 'itech6723',
-      name: 'ITECH 6723',
+      id: 'itech3123_48v',
+      name: 'ITECH 3123（48 V）',
       icon: 'mdi:power-plug-outline',
-      online: itech6723Online,
-      voltage: formatReading(powerReadings.voltage6723, 'V'),
-      current: formatReading(powerReadings.current6723, 'A'),
-      detail: itech6723Online
-        ? `${formatReading(powerReadings.voltage6723, 'V')} / ${formatReading(powerReadings.current6723, 'A')}`
+      online: itech3123_48vOnline,
+      voltage: formatReading(powerReadings.voltage48v, 'V'),
+      current: formatReading(powerReadings.current48v, 'A'),
+      detail: itech3123_48vOnline
+        ? `${formatReading(powerReadings.voltage48v, 'V')} / ${formatReading(powerReadings.current48v, 'A')}`
         : '无实时通信响应',
     },
     {
       id: 'itech3123',
-      name: 'ITECH 3123',
+      name: 'ITECH 3123（90 V）',
       icon: 'mdi:power-plug-outline',
       online: itech3123Online,
-      voltage: formatReading(powerReadings.voltage3124, 'V'),
-      current: formatReading(powerReadings.current3124, 'A'),
+      voltage: formatReading(powerReadings.voltage90v, 'V'),
+      current: formatReading(powerReadings.current90v, 'A'),
       detail: itech3123Online
-        ? `${formatReading(powerReadings.voltage3124, 'V')} / ${formatReading(powerReadings.current3124, 'A')}`
+        ? `${formatReading(powerReadings.voltage90v, 'V')} / ${formatReading(powerReadings.current90v, 'A')}`
         : '无实时通信响应',
     },
     {
@@ -762,24 +1436,61 @@ const deviceConnectionStatuses = computed<DeviceConnectionStatus[]>(() => {
       icon: 'mdi:pulse',
       online: pulserOnline,
       detail: pulserOnline
-        ? `自动上报 ${pulserStream.sampleCount} 点`
+        ? (
+            pulserStream.movementConfirmed
+              ? `运动已确认 · 峰峰值 ${pulserStream.movementActualSpan.toFixed(3)} mA`
+              : `自动上报 ${pulserStream.sampleCount} 点 · 等待运动确认`
+          )
         : '无实时曲线上报',
     },
   ]
 })
 
 watch(
+  () => props.sessionId,
+  sessionId => {
+    resetTelemetry()
+    periodicRecords.value = loadHaltHassPeriodicRecords(sessionId)
+  },
+)
+
+watch(
   () => props.isRunning,
   (running, previous) => {
     if (running && !previous) {
       resetTelemetry()
-      // MQTT 与 Flojoy 是同一次循环测试的不同数据源。这里只负责订阅
-      // 工作台实时数据；Connect/Run/Stop 由工艺节点和安全收尾流程负责。
-      void startMqttTelemetrySession()
-    } else if (!running && previous) {
-      void stopMqttTelemetrySession()
+      return
+    }
+    if (!running && previous && mqttConnected.value && !workbenchFinishEmitted) {
+      // Flojoy 启动失败、异常退出或安全退出时，不能让已经启动的工作台继续运行。
+      void publishMqttCommand(mqttConfig.topicPrefix, 'Stop')
+        .then(() => publishMqttCommand(mqttConfig.topicPrefix, 'RequestTestStatus'))
+        .catch(error => console.error('[HALT-HASS] 工作台兜底停止失败:', error))
     }
   },
+)
+
+watch(
+  () => props.defaultWorkbenchTestName,
+  value => {
+    if (!selectedWorkbenchTest.value && value?.trim()) selectedWorkbenchTest.value = value.trim()
+  },
+)
+
+watch(
+  () => mqttConnected.value,
+  connected => {
+    if (connected && !workbenchTests.value.length && !workbenchListLoading.value) {
+      void readWorkbenchTests()
+    }
+    if (!connected) {
+      workbenchListRequestToken += 1
+      workbenchListLoading.value = false
+      if (workbenchListTimeout) clearTimeout(workbenchListTimeout)
+      workbenchListTimeout = null
+    }
+  },
+  { immediate: true },
 )
 
 watch(
@@ -799,6 +1510,10 @@ watch(
       if (failedFunc === 'READ_MEMORY_ADDRESS' || isStorageNode(nodeId)) {
         storageConnection.lastError = error
         if (failedFunc === 'OPEN_SERIAL') storageConnection.opened = false
+      }
+      if (failedFunc === 'READ_PULSER_WAVEFORM') {
+        pulserStream.error = error
+        pulserStream.movementConfirmed = false
       }
     }
 
@@ -862,6 +1577,10 @@ watch(
       pulserStream.lastSampleAt = (
         metadataNumber(metadata, 'last_sample_at_ms') ?? 0
       )
+      pulserStream.movementConfirmed = metadata.movement_confirmed === true
+      pulserStream.movementActualSpan = (
+        metadataNumber(metadata, 'movement_actual_span') ?? 0
+      )
       pulserStream.error = typeof metadata.error === 'string'
         ? metadata.error
         : ''
@@ -874,15 +1593,36 @@ watch(
       return
     }
 
-    if (func === 'MEASURE_VOLTAGE_ITECH3124') {
-      updatePowerReading('voltage3124', data)
-    } else if (func === 'MEASURE_CURRENT_ITECH3124') {
-      updatePowerReading('current3124', data)
-    } else if (func === 'MEASURE_VOLTAGE_ITECH6723G') {
-      updatePowerReading('voltage6723', data)
-    } else if (func === 'MEASURE_CURRENT_ITECH6723G') {
-      updatePowerReading('current6723', data)
+    if (func === 'MEASURE_VOLTAGE_ITECH3123_48V') {
+      updatePowerReading('voltage48v', data)
+    } else if (func === 'MEASURE_CURRENT_ITECH3123_48V') {
+      updatePowerReading('current48v', data)
+    } else if (func === 'MEASURE_VOLTAGE_ITECH3123') {
+      updatePowerReading('voltage90v', data)
+    } else if (func === 'MEASURE_CURRENT_ITECH3123') {
+      updatePowerReading('current90v', data)
     }
+  },
+)
+
+watch(
+  () => lastMqttCommunication.value,
+  (communication) => {
+    if (!communication) return
+    persistClientCommunicationLog({
+      eventType: communication.direction === 'send'
+        ? 'device-command'
+        : 'device-response',
+      message: communication.message,
+      level: communication.level,
+      direction: communication.direction,
+      data: {
+        transport: 'MQTT',
+        topic: communication.topic,
+        payload: communication.payload,
+        occurredAt: communication.occurredAt,
+      },
+    })
   },
 )
 
@@ -890,6 +1630,18 @@ watch(
   () => lastMqttMessage.value,
   (message) => {
     if (!message) return
+    persistClientCommunicationLog({
+      eventType: 'device-response',
+      message: `MQTT ${message.topic} 收到工作台回执`,
+      direction: 'receive',
+      data: {
+        transport: 'MQTT',
+        topic: message.topic,
+        rawPayload: message.rawPayload,
+        payload: message.payload,
+        receivedAt: message.receivedAt,
+      },
+    })
     const update = parseHassMqttTelemetry(message)
 
     if (update.kind === 'system-status') {
@@ -897,24 +1649,98 @@ watch(
       return
     }
     if (update.kind === 'test-status') {
+      const wasRunning = isWorkbenchRunning()
       workbenchReadings.testStatus = update.status
+      if (update.name) loadedWorkbenchTest.value = update.name
+      const running = isWorkbenchRunning()
+      if (running && !wasRunning) {
+        hasSeenWorkbenchRunning = true
+        workbenchFinishEmitted = false
+        const now = Date.now()
+        // 温度和振动使用工作台 MQTT 接收时间轴，与脉冲器采样点轴分离。
+        // 工作台重新进入 Running 时同时丢弃订阅后收到的上一轮状态快照。
+        resetMqttTrendData(message.receivedAt || now)
+        mqttTelemetryWatchStartedAt = now
+        mqttTemperatureReceivedAt = 0
+        mqttVibrationReceivedAt = 0
+        mqttWatchdogNextRetryAt = now + MQTT_TELEMETRY_TIMEOUT_MS
+        mqttTelemetryWarning.value = ''
+      } else if (!running) {
+        mqttTelemetryWatchStartedAt = 0
+        mqttWatchdogNextRetryAt = 0
+        mqttTelemetryWarning.value = ''
+        if (wasRunning && hasSeenWorkbenchRunning && props.isRunning && !workbenchFinishEmitted) {
+          workbenchFinishEmitted = true
+          emit('workbenchFinished', {
+            status: update.status,
+            elapsedSeconds: workbenchElapsedSeconds.value ?? currentElapsedSeconds(),
+            remainingSeconds: workbenchRemainingSeconds.value ?? 0,
+          })
+        }
+      }
+      return
+    }
+
+    if (update.kind === 'test-list') {
+      workbenchListRequestToken += 1
+      if (workbenchListTimeout) clearTimeout(workbenchListTimeout)
+      workbenchListTimeout = null
+      workbenchListLoading.value = false
+      workbenchTests.value = update.tests
+      workbenchListError.value = update.tests.length
+        ? ''
+        : '工作台返回的曲线列表为空'
+      const defaultName = props.defaultWorkbenchTestName?.trim()
+      if (!selectedWorkbenchTest.value && defaultName) selectedWorkbenchTest.value = defaultName
+      if (!selectedWorkbenchTest.value && update.tests.length) selectedWorkbenchTest.value = update.tests[0].name
       return
     }
 
     if (update.kind === 'temperature') {
+      workbenchElapsedSeconds.value = update.time
+      workbenchRemainingSeconds.value = update.remainingTime
+      mqttTemperatureReceivedAt = Date.now()
+      const time = mqttTrendElapsedSeconds(message.receivedAt)
       queueMqttPoint(
         pendingTemperaturePoints,
-        update.time,
+        time,
         update.actual,
         update.target,
       )
+      if (update.actual !== null || update.target !== null) {
+        reportTemperaturePoints.push({ time, actual: update.actual, target: update.target })
+      }
+      if (
+        isRectifierProcess.value
+        && props.isRunning
+        && isWorkbenchRunning()
+        && !rectifierExecutionFailed
+      ) {
+        const latestVibration = lastOf(reportVibrationPoints)
+        const trigger = rectifierStageTracker.observe({
+          totalTime: update.time,
+          receivedAt: message.receivedAt,
+          targetTemperature: update.target,
+          actualTemperature: update.actual,
+          targetVibration: latestVibration?.target ?? null,
+          actualVibration: latestVibration?.actual ?? null,
+        })
+        if (trigger) queueRectifierStage(trigger)
+      }
     } else if (update.kind === 'vibration') {
+      workbenchElapsedSeconds.value = update.time
+      workbenchRemainingSeconds.value = update.remainingTime
+      mqttVibrationReceivedAt = Date.now()
+      const time = mqttTrendElapsedSeconds(message.receivedAt)
       queueMqttPoint(
         pendingVibrationPoints,
-        update.time,
+        time,
         update.actual,
         update.target,
       )
+      if (update.actual !== null || update.target !== null) {
+        reportVibrationPoints.push({ time, actual: update.actual, target: update.target })
+      }
     }
   },
 )
@@ -958,9 +1784,47 @@ function pulserYDomain(points: DualCurvePoint[]): [number, number] {
   ]
 }
 
+function visiblePulserSamples(
+  points: DualCurvePoint[],
+  sampleWindow: PulserSampleWindow,
+): DualCurvePoint[] {
+  const latestSamples = points.slice(-sampleWindow)
+  return latestSamples.map((point, index) => ({
+    ...point,
+    // 实时波形只表达最新采样帧内部的形状，不再复用循环运行时间。
+    time: index + 1,
+  }))
+}
+
 const visiblePulserPoints = computed(() => (
-  visibleCurvePoints(pulserPoints.value)
+  visiblePulserSamples(pulserPoints.value, pulserSampleWindow.value)
 ))
+
+function pulserTooltipFormatter(params: unknown): string {
+  const items = (Array.isArray(params) ? params : [params]).filter(
+    (item): item is Record<string, unknown> => (
+      item !== null && typeof item === 'object'
+    ),
+  )
+  const seriesValue = (seriesName: string): number | null => {
+    const item = items.find(candidate => candidate.seriesName === seriesName)
+    const data = item?.data
+    if (!Array.isArray(data)) return null
+    const value = Number(data[1])
+    return Number.isFinite(value) ? value : null
+  }
+  const referenceData = items.map(item => item.data).find(Array.isArray)
+  const sampleIndex = Math.max(1, Math.round(Number(referenceData?.[0] ?? 1)))
+  const actualValue = seriesValue('脉冲器实际曲线')
+  const targetValue = seriesValue('脉冲器目标曲线')
+  const rows = [`<strong>当前窗口第 ${sampleIndex} 个采样点</strong>`]
+  if (actualValue !== null) rows.push(`实际值：${actualValue.toFixed(3)} mA`)
+  if (targetValue !== null) rows.push(`目标值：${targetValue.toFixed(3)} mA`)
+  if (actualValue !== null && targetValue !== null) {
+    rows.push(`偏差：${(actualValue - targetValue).toFixed(3)} mA`)
+  }
+  return rows.join('<br>')
+}
 
 const pulserChartOption = computed(() => {
   const points = visiblePulserPoints.value
@@ -971,7 +1835,7 @@ const pulserChartOption = computed(() => {
     aria: {
       enabled: true,
       label: {
-        description: '脉冲器目标曲线与实际曲线长时间运行趋势图',
+        description: `脉冲器目标曲线与实际曲线最近 ${pulserSampleWindow.value} 个采样点实时波形图`,
       },
     },
     grid: {
@@ -990,12 +1854,7 @@ const pulserChartOption = computed(() => {
           type: 'dashed',
         },
       },
-      formatter: (params: unknown) => mqttTooltipFormatter(
-        params,
-        '脉冲器实际曲线',
-        '脉冲器目标曲线',
-        'mA',
-      ),
+      formatter: pulserTooltipFormatter,
     },
     legend: {
       data: ['脉冲器实际曲线', '脉冲器目标曲线'],
@@ -1006,13 +1865,16 @@ const pulserChartOption = computed(() => {
     },
     xAxis: {
       type: 'value',
-      name: '运行时间',
+      name: '采样点',
       nameGap: 24,
       boundaryGap: false,
+      min: 1,
+      max: Math.max(points.length, 2),
+      minInterval: 1,
       axisLabel: {
         color: '#64748b',
         hideOverlap: true,
-        formatter: (value: number) => formatElapsedAxis(value),
+        formatter: (value: number) => Math.round(value).toString(),
       },
       splitLine: {
         show: true,
@@ -1036,16 +1898,12 @@ const pulserChartOption = computed(() => {
       {
         name: '脉冲器实际曲线',
         type: 'line',
-        data: points
-          .filter(point => point.actual !== null)
-          .map(point => [point.time, point.actual]),
+        data: points.map(point => [point.time, point.actual]),
         showSymbol: false,
-        smooth: true,
-        sampling: 'lttb',
-        progressive: 4000,
-        progressiveThreshold: 3000,
+        smooth: false,
+        connectNulls: false,
         lineStyle: {
-          width: 2,
+          width: 1.25,
           color: '#22d3ee',
         },
         emphasis: {
@@ -1056,16 +1914,12 @@ const pulserChartOption = computed(() => {
       {
         name: '脉冲器目标曲线',
         type: 'line',
-        data: points
-          .filter(point => point.target !== null)
-          .map(point => [point.time, point.target]),
+        data: points.map(point => [point.time, point.target]),
         showSymbol: false,
-        smooth: true,
-        sampling: 'lttb',
-        progressive: 4000,
-        progressiveThreshold: 3000,
+        smooth: false,
+        connectNulls: false,
         lineStyle: {
-          width: 1.7,
+          width: 1.1,
           type: 'dashed',
           color: '#f59e0b',
         },
@@ -1097,14 +1951,17 @@ function findFirstVisibleIndex(
  * 每个桶同时保留目标/实际曲线的极值点，避免长时间运行时削掉瞬态峰值
  * 或目标值阶跃。
  */
-function visibleCurvePoints(points: DualCurvePoint[]): DualCurvePoint[] {
+function visibleCurvePoints(
+  points: DualCurvePoint[],
+  window: ChartWindow = chartWindow.value,
+): DualCurvePoint[] {
   if (points.length < 2) return points.slice()
 
   const latestTime = points[points.length - 1].time
-  const cutoff = chartWindow.value === 'all'
+  const cutoff = window === 'all'
     ? points[0].time
-    : latestTime - chartWindow.value
-  const startIndex = chartWindow.value === 'all'
+    : latestTime - window
+  const startIndex = window === 'all'
     ? 0
     : findFirstVisibleIndex(points, cutoff)
   const visibleCount = points.length - startIndex
@@ -1257,6 +2114,26 @@ function mqttTooltipFormatter(
   return rows.join('<br>')
 }
 
+function dualCurveSeriesData(
+  points: DualCurvePoint[],
+  valueKey: 'actual' | 'target',
+  maximumGapSeconds: number,
+): Array<[number, number | null]> {
+  const output: Array<[number, number | null]> = []
+  let previousTime: number | null = null
+  for (const point of points) {
+    if (
+      previousTime !== null
+      && point.time - previousTime > maximumGapSeconds
+    ) {
+      output.push([(previousTime + point.time) / 2, null])
+    }
+    output.push([point.time, point[valueKey]])
+    previousTime = point.time
+  }
+  return output
+}
+
 function mqttChartOption(
   actualName: string,
   targetName: string,
@@ -1300,7 +2177,7 @@ function mqttChartOption(
     },
     xAxis: {
       type: 'value',
-      name: '运行时间',
+      name: 'MQTT 接收时间',
       nameGap: 24,
       boundaryGap: false,
       axisLabel: {
@@ -1326,9 +2203,11 @@ function mqttChartOption(
       {
         name: actualName,
         type: 'line',
-        data: points
-          .filter(point => point.actual !== null)
-          .map(point => [point.time, point.actual]),
+        data: dualCurveSeriesData(
+          points,
+          'actual',
+          MQTT_TELEMETRY_TIMEOUT_MS / 1000,
+        ),
         showSymbol: false,
         smooth: true,
         sampling: 'lttb',
@@ -1339,9 +2218,11 @@ function mqttChartOption(
       {
         name: targetName,
         type: 'line',
-        data: points
-          .filter(point => point.target !== null)
-          .map(point => [point.time, point.target]),
+        data: dualCurveSeriesData(
+          points,
+          'target',
+          MQTT_TELEMETRY_TIMEOUT_MS / 1000,
+        ),
         showSymbol: false,
         smooth: true,
         sampling: 'lttb',
@@ -1378,12 +2259,6 @@ const vibrationChartOption = computed(() => mqttChartOption(
 
 onMounted(() => {
   loadMqttConfig()
-  if (props.isRunning) {
-    void startMqttTelemetrySession()
-  } else {
-    // 清除热更新或异常退出遗留的客户端订阅；不会向工作台发送 Stop。
-    void stopMqttTelemetrySession()
-  }
   if (chartRegionElement.value) {
     chartViewportWidth.value = chartRegionElement.value.clientWidth
     chartResizeObserver = new ResizeObserver(([entry]) => {
@@ -1396,6 +2271,12 @@ onMounted(() => {
   }
   freshnessTimer = setInterval(() => {
     freshnessClock.value = Date.now()
+    checkMqttTelemetryWatchdog()
+    if (props.isRunning && mqttConnected.value && Date.now() >= nextWorkbenchStatusRequestAt) {
+      nextWorkbenchStatusRequestAt = Date.now() + 2000
+      void publishMqttCommand(mqttConfig.topicPrefix, 'RequestTestStatus')
+    }
+    if (props.isRunning) generateDuePeriodicRecords()
   }, 1000)
 })
 
@@ -1406,6 +2287,9 @@ onUnmounted(() => {
   mqttUiFlushTimer = null
   chartResizeObserver?.disconnect()
   chartResizeObserver = null
+  if (workbenchListTimeout) clearTimeout(workbenchListTimeout)
+  workbenchListTimeout = null
+  void stopMqttTelemetrySession()
 })
 
 function formatReading(value: number | null, unit: string): string {
@@ -1425,10 +2309,16 @@ function formatDuration(seconds: number | null): string {
   ].map(value => value.toString().padStart(2, '0')).join(':')
 }
 
-const cycleTotalTimeText = computed(() => formatDuration(props.cycleTotalSeconds))
-const cycleRemainingTimeText = computed(() => formatDuration(
-  props.cycleRemainingSeconds ?? props.cycleTotalSeconds,
-))
+const cycleTotalTimeText = computed(() => formatDuration(workbenchElapsedSeconds.value))
+const cycleRemainingTimeText = computed(() => formatDuration(workbenchRemainingSeconds.value))
+const systemTimeText = computed(() => new Date(freshnessClock.value).toLocaleTimeString('zh-CN', { hour12: false }))
+const latestTemperature = computed(() => lastOf(temperaturePoints.value) ?? lastOf(pendingTemperaturePoints))
+const latestVibration = computed(() => lastOf(vibrationPoints.value) ?? lastOf(pendingVibrationPoints))
+const statusById = computed(() => new Map(deviceConnectionStatuses.value.map(item => [item.id, item])))
+const interfaceBoardOnline = computed(() => Boolean(ifboxReadings.communication))
+const controlBoardOnline = computed(() => Boolean(ifboxReadings.controlBoard))
+const storageBoardOnline = computed(() => statusById.value.get('storage')?.online === true)
+const pulserOnline = computed(() => statusById.value.get('pulser')?.online === true)
 const cycleStateText = computed(() => {
   if (props.cycleFinishState === 'recovering') return '正在下电'
   if (props.cycleFinishState === 'finishing') return '正在停止流程'
@@ -1438,12 +2328,72 @@ const cycleStateText = computed(() => {
 
 <template>
   <section class="telemetry-panel">
-    <div ref="chartRegionElement" class="chart-region">
+    <header class="cycle-overview">
+      <div class="overview-heading">
+        <div>
+          <strong>实时状态总览</strong>
+          <span>{{ cycleStateText }}</span>
+        </div>
+        <div class="workbench-controls">
+          <button class="control-button secondary" type="button" @click="mqttSettingsOpen = true">
+            <Icon icon="mdi:cog-outline" /> MQTT 设置
+          </button>
+          <button class="control-button" type="button" :disabled="mqttConnected || mqttConnecting" @click="connectWorkbench">
+            连接
+          </button>
+          <button class="control-button" type="button" :disabled="!mqttConnected || isRunning || workbenchListLoading" @click="readWorkbenchTests">
+            <Icon v-if="workbenchListLoading" icon="mdi:loading" class="spin" />
+            {{ workbenchListLoading ? '读取中' : '读取' }}
+          </button>
+          <select v-model="selectedWorkbenchTest" class="workbench-test-select" :disabled="!workbenchTests.length || isRunning">
+            <option value="" disabled>
+              {{ workbenchListLoading ? '正在读取曲线列表' : '选择温度、振动曲线' }}
+            </option>
+            <option v-for="test in workbenchTests" :key="test.name" :value="test.name">
+              {{ test.name }}
+            </option>
+          </select>
+          <button class="control-button" type="button" :disabled="!selectedWorkbenchTest || isRunning" @click="loadWorkbenchTest">
+            加载
+          </button>
+          <button class="control-button primary" type="button" :disabled="isRunning || workbenchStarting || !canRun || loadedWorkbenchTest !== selectedWorkbenchTest" @click="runWorkbenchTest">
+            {{ workbenchStarting ? '启动中' : '运行' }}
+          </button>
+          <button class="control-button danger" type="button" :disabled="(!isRunning && !workbenchStarting) || cycleFinishState === 'recovering'" @click="stopWorkbenchTest">
+            停止
+          </button>
+        </div>
+      </div>
+      <p v-if="workbenchListError" class="workbench-list-feedback" role="alert">
+        <Icon icon="mdi:alert-circle-outline" />
+        {{ workbenchListError }}
+      </p>
+
+      <div class="overview-cards">
+        <article class="overview-card neutral"><span>当前时间</span><strong>{{ systemTimeText }}</strong></article>
+        <article class="overview-card neutral"><span>测试时间</span><strong>{{ cycleTotalTimeText }}</strong></article>
+        <article class="overview-card neutral"><span>剩余时间</span><strong>{{ cycleRemainingTimeText }}</strong></article>
+        <article class="overview-card neutral"><span>目标温度</span><strong>{{ formatReading(latestTemperature?.target ?? null, '°C') }}</strong></article>
+        <article class="overview-card neutral"><span>实际温度</span><strong>{{ formatReading(latestTemperature?.actual ?? null, '°C') }}</strong></article>
+        <article class="overview-card neutral"><span>目标振动</span><strong>{{ formatReading(latestVibration?.target ?? null, 'g') }}</strong></article>
+        <article class="overview-card neutral"><span>实际振动</span><strong>{{ formatReading(latestVibration?.actual ?? null, 'g') }}</strong></article>
+        <article class="overview-card" :class="{ online: interfaceBoardOnline }"><i /><span>接口板</span><strong>{{ interfaceBoardOnline ? '正常' : '异常' }}</strong></article>
+        <article class="overview-card" :class="{ online: controlBoardOnline }"><i /><span>控制板</span><strong>{{ controlBoardOnline ? '正常' : '异常' }}</strong></article>
+        <article class="overview-card" :class="{ online: storageBoardOnline }"><i /><span>存储板</span><strong>{{ storageBoardOnline ? '正常' : '异常' }}</strong></article>
+        <article class="overview-card" :class="{ online: pulserOnline }"><i /><span>波形</span><strong>{{ pulserOnline ? '正常' : '异常' }}</strong></article>
+        <article class="overview-card" :class="{ online: powerReadings.current48v !== null }"><i /><span>48V 电流</span><strong>{{ formatReading(powerReadings.current48v, 'A') }}</strong></article>
+        <article class="overview-card" :class="{ online: powerReadings.current90v !== null }"><i /><span>90V 电流</span><strong>{{ formatReading(powerReadings.current90v, 'A') }}</strong></article>
+        <article class="overview-card" :class="{ online: mqttConnected }"><i /><span>MQTT 通信</span><strong>{{ mqttConnected ? '通信正常' : '未连接' }}</strong></article>
+      </div>
+    </header>
+
+    <div class="telemetry-main-grid">
+      <div ref="chartRegionElement" class="chart-region">
       <div class="curve-toolbar" aria-label="曲线显示范围">
         <div class="curve-toolbar-label">
           <Icon icon="mdi:timeline-clock-outline" />
-          <span>显示范围</span>
-          <small>完整数据保留约 6 小时，绘图自动保峰降采样</small>
+          <span>温度/振动趋势范围</span>
+          <small>脉冲器按最新采样点显示；温度/振动按 MQTT 接收时间显示</small>
         </div>
         <div class="curve-window-options">
           <button
@@ -1460,16 +2410,30 @@ const cycleStateText = computed(() => {
       </div>
       <div class="chart-stack">
         <div
-          class="chart-shell"
+          class="chart-shell primary-chart-shell"
           role="img"
           aria-label="脉冲器目标曲线与实际曲线"
         >
           <div class="chart-shell-heading">
             <strong>脉冲器曲线</strong>
-            <span class="stream-status" :data-state="pulserStreamState">
-              <span class="status-dot" />
-              <span>{{ pulserStreamText }}</span>
-            </span>
+            <div class="pulser-heading-actions">
+              <div class="pulser-window-options" aria-label="脉冲器波形采样点数">
+                <button
+                  v-for="option in pulserSampleWindowOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: pulserSampleWindow === option.value }"
+                  :aria-pressed="pulserSampleWindow === option.value"
+                  @click="pulserSampleWindow = option.value"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+              <span class="stream-status" :data-state="pulserStreamState">
+                <span class="status-dot" />
+                <span>{{ pulserStreamText }}</span>
+              </span>
+            </div>
           </div>
           <VChart
             v-if="pulserPoints.length"
@@ -1483,11 +2447,12 @@ const cycleStateText = computed(() => {
             <span>等待脉冲器目标曲线与实际曲线</span>
           </div>
         </div>
-        <div
-          class="chart-shell"
-          role="img"
-          aria-label="温度目标值与实际值曲线"
-        >
+        <div class="secondary-chart-grid">
+          <div
+            class="chart-shell"
+            role="img"
+            aria-label="温度目标值与实际值曲线"
+          >
           <div class="chart-shell-heading">
             <strong>温度曲线</strong>
             <span>目标值 / 实际值</span>
@@ -1503,12 +2468,12 @@ const cycleStateText = computed(() => {
             <Icon icon="mdi:thermometer" />
             <span>等待温度目标值与实际值</span>
           </div>
-        </div>
-        <div
-          class="chart-shell"
-          role="img"
-          aria-label="振动目标值与实际值曲线"
-        >
+          </div>
+          <div
+            class="chart-shell"
+            role="img"
+            aria-label="振动目标值与实际值曲线"
+          >
           <div class="chart-shell-heading">
             <strong>振动曲线</strong>
             <span>目标值 / 实际值</span>
@@ -1524,7 +2489,13 @@ const cycleStateText = computed(() => {
             <Icon icon="mdi:waveform" />
             <span>等待振动目标值与实际值</span>
           </div>
+          </div>
         </div>
+      </div>
+      </div>
+
+      <div v-if="$slots['below-overview']" class="overview-log-region">
+        <slot name="below-overview" />
       </div>
     </div>
 
@@ -1607,7 +2578,11 @@ const cycleStateText = computed(() => {
         <div class="section-heading">
           <span>工作台 MQTT</span>
         </div>
-        <div class="mqtt-status-card" :data-state="mqttConnectionState">
+        <div
+          class="mqtt-status-card"
+          :class="{ 'has-warning': mqttTelemetryWarning }"
+          :data-state="mqttConnectionState"
+        >
           <div class="mqtt-status-main">
             <span class="status-dot" />
             <strong>{{ mqttDisplayStatus }}</strong>
@@ -1629,18 +2604,18 @@ const cycleStateText = computed(() => {
           v-if="!isRunning"
           type="button"
           class="action-button primary"
-          :disabled="!canRun"
-          @click="emit('run')"
+          :disabled="!canRun || workbenchStarting"
+          @click="runWorkbenchTest"
         >
           <Icon icon="mdi:play" />
-          运行循环流
+          {{ workbenchStarting ? '等待工作台确认' : '运行循环流' }}
         </button>
         <button
           v-else
           type="button"
           class="action-button danger"
           :disabled="cycleFinishState === 'recovering'"
-          @click="emit('stop')"
+          @click="stopWorkbenchTest"
         >
           <Icon icon="mdi:stop" />
           {{ cycleFinishState === 'running' ? '停止循环流' : '正在关闭' }}
@@ -1976,13 +2951,37 @@ const cycleStateText = computed(() => {
   }
 }
 
-/* 循环监控主布局：曲线保持主视觉，状态和操作固定在右侧。 */
+/* 循环监控主布局：顶部状态总览，下面按 7:3 显示曲线与关键日志。 */
 .telemetry-panel {
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 350px);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.75rem;
   padding: 0.65rem;
-  background: #f4f7fb;
+  background: var(--color-bg-tertiary, #f4f7fb);
+}
+
+.telemetry-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  gap: 0.75rem;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.overview-log-region {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.overview-log-region :deep(.execution-log-panel) {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  border-width: 1px;
+  border-radius: 0.7rem;
+  resize: none;
 }
 
 .chart-region {
@@ -2071,13 +3070,11 @@ const cycleStateText = computed(() => {
 
 .chart-stack {
   display: grid;
-  grid-template-rows: repeat(3, minmax(175px, 1fr));
+  grid-template-rows: minmax(0, 1.35fr) minmax(0, 0.85fr);
   gap: 0.6rem;
   height: 100%;
   min-height: 0;
-  padding-right: 0.2rem;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .chart-shell {
@@ -2091,6 +3088,182 @@ const cycleStateText = computed(() => {
   background: #fff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   overflow: hidden;
+}
+
+.cycle-overview {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.overview-heading > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  color: #1e293b;
+}
+
+.overview-heading > div:first-child span {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.workbench-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.workbench-list-feedback {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  color: var(--color-warning, #b45309);
+  font-size: 0.68rem;
+}
+
+.control-button,
+.workbench-test-select {
+  height: 2rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #334155;
+  font-size: 0.7rem;
+}
+
+.control-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0 0.65rem;
+  cursor: pointer;
+}
+
+.control-button.primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.control-button.danger {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #fff;
+}
+
+.control-button.secondary {
+  color: #475569;
+}
+
+.control-button:disabled,
+.workbench-test-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.spin {
+  animation: telemetry-spin 1s linear infinite;
+}
+
+@keyframes telemetry-spin {
+  to { transform: rotate(360deg); }
+}
+
+.workbench-test-select {
+  width: clamp(160px, 18vw, 280px);
+  padding: 0 0.5rem;
+}
+
+.overview-cards {
+  display: grid;
+  grid-template-columns: repeat(14, minmax(0, 1fr));
+  gap: 0.3rem;
+  min-width: 0;
+  padding-bottom: 0.15rem;
+  overflow: visible;
+}
+
+.overview-card {
+  position: relative;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  min-height: 4rem;
+  padding: 0.4rem 0.25rem;
+  border: 1px solid #fecaca;
+  border-radius: 0.65rem;
+  background: #fffafa;
+  text-align: center;
+}
+
+.overview-card.neutral {
+  border-color: #dbe3ee;
+  background: #fff;
+}
+
+.overview-card.online {
+  border-color: #75d6a6;
+  background: #f4fcf8;
+}
+
+.overview-card > i {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.overview-card.online > i {
+  background: #22a66f;
+  box-shadow: 0 0 0 3px rgba(34, 166, 111, 0.12);
+}
+
+.overview-card > span {
+  color: #64748b;
+  font-size: clamp(0.56rem, 0.62vw, 0.68rem);
+  white-space: nowrap;
+}
+
+.overview-card > strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: #162033;
+  font-family: 'JetBrains Mono', 'Roboto Mono', Consolas, monospace;
+  font-size: clamp(0.68rem, 0.72vw, 0.86rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-chart-shell {
+  min-height: 0;
+}
+
+.secondary-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  min-height: 0;
+}
+
+.secondary-chart-grid .chart-shell {
+  min-height: 0;
 }
 
 .chart-shell-heading {
@@ -2126,7 +3299,7 @@ const cycleStateText = computed(() => {
 }
 
 .status-sidebar {
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 0.65rem;
   min-width: 0;
@@ -2442,6 +3615,59 @@ const cycleStateText = computed(() => {
   background: #fffafa;
 }
 
+.pulser-heading-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.pulser-window-options {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.4rem;
+  background: #f8fafc;
+}
+
+.pulser-window-options button {
+  min-height: 1.45rem;
+  padding: 0 0.45rem;
+  color: #64748b;
+  border: 0;
+  border-radius: 0.3rem;
+  background: transparent;
+  font-size: 0.64rem;
+  cursor: pointer;
+}
+
+.pulser-window-options button:hover,
+.pulser-window-options button:focus-visible {
+  color: #0e7490;
+  background: #ecfeff;
+}
+
+.pulser-window-options button:focus-visible {
+  outline: 2px solid #0891b2;
+  outline-offset: 1px;
+}
+
+.pulser-window-options button.active {
+  color: #fff;
+  background: #0891b2;
+}
+
+.mqtt-status-card.has-warning {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.mqtt-status-card.has-warning .status-dot {
+  background: #f59e0b;
+}
+
 .sidebar-actions {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
@@ -2539,24 +3765,28 @@ const cycleStateText = computed(() => {
 }
 
 @media (max-width: 1100px) {
-  .telemetry-panel {
-    grid-template-columns: minmax(0, 1fr) 290px;
+  .overview-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
-  .status-sidebar {
-    padding: 0.65rem;
-  }
-
-  .power-readings {
-    grid-template-columns: 1fr;
+  .workbench-controls {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 
 @media (max-width: 860px) {
   .telemetry-panel {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(520px, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
     overflow-y: auto;
+  }
+
+  .telemetry-main-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(520px, 1fr) 260px;
+    overflow: visible;
   }
 
   .chart-region {

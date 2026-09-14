@@ -11,7 +11,65 @@ import type {
   CreateBoardGroupParams,
   HaltHassJob,
   HaltHassCurveFile,
+  RectifierProcessConfig,
 } from '@/views/process-halt-hass/types'
+import { createDefaultRectifierProcessConfig } from '@/views/process-halt-hass/types'
+import { externalizeHassRuntimeGraph } from './hass-hardware-binding'
+
+function normalizeRectifierConfig(
+  config: Partial<RectifierProcessConfig> | undefined,
+): RectifierProcessConfig {
+  const defaults = createDefaultRectifierProcessConfig()
+  return {
+    ...defaults,
+    ...config,
+    inputVoltageSteps: Array.isArray(config?.inputVoltageSteps)
+      ? [...config.inputVoltageSteps]
+      : defaults.inputVoltageSteps,
+    halfLoad: { ...defaults.halfLoad, ...config?.halfLoad },
+    fullLoad: { ...defaults.fullLoad, ...config?.fullLoad },
+    output48VoltageRange: {
+      ...defaults.output48VoltageRange,
+      ...config?.output48VoltageRange,
+    },
+    output90VoltageRange: {
+      ...defaults.output90VoltageRange,
+      ...config?.output90VoltageRange,
+    },
+    currentUnit: 'A',
+  }
+}
+
+function normalizeHaltHassProcessJson(processJson: HaltHassProcessJson): HaltHassProcessJson {
+  const testFlow = externalizeHassRuntimeGraph(
+    processJson.testFlow.nodes,
+    processJson.testFlow.edges,
+  )
+  const cycleFlow = externalizeHassRuntimeGraph(
+    processJson.cycleFlow.nodes,
+    processJson.cycleFlow.edges,
+  )
+  return {
+    ...processJson,
+    metadata: {
+      ...processJson.metadata,
+      reportType: processJson.metadata.reportType || 'drive_control',
+      rectifierConfig: processJson.metadata.reportType === 'rectifier_regulator'
+        ? normalizeRectifierConfig(processJson.metadata.rectifierConfig)
+        : processJson.metadata.rectifierConfig,
+    },
+    testFlow: {
+      ...processJson.testFlow,
+      nodes: testFlow.nodes,
+      edges: testFlow.edges,
+    },
+    cycleFlow: {
+      ...processJson.cycleFlow,
+      nodes: cycleFlow.nodes,
+      edges: cycleFlow.edges,
+    },
+  }
+}
 
 // ==================== 类型定义 ====================
 
@@ -215,7 +273,8 @@ export async function saveHaltHassProcess(
   processId?: number,
   userId?: number
 ): Promise<ApiResponse<{ id: number }>> {
-  const { metadata } = processJson
+  const normalizedProcessJson = normalizeHaltHassProcessJson(processJson)
+  const { metadata } = normalizedProcessJson
   const boardGroupIds = metadata.boardGroup.map((bg) => bg.id)
 
   if (processId && processId > 0) {
@@ -224,7 +283,7 @@ export async function saveHaltHassProcess(
       name: metadata.name,
       version: metadata.version,
       boardGroupIds,
-      processJson,
+      processJson: normalizedProcessJson,
     })
 
     if (updateResult.success) {
@@ -237,7 +296,7 @@ export async function saveHaltHassProcess(
       name: metadata.name,
       version: metadata.version,
       boardGroupIds,
-      processJson,
+      processJson: normalizedProcessJson,
       userId,
     })
 
@@ -274,7 +333,7 @@ export async function loadHaltHassProcess(
     return { success: false, error: '工艺 JSON 数据为空' }
   }
 
-  const source = detail.processJson
+  const source = normalizeHaltHassProcessJson(detail.processJson)
   if (
     source.schemaVersion !== 2
     || !isHaltHassFlowchart(source.testFlow)

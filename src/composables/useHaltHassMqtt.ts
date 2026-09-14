@@ -12,10 +12,31 @@ export interface HaltHassMqttConfig {
 
 export interface HaltHassMqttMessage {
   topic: string
-  payload: Record<string, unknown> | string | number | boolean | null
+  payload: unknown
   rawPayload: string
   receivedAt: number
 }
+
+export interface HaltHassMqttCommunication {
+  direction: 'send' | 'receive'
+  level: 'info' | 'warning' | 'error'
+  message: string
+  topic: string
+  payload: string
+  occurredAt: number
+}
+
+export type HaltHassMqttCommand =
+  | 'Connect'
+  | 'Disconnect'
+  | 'ListTest'
+  | 'LoadTest'
+  | 'Run'
+  | 'Stop'
+  | 'Pause'
+  | 'Continue'
+  | 'RequestTestStatus'
+  | 'RequestDetailStatus'
 
 export type HaltHassMqttConnectionState =
   | 'disconnected'
@@ -32,9 +53,11 @@ export function useHaltHassMqtt() {
   const connectionState = ref<HaltHassMqttConnectionState>('disconnected')
   const statusMessage = ref('工作台 MQTT 未连接')
   const lastMessage = ref<HaltHassMqttMessage | null>(null)
+  const lastCommunication = ref<HaltHassMqttCommunication | null>(null)
   const error = ref('')
   let messageUnlisten: UnlistenFn | null = null
   let statusUnlisten: UnlistenFn | null = null
+  let communicationUnlisten: UnlistenFn | null = null
 
   const isConnected = computed(() => connectionState.value === 'connected')
   const isConnecting = computed(() => connectionState.value === 'connecting')
@@ -57,6 +80,14 @@ export function useHaltHassMqtt() {
           error.value = event.payload.state === 'error'
             ? event.payload.message
             : ''
+        },
+      )
+    }
+    if (!communicationUnlisten) {
+      communicationUnlisten = await listen<HaltHassMqttCommunication>(
+        'halt-hass-mqtt-communication',
+        (event) => {
+          lastCommunication.value = event.payload
         },
       )
     }
@@ -92,11 +123,13 @@ export function useHaltHassMqtt() {
 
   async function publishCommand(
     topicPrefix: string,
-    command: 'Connect' | 'Disconnect' | 'Run' | 'Stop' | 'Pause' | 'Continue' | 'RequestTestStatus',
+    command: HaltHassMqttCommand,
+    argument?: string,
   ): Promise<void> {
     await invoke('publish_halt_hass_mqtt_command', {
       topicPrefix,
       command,
+      argument,
     })
   }
 
@@ -104,14 +137,17 @@ export function useHaltHassMqtt() {
     void disconnect()
     messageUnlisten?.()
     statusUnlisten?.()
+    communicationUnlisten?.()
     messageUnlisten = null
     statusUnlisten = null
+    communicationUnlisten = null
   })
 
   return {
     connectionState: readonly(connectionState),
     statusMessage: readonly(statusMessage),
     lastMessage: readonly(lastMessage),
+    lastCommunication: readonly(lastCommunication),
     error: readonly(error),
     isConnected,
     isConnecting,

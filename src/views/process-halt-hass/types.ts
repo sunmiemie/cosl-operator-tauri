@@ -70,6 +70,16 @@ export interface BlockData {
   type: string
   func: string
   path: string
+  // 客户端工作台设备角色；具体串口/VISA 地址只在运行时注入。
+  hardwareRole?:
+    | 'pulser'
+    | 'itech3123_48v'
+    | 'itech3123'
+    | 'itech3123_input'
+    | 'itech8513_48v_load'
+    | 'itech8513_90v_load'
+    | 'ifbox'
+    | 'storage'
   
   // 控件参数
   ctrls: CtrlData
@@ -143,6 +153,165 @@ export interface BoardModelItem {
   code?: string
 }
 
+// 工艺适用的电路板型号。这里只保存型号范围，不表达工单数量或具体 SN。
+export type HaltHassApplicableBoardModel = BoardModelItem
+
+export interface HaltHassProductModel {
+  id: number
+  name: string
+}
+
+export type HaltHassExperimentMode = 'halt' | 'hass'
+
+export interface HaltHassAssemblySlot {
+  slotNo: number
+  name: string
+  required: boolean
+  allowCompanion: boolean
+  allowedBoardModelIds: number[]
+}
+
+export interface HaltHassAssemblyRule {
+  slotCount: number
+  minimumTargetBoards: number
+  allowCompanionBoards: boolean
+  allowEmptySlots: boolean
+  slots: HaltHassAssemblySlot[]
+}
+
+export type HaltHassReportType = 'drive_control' | 'rectifier_regulator'
+
+export interface RectifierLoadConfig {
+  load48Ohm: number
+  load90Ohm: number
+}
+
+export interface RectifierVoltageRange {
+  min: number
+  max: number
+}
+
+export interface RectifierProcessConfig {
+  inputVoltageSteps: number[]
+  sourceCurrentLimitA: number
+  temperatureToleranceC: number
+  temperatureStableSeconds: number
+  voltageSettleSeconds: number
+  halfLoadSettleSeconds: number
+  fullLoadSettleSeconds: number
+  halfLoad: RectifierLoadConfig
+  fullLoad: RectifierLoadConfig
+  output48VoltageRange: RectifierVoltageRange
+  output90VoltageRange: RectifierVoltageRange
+  currentUnit: 'A'
+}
+
+export function createDefaultRectifierProcessConfig(): RectifierProcessConfig {
+  return {
+    inputVoltageSteps: [150, 200, 250, 300, 350, 400],
+    sourceCurrentLimitA: 5,
+    temperatureToleranceC: 5,
+    temperatureStableSeconds: 120,
+    voltageSettleSeconds: 3,
+    halfLoadSettleSeconds: 3,
+    fullLoadSettleSeconds: 3,
+    halfLoad: {
+      load48Ohm: 15.36,
+      load90Ohm: 56,
+    },
+    fullLoad: {
+      load48Ohm: 7.68,
+      load90Ohm: 28,
+    },
+    output48VoltageRange: {
+      min: 45.6,
+      max: 50.4,
+    },
+    output90VoltageRange: {
+      min: 85.5,
+      max: 94.5,
+    },
+    currentUnit: 'A',
+  }
+}
+
+export interface SdsTemperatureTriggerConfig {
+  toleranceC: number
+  stableDurationSeconds: number
+  mqttTimeoutSeconds: number
+  stageIdentityFields: Array<'sequence' | 'TotalTime'>
+}
+
+export interface SdsPowerConfig {
+  voltage: number
+  currentLimit: number
+}
+
+export interface SdsSerialConfig {
+  baudRate: number
+  responseTimeoutSeconds: number
+}
+
+export interface SdsCommunicationCheck {
+  role: string
+  label: string
+  expectedValue: string
+  protocolCommand?: string
+  implemented: boolean
+}
+
+export interface SdsProcessConfig {
+  method: 'full_hydraulic'
+  executionReady: boolean
+  power: SdsPowerConfig
+  serial: SdsSerialConfig
+  temperatureTrigger: SdsTemperatureTriggerConfig
+  communicationChecks: SdsCommunicationCheck[]
+  pressurePointsMpa: number[]
+  pointHoldSeconds: number
+  ignoredSfuFields: string[]
+  pendingProtocolItems: string[]
+}
+
+export function createDefaultSdsProcessConfig(): SdsProcessConfig {
+  return {
+    method: 'full_hydraulic',
+    executionReady: false,
+    power: {
+      voltage: 48,
+      currentLimit: 6,
+    },
+    serial: {
+      baudRate: 19200,
+      responseTimeoutSeconds: 0.35,
+    },
+    temperatureTrigger: {
+      toleranceC: 2,
+      stableDurationSeconds: 120,
+      mqttTimeoutSeconds: 10,
+      stageIdentityFields: ['sequence', 'TotalTime'],
+    },
+    communicationChecks: [
+      { role: 'main_controller', label: '主控电路板', expectedValue: '0026', implemented: false },
+      { role: 'motor_m1', label: '电机控制板 M1', expectedValue: '00C4', implemented: false },
+      { role: 'motor_m2', label: '电机控制板 M2', expectedValue: '00C4', implemented: false },
+      { role: 'motor_m3', label: '电机控制板 M3', expectedValue: '00C4', implemented: false },
+      { role: 'tbus_echo', label: 'TBUS echo', expectedValue: '005C', protocolCommand: 'F9810002067C', implemented: true },
+      { role: 'primary_comm_echo', label: '初级通讯板 echo', expectedValue: '0062', protocolCommand: 'D8810002267C', implemented: true },
+      { role: 'secondary_comm_echo', label: '次级通讯板 echo', expectedValue: '0062', protocolCommand: 'D9810002257C', implemented: true },
+    ],
+    pressurePointsMpa: [2, 5, 10, 15, 20],
+    pointHoldSeconds: 120,
+    ignoredSfuFields: ['A2', 'B2', 'A3', 'B3', 'K2', 'K3', 'PID'],
+    pendingProtocolItems: [
+      '主控电路板 0026 查询指令',
+      'M1/M2/M3 电机控制板 00C4 查询指令',
+      '六个液压位置的控制码及切换顺序',
+      'SFU 参数完整读写指令与比对规则',
+    ],
+  }
+}
+
 // 电路板组（完整结构，用于电路板组管理）
 export interface BoardGroup {
   id: number
@@ -193,12 +362,24 @@ export interface HaltHassMetadata {
   version: string
   // 电路板组（多选）
   boardGroup: BoardGroupItem[]
+  // 产品大类（HSVP、SDS 等）
+  productModel: HaltHassProductModel | null
+  // HALT/HASS 实验模式
+  experimentMode: HaltHassExperimentMode | ''
+  // 工艺适用型号；目标板数量由工单决定
+  applicableBoardModels: HaltHassApplicableBoardModel[]
+  // 台架装配规则；与工单目标板数量分离
+  assemblyRule: HaltHassAssemblyRule
+  // 报告业务类型；不作为工单测试类型使用
+  reportType: HaltHassReportType
+  // 整流稳压工艺运行参数；仅 reportType=rectifier_regulator 时使用
+  rectifierConfig?: RectifierProcessConfig
   // 描述/说明
   description: string
-  // 试验时长（小时，最多两位小数）
-  durationHours?: number
-  // HALT-HASS 曲线文件
+  // 旧版本曲线文件引用，仅用于读取历史工艺；新流程由 MQTT ListTest 选择。
   curveFile?: HaltHassCurveFile
+  // SDS 全套液压工艺运行参数；仅 clientTestType=2 时使用
+  sdsConfig?: SdsProcessConfig
   // 基础版本（用于迭代）
   baseVersion?: {
     processId: number
@@ -279,6 +460,23 @@ export function createEmptyHaltHassJson(): HaltHassProcessJson {
       name: '',
       version: '1.0.0',
       boardGroup: [],
+      productModel: null,
+      experimentMode: '',
+      applicableBoardModels: [],
+      assemblyRule: {
+        slotCount: 5,
+        minimumTargetBoards: 1,
+        allowCompanionBoards: true,
+        allowEmptySlots: false,
+        slots: Array.from({ length: 5 }, (_, index) => ({
+          slotNo: index + 1,
+          name: `板位 ${index + 1}`,
+          required: true,
+          allowCompanion: true,
+          allowedBoardModelIds: [],
+        })),
+      },
+      reportType: 'drive_control',
       description: '',
     },
     installGuide: {

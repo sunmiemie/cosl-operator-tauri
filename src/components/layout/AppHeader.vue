@@ -8,6 +8,7 @@ import { ElMessageBox } from 'element-plus'
 import { useTheme } from '@/composables/useTheme'
 import { useAuth } from '@/composables/useAuth'
 import { useAppLock } from '@/composables/useAppLock'
+import { requestActiveSafeExit } from '@/services/active-safe-exit'
 
 const router = useRouter()
 const { isDark, toggleTheme } = useTheme()
@@ -25,6 +26,7 @@ const appWindow = getCurrentWindow()
 
 // 清理取消监听函数
 let unlistenCloseRequested: (() => void) | null = null
+let closeInProgress = false
 
 // 初始化最大化状态
 appWindow.isMaximized().then((maximized) => {
@@ -55,8 +57,10 @@ async function stopFlojoyBackend() {
   }
 }
 
-// 退出登录并关闭程序（带确认弹窗）
-async function confirmLogoutAndClose() {
+async function confirmWindowClose(): Promise<boolean> {
+  const businessResult = await requestActiveSafeExit('application-close')
+  if (businessResult !== null) return businessResult
+
   try {
     await ElMessageBox.confirm(
       '确定要退出登录并关闭应用程序吗？',
@@ -67,17 +71,25 @@ async function confirmLogoutAndClose() {
         type: 'warning',
       }
     )
-    // 先清除持久化登录态，再停止本地服务并关闭窗口
-    await logout()
-    await stopFlojoyBackend()
-    await appWindow.destroy()
+    return true
   } catch {
-    // 用户点击取消，不做任何操作
+    return false
   }
 }
 
+// 关闭窗口（进行中的设备测试先交给业务页完成安全收尾）
 async function closeWindow() {
-  await confirmLogoutAndClose()
+  if (closeInProgress) return
+  closeInProgress = true
+  try {
+    if (!await confirmWindowClose()) return
+    // 业务安全收尾确认后，保留远端清除持久化登录态的行为。
+    await logout()
+    await stopFlojoyBackend()
+    await appWindow.destroy()
+  } finally {
+    closeInProgress = false
+  }
 }
 
 // 监听窗口关闭请求事件（Alt+F4 或任务栏关闭）
@@ -86,7 +98,7 @@ onMounted(async () => {
     // 阻止默认关闭行为
     event.preventDefault()
 
-    await confirmLogoutAndClose()
+    await closeWindow()
   })
 })
 

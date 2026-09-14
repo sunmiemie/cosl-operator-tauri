@@ -16,36 +16,45 @@ const hardwareBindingModule = await import(pathToFileURL(
 ).href)
 
 const {
-  applyHassCycleDuration,
-  buildHassCycleRunSettings,
+  buildWorkbenchControlledCycleRunSettings,
   hasHassDurationLoop,
-  resolveRemainingRuntimeSeconds,
 } = runtimeModule
 const { parseHassMqttTelemetry } = mqttTelemetryModule
 const {
+  applyHassHardwareBindings,
+  externalizeHassRuntimeGraph,
   getRequiredHassHardwareRoles,
-  resolveHassHardwareBindings,
+  normalizeHassHardwareNodes,
 } = hardwareBindingModule
 
-const compositeBindings = resolveHassHardwareBindings(
-  ['ifbox', 'storage'],
-  [
-    {
-      port: 'COM20',
-      description: 'TBus Port (Interface 0)',
-      manufacturer: 'Halt-Hass',
-      hwid: 'USB VID:PID=2E3C:7543 SER=TEST',
+const pulserDataOpenNode = {
+  id: 'OPEN_SERIAL-pulser-data',
+  data: {
+    func: 'OPEN_SERIAL',
+    label: '打开脉冲器数据串口',
+    path: 'HARDWARE/PROTOCOLS/SERIAL/OPEN_SERIAL/OPEN_SERIAL.py',
+    ctrls: {
+      device: { type: 'SerialDevice', value: '' },
+      baudrate: { type: 'int', value: 115200 },
     },
-    {
-      port: 'COM21',
-      description: 'EXT Port (Interface 4)',
-      manufacturer: 'Halt-Hass',
-      hwid: 'USB VID:PID=2E3C:7543 SER=TEST',
-    },
-  ],
+  },
+}
+const [boundPulserDataOpenNode] = applyHassHardwareBindings(
+  [pulserDataOpenNode],
+  [{
+    role: 'pulser',
+    displayName: '脉冲器',
+    port: 'COM3',
+    resource: 'COM3',
+    hwid: 'USB VID:PID=0403:6001 SER=BG02KQYKA',
+  }],
 )
-assert.equal(compositeBindings[0].port, 'COM20')
-assert.equal(compositeBindings[1].port, 'COM21')
+assert.equal(boundPulserDataOpenNode.data.ctrls.device.value, 'COM3')
+assert.equal(
+  boundPulserDataOpenNode.data.ctrls.baudrate.value,
+  115200,
+  '运行时绑定只替换串口，不得覆盖循环流脉冲器数据波特率',
+)
 assert.deepEqual(
   getRequiredHassHardwareRoles([
     {
@@ -56,61 +65,119 @@ assert.deepEqual(
   ['storage'],
 )
 
+const [normalizedPulserNode] = normalizeHassHardwareNodes([{
+  ...pulserDataOpenNode,
+  data: {
+    ...pulserDataOpenNode.data,
+    ctrls: {
+      ...pulserDataOpenNode.data.ctrls,
+      device: { type: 'SerialDevice', value: 'COM30' },
+    },
+  },
+}])
+assert.equal(normalizedPulserNode.data.hardwareRole, 'pulser')
+assert.equal(
+  normalizedPulserNode.data.ctrls.device.value,
+  '',
+  '工艺持久化前必须移除当前工作台串口地址',
+)
+
+const externalizedGraph = externalizeHassRuntimeGraph(
+  [
+    { id: 'before', data: { func: 'OPEN_SERIAL', label: '打开脉冲器串口', ctrls: {} } },
+    { id: 'start-edm', data: { func: 'START_EDM', ctrls: { broker: { value: '192.168.1.54' } } } },
+    { id: 'after', data: { func: 'READ_ZERO_POSITION', ctrls: {} } },
+  ],
+  [
+    { id: 'before-start', source: 'before', target: 'start-edm' },
+    { id: 'start-after', source: 'start-edm', target: 'after' },
+  ],
+)
+assert.deepEqual(externalizedGraph.nodes.map(node => node.id), ['before', 'after'])
+assert.deepEqual(
+  externalizedGraph.edges.map(edge => [edge.source, edge.target]),
+  [['before', 'after']],
+  '客户端接管 MQTT 后必须旁路旧工艺 START_EDM 节点并保留执行顺序',
+)
+
+const genericSerialGraph = externalizeHassRuntimeGraph(
+  [
+    {
+      id: 'legacy-open-serial',
+      data: {
+        func: 'OPEN_SERIAL',
+        label: 'OPEN SERIAL',
+        ctrls: { device: { type: 'SerialDevice', value: '' } },
+      },
+    },
+    { id: 'tbus-handshake', data: { func: 'SHAKE_HANDS', ctrls: {} } },
+  ],
+  [{ id: 'serial-handshake', source: 'legacy-open-serial', target: 'tbus-handshake' }],
+)
+assert.equal(
+  genericSerialGraph.nodes[0].data.hardwareRole,
+  undefined,
+  '流程边只表示执行顺序，通用 OPEN_SERIAL 不得按相邻协议节点猜测设备角色',
+)
+
+const [legacyPulserOpenNode] = normalizeHassHardwareNodes([{
+  id: 'OPEN_SERIAL-f4a0e8b1-3f7e-4748-8cc6-0aaf02630688',
+  data: {
+    func: 'OPEN_SERIAL',
+    label: 'OPEN SERIAL',
+    ctrls: { device: { type: 'SerialDevice', value: '' } },
+  },
+}])
+assert.equal(
+  legacyPulserOpenNode.data.hardwareRole,
+  'pulser',
+  '旧工单缓存中的脉冲器重开节点必须按稳定节点 ID 恢复设备角色',
+)
+
+const [boundExplicitPulserOpenNode] = applyHassHardwareBindings(
+  [{
+    ...genericSerialGraph.nodes[0],
+    data: {
+      ...genericSerialGraph.nodes[0].data,
+      hardwareRole: 'pulser',
+    },
+  }],
+  [{
+    role: 'pulser',
+    displayName: '脉冲器',
+    port: 'COM3',
+    resource: 'COM3',
+    hwid: 'USB VID:PID=0403:6001 SER=PULSER',
+  }],
+)
+assert.equal(
+  boundExplicitPulserOpenNode.data.ctrls.device.value,
+  'COM3',
+  '工艺明确标记为脉冲器的通用串口节点必须注入脉冲器端口',
+)
+
 const durationNode = {
   id: 'HALT_HASS_DURATION_LOOP-test',
   data: {
     func: 'HALT_HASS_DURATION_LOOP',
-    ctrls: {
-      duration_seconds: {
-        type: 'float',
-        value: 3600,
-      },
-    },
   },
 }
 
 assert.equal(hasHassDurationLoop([durationNode]), true)
 assert.equal(hasHassDurationLoop([]), false)
 
-const nowMs = Date.parse('2026-07-27T10:01:40+08:00')
-assert.equal(
-  resolveRemainingRuntimeSeconds(
-    {
-      requiredRuntimeSeconds: 3600,
-      elapsedRuntimeSeconds: 0,
-      remainingRuntimeSeconds: 3600,
-      currentRunStartedAt: '2026-07-27T10:00:00+08:00',
-    },
-    nowMs,
-  ),
-  3500,
-)
-
-const injectedNodes = applyHassCycleDuration([durationNode], 123)
-assert.equal(
-  injectedNodes[0].data.ctrls.duration_seconds.value,
-  123,
-)
-assert.equal(
-  durationNode.data.ctrls.duration_seconds.value,
-  3600,
-  '运行时注入不得修改工艺缓存',
-)
-
 assert.deepEqual(
-  buildHassCycleRunSettings(
-    {
-      nodeDelay: 0,
-      maximumRuntime: 100,
-      maximumConcurrentWorkers: 4,
-    },
-    300,
-  ),
+  buildWorkbenchControlledCycleRunSettings({
+    nodeDelay: 0,
+    maximumRuntime: 100,
+    maximumConcurrentWorkers: 4,
+  }),
   {
     nodeDelay: 0,
-    maximumRuntime: 360,
+    maximumRuntime: 0,
     maximumConcurrentWorkers: 1,
   },
+  '工作台控制模式不得继续使用客户端最大运行时',
 )
 
 assert.deepEqual(
@@ -126,6 +193,7 @@ assert.deepEqual(
   {
     kind: 'temperature',
     time: 12.5,
+    remainingTime: null,
     actual: -31.2,
     target: -35,
   },
@@ -143,9 +211,26 @@ assert.deepEqual(
   {
     kind: 'vibration',
     time: 42,
+    remainingTime: null,
     actual: 8.4,
     target: 9,
   },
+)
+
+assert.deepEqual(
+  parseHassMqttTelemetry({
+    topic: 'EDM/App/Test/List',
+    payload: [
+      { Name: '常规Hass', Type: 'THV_HaltHass', CreatedTime: '2024-12-16 13:38:10' },
+      { Name: '', Type: 'THV_HaltHass', CreatedTime: '' },
+    ],
+    receivedAt: 42000,
+  }),
+  {
+    kind: 'test-list',
+    tests: [{ name: '常规Hass', type: 'THV_HaltHass', createdTime: '2024-12-16 13:38:10' }],
+  },
+  'ListTest 返回的工作台曲线列表必须转换为可选择项',
 )
 
 const waveformSource = fs.readFileSync(
@@ -237,10 +322,10 @@ assert.doesNotMatch(
 
 for (
   const measurementPath of [
-    'ITECH3124/MEASURE_VOLTAGE_ITECH3124/MEASURE_VOLTAGE_ITECH3124.py',
-    'ITECH3124/MEASURE_CURRENT_ITECH3124/MEASURE_CURRENT_ITECH3124.py',
-    'ITECH6723G/MEASURE_VOLTAGE_ITECH6723G/MEASURE_VOLTAGE_ITECH6723G.py',
-    'ITECH6723G/MEASURE_CURRENT_ITECH6723G/MEASURE_CURRENT_ITECH6723G.py',
+    'ITECH3123/MEASURE_VOLTAGE_ITECH3123/MEASURE_VOLTAGE_ITECH3123.py',
+    'ITECH3123/MEASURE_CURRENT_ITECH3123/MEASURE_CURRENT_ITECH3123.py',
+    'ITECH3123_48V/MEASURE_VOLTAGE_ITECH3123_48V/MEASURE_VOLTAGE_ITECH3123_48V.py',
+    'ITECH3123_48V/MEASURE_CURRENT_ITECH3123_48V/MEASURE_CURRENT_ITECH3123_48V.py',
   ]
 ) {
   const source = fs.readFileSync(
@@ -272,7 +357,10 @@ assert.doesNotMatch(
 )
 assert.match(startEdmSource, /"EDM\/App\/Test\/Command", "Connect"/)
 assert.match(startEdmSource, /"EDM\/App\/Test\/Command", "Run"/)
-assert.match(startEdmSource, /"EDM\/THV\/Test\/Command", "RequestDetailStatus"/)
+assert.match(
+  startEdmSource,
+  /"EDM\/THV\/Test\/Command",\s*[\r\n\s]*"RequestDetailStatus"/,
+)
 
 const stopEdmSource = fs.readFileSync(
   path.join(
@@ -293,12 +381,12 @@ const flowchartRunnerSource = fs.readFileSync(
 assert.match(
   flowchartRunnerSource,
   /cycleRemainingSeconds:\s*number\s*\|\s*null/,
-  '循环流运行页必须接收工单剩余秒数',
+  '循环流运行页必须接收 MQTT 工作台剩余秒数',
 )
 assert.match(
   flowchartRunnerSource,
-  /:cycle-total-seconds="cycleTotalSeconds"[\s\S]*:cycle-remaining-seconds="cycleRemainingSeconds"[\s\S]*:cycle-finish-state="cycleFinishState"/,
-  '循环流运行页必须把总时间、剩余倒计时和收尾状态交给右侧状态栏',
+  /:cycle-remaining-seconds="cycleRemainingSeconds"[\s\S]*:cycle-finish-state="cycleFinishState"/,
+  '循环流运行页必须把 MQTT 剩余时间和收尾状态交给右侧状态栏',
 )
 assert.match(
   flowchartRunnerSource,
@@ -307,13 +395,28 @@ assert.match(
 )
 assert.match(
   flowchartRunnerSource,
-  /<HaltHassTelemetryPanel[\s\S]*v-if="activeFlowType === 'cycle'"/,
+  /v-if="activeFlowType === 'cycle'"[\s\S]*<HaltHassTelemetryPanel/,
   '循环流必须使用专用实时状态和曲线面板',
 )
 assert.match(
   flowchartRunnerSource,
   /<HaltHassTelemetryPanel[\s\S]*:preflight-result="preflightResult"/,
   '循环监控面板必须复用同一次测试的设备预检结果',
+)
+assert.match(
+  flowchartRunnerSource,
+  /preflightDisplayItems[\s\S]*等待逐项通信检测[\s\S]*item\.state === 'checking'/,
+  '点击设备检测后必须立即显示逐项检测状态',
+)
+assert.match(
+  flowchartRunnerSource,
+  /#below-overview[\s\S]*<FlojoyExecutionLogPanel[\s\S]*layout="inline"/,
+  '循环流日志必须通过状态面板插槽接入主工作区',
+)
+assert.match(
+  flowchartRunnerSource,
+  /#below-overview[\s\S]*<FlojoyExecutionLogPanel[\s\S]*display-mode="cycle-key"/,
+  '循环流只能展示关键日志和错误日志',
 )
 assert.doesNotMatch(
   flowchartRunnerSource,
@@ -330,18 +433,43 @@ const telemetryPanelSource = fs.readFileSync(
 )
 assert.match(
   telemetryPanelSource,
-  /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*clamp\(300px,\s*24vw,\s*350px\)/,
-  '循环流实时面板必须采用左侧曲线、右侧状态布局',
+  /class="cycle-overview"[\s\S]*class="overview-cards"[\s\S]*class="chart-region"/,
+  '循环流实时状态必须固定在曲线上方',
 )
 assert.match(
   telemetryPanelSource,
-  /\.chart-stack\s*\{[\s\S]*?grid-template-rows:\s*repeat\(3,\s*minmax\(175px,\s*1fr\)\)/,
-  '脉冲、温度和振动三张图必须在左侧等高纵向排列',
+  /class="telemetry-main-grid"[\s\S]*class="chart-region"[\s\S]*class="overview-log-region"[\s\S]*slot name="below-overview"/,
+  '循环流状态总览下方必须按曲线在左、日志在右排列',
+)
+assert.match(
+  telemetryPanelSource,
+  /\.telemetry-main-grid\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*7fr\)\s*minmax\(0,\s*3fr\)/,
+  '循环流曲线与日志必须使用 7:3 的横向比例',
+)
+assert.match(
+  telemetryPanelSource,
+  /\.overview-cards\s*\{[\s\S]*grid-template-columns:\s*repeat\(14,\s*minmax\(0,\s*1fr\)\)[\s\S]*overflow:\s*visible/,
+  '实时状态总览必须在一行内完整显示十四项状态',
+)
+assert.match(
+  telemetryPanelSource,
+  /\.chart-stack\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0,\s*1\.35fr\)\s*minmax\(0,\s*0\.85fr\)/,
+  '脉冲器主图必须放大显示，并允许三张曲线适配单屏剩余高度',
+)
+assert.match(
+  telemetryPanelSource,
+  /\.secondary-chart-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+  '温度和振动必须并排显示且保持独立图表',
 )
 assert.equal(
   (telemetryPanelSource.match(/smooth:\s*true/g) || []).length,
-  4,
-  '脉冲、温度和振动的目标/实际曲线系列都必须启用平滑显示',
+  2,
+  '温度和振动的目标/实际趋势系列必须启用平滑显示',
+)
+assert.match(
+  telemetryPanelSource,
+  /name:\s*'脉冲器实际曲线'[\s\S]*?smooth:\s*false[\s\S]*?name:\s*'脉冲器目标曲线'[\s\S]*?smooth:\s*false/,
+  '脉冲器实时波形必须保留原始采样形状，不得使用曲线平滑伪造波形',
 )
 assert.match(
   telemetryPanelSource,
@@ -361,17 +489,22 @@ assert.match(
 assert.match(
   telemetryPanelSource,
   /appendPulserFrame[\s\S]*time:\s*frameStart \+ frameSpan \* progress/,
-  '脉冲器新帧必须映射到本次循环测试的运行时间轴',
+  '脉冲器全程报告数据必须保留本次循环测试的运行时间',
 )
 assert.match(
   telemetryPanelSource,
-  /const visiblePulserPoints[\s\S]*visibleCurvePoints\(pulserPoints\.value\)/,
-  '脉冲器长时间曲线必须复用时间窗口和保峰降采样',
+  /const visiblePulserPoints[\s\S]*visiblePulserSamples\(pulserPoints\.value,\s*pulserSampleWindow\.value\)/,
+  '脉冲器实时图必须使用独立的最新采样点窗口',
 )
-assert.doesNotMatch(
+assert.match(
   telemetryPanelSource,
-  /帧内采样点/,
-  '脉冲器横轴不得继续显示帧内采样序号',
+  /name:\s*'采样点'/,
+  '脉冲器横轴必须显示采样点，不得复用 MQTT 运行时间',
+)
+assert.match(
+  telemetryPanelSource,
+  /mqttTrendElapsedSeconds\(message\.receivedAt\)/,
+  '温度和振动必须使用 MQTT 接收时间轴，不得复用报文 TotalTime 或脉冲器采样轴',
 )
 assert.match(
   telemetryPanelSource,
@@ -380,8 +513,8 @@ assert.match(
 )
 for (
   const deviceName of [
-    'ITECH 6723',
-    'ITECH 3123',
+    'ITECH 3123（48 V）',
+    'ITECH 3123（90 V）',
     'IFBOX',
     '存储板',
     '脉冲器',
@@ -423,20 +556,20 @@ assert.match(
   /\.power-readings strong\s*\{[\s\S]*font-size:\s*0\.82rem/,
   '电源电压电流读数必须使用足够清晰的字号',
 )
-assert.doesNotMatch(
+assert.match(
   telemetryPanelSource,
   /<span>接口板<\/span>|<span>控制板<\/span>/,
-  '设备状态区不应继续显示接口板/控制板等待数据卡片',
+  '顶部状态总览必须显示接口板和控制板状态',
 )
 assert.match(
   telemetryPanelSource,
-  /总运行时间[\s\S]*剩余时间[\s\S]*运行循环流[\s\S]*MQTT 设置/,
-  '右侧状态栏必须显示时间并承载循环流和 MQTT 操作',
+  /当前时间[\s\S]*测试时间[\s\S]*剩余时间[\s\S]*目标温度[\s\S]*实际温度[\s\S]*目标振动[\s\S]*实际振动/,
+  '顶部状态总览必须使用 MQTT 时间并拆分目标值和实际值',
 )
 assert.match(
   telemetryPanelSource,
-  /if \(running && !previous\)[\s\S]*startMqttTelemetrySession\(\)[\s\S]*else if \(!running && previous\)[\s\S]*stopMqttTelemetrySession\(\)/,
-  'MQTT 数据源必须随同一次循环测试自动订阅和退出',
+  /连接[\s\S]*读取[\s\S]*选择温度、振动曲线[\s\S]*加载[\s\S]*运行[\s\S]*停止/,
+  '循环流顶部必须按工作台协议提供连接、列表、加载、运行和停止操作',
 )
 assert.doesNotMatch(
   telemetryPanelSource,
@@ -445,8 +578,28 @@ assert.doesNotMatch(
 )
 assert.match(
   telemetryPanelSource,
-  /Connect\/Run\/Stop[\s\S]*工艺节点和安全收尾流程负责/,
-  '工作台控制命令和只读 MQTT 数据源必须保持同一测试下的职责分离',
+  /publishMqttCommand\(mqttConfig\.topicPrefix, 'ListTest'\)[\s\S]*publishMqttCommand\(mqttConfig\.topicPrefix, 'LoadTest', name\)[\s\S]*publishMqttCommand\(mqttConfig\.topicPrefix, 'Run'\)/,
+  '工作台曲线必须由 ListTest 获取、LoadTest;名称加载后再运行',
+)
+assert.match(
+  telemetryPanelSource,
+  /WORKBENCH_LIST_TIMEOUT_MS\s*=\s*5_000[\s\S]*5 秒内未收到 EDM\/App\/Test\/List 回包/,
+  '工作台曲线列表无回包时必须给出明确超时反馈',
+)
+assert.match(
+  telemetryPanelSource,
+  /\(\) => mqttConnected\.value[\s\S]*readWorkbenchTests\(\)[\s\S]*\{ immediate: true \}/,
+  'MQTT 连接成功后必须自动读取工作台曲线列表',
+)
+assert.match(
+  telemetryPanelSource,
+  /RequestTestStatus[\s\S]*workbenchFinished/,
+  '循环运行期间必须持续查询工作台状态并在 Stopped 后触发安全收尾',
+)
+assert.match(
+  telemetryPanelSource,
+  /!running && previous && mqttConnected\.value && !workbenchFinishEmitted[\s\S]*'Stop'[\s\S]*'RequestTestStatus'/,
+  'Flojoy 异常退出时必须兜底停止已经启动的工作台',
 )
 assert.doesNotMatch(
   telemetryPanelSource,
@@ -454,29 +607,66 @@ assert.doesNotMatch(
   '循环监控页不得继续显示曲线优先文案或旧数字仪表',
 )
 
+const executionLogPanelSource = fs.readFileSync(
+  path.join(
+    repoRoot,
+    'src/views/halt-hass-test/components/FlojoyExecutionLogPanel.vue',
+  ),
+  'utf8',
+)
+assert.match(
+  executionLogPanelSource,
+  /background:\s*var\(--color-bg-secondary[\s\S]*color:\s*var\(--color-text-primary/,
+  '通信日志面板必须跟随应用亮暗主题变量',
+)
+assert.doesNotMatch(
+  executionLogPanelSource,
+  /background:\s*rgba\(15,\s*23,\s*42,\s*0\.9[46]\)/,
+  '通信日志面板不得固定为深色背景',
+)
+assert.match(
+  executionLogPanelSource,
+  /ROUTINE_CYCLE_FUNCTIONS[\s\S]*isCycleKeyEntry[\s\S]*displayMode === 'cycle-key'/,
+  '循环流日志必须过滤轮询节点并保留关键状态和错误',
+)
+
 const workOrderPageSource = fs.readFileSync(
   path.join(repoRoot, 'src/views/halt-hass-test/index.vue'),
   'utf8',
 )
+const flojoyFlowchartUtilsSource = fs.readFileSync(
+  path.join(repoRoot, 'src-tauri/resources/flojoy/captain/utils/flowchart_utils.py'),
+  'utf8',
+)
+assert.match(
+  flojoyFlowchartUtilsSource,
+  /topology\.jobset_id\s*==\s*request\.jobsetId/,
+  'Flojoy 最大运行时定时器必须校验 jobsetId，避免上一场定时器误停下一场流程',
+)
+assert.match(
+  workOrderPageSource,
+  /buildWorkbenchControlledCycleRunSettings/,
+  '循环流必须禁用 Flojoy 最大运行时并由工作台状态控制',
+)
 assert.doesNotMatch(
   workOrderPageSource,
-  /CYCLE_FINISH_GRACE_SECONDS|scheduleCycleFinishFallback/,
-  '软件倒计时归零后不得继续等待工艺宽限时间',
+  /remainingDurationSeconds|haltHassRemainingDurationSeconds/,
+  '循环流不得再注入工单或工艺剩余时长',
 )
 assert.match(
   workOrderPageSource,
-  /remaining > 0[\s\S]*recoverTimedOutCycleFlow\(\)/,
-  '软件倒计时归零后必须立即触发关闭流程',
+  /handleWorkbenchFinished[\s\S]*recoverTimedOutCycleFlow\('workbench-auto-stop'\)/,
+  '工作台停止后必须进入统一安全收尾流程',
 )
 assert.match(
   workOrderPageSource,
-  /recoverTimedOutCycleFlow[\s\S]*cancelCurrentFlowchartRun\(\)[\s\S]*runHassHardwareShutdown[\s\S]*completionSuccess:\s*true/,
-  '倒计时到期后必须取消残留拓扑、执行独立下电并继续完成流程',
+  /recoverTimedOutCycleFlow[\s\S]*gracefulStopCurrentFlowchartRun\([\s\S]*runHassHardwareShutdown[\s\S]*completionSuccess:\s*true/,
+  '工作台停止后必须先停止采集、等待连接释放，再执行独立下电',
 )
 assert.match(
   workOrderPageSource,
-  /cycleRemainingSeconds\.value\s*=\s*remaining/,
-  '页面倒计时必须使用运行时剩余秒数',
+  /循环流在工作台结束前提前退出，未判定为测试完成/,
+  'Flojoy 提前进入 STANDBY 时不得误判为工作台测试完成',
 )
 const handleExitStart = workOrderPageSource.indexOf('async function handleExit()')
 const handleNewTestStart = workOrderPageSource.indexOf(
@@ -537,7 +727,8 @@ assert.match(
 )
 assert.match(
   shutdownServiceSource,
-  /turn_off_halt_hass_power\(binding\.resource\)/,
+  /turn_off_halt_hass_power\([\s\S]*?binding\.resource,[\s\S]*?binding\.instrumentSerial,[\s\S]*?\)/,
+  '安全下电必须沿用客户端绑定的电源序列号再次确认设备身份',
 )
 
 const durationLoopSource = fs.readFileSync(
@@ -549,8 +740,13 @@ const durationLoopSource = fs.readFileSync(
 )
 assert.match(
   durationLoopSource,
-  /from blocks\.CONTROL_FLOW\.LOOPS\.HALT_HASS_DURATION_LOOP\.halt_hass_duration_state import/,
-  '时长循环辅助模块必须使用 Flojoy blocks 包的完整导入路径',
+  /return _build_result\(default, False\)/,
+  '循环控制节点必须持续进入采集分支，停止时机由 MQTT 工作台状态决定',
+)
+assert.doesNotMatch(
+  durationLoopSource,
+  /duration_seconds|SmallMemory|evaluate_duration_state/,
+  '循环控制节点不得再保存或判断工艺时长',
 )
 
 const topologySource = fs.readFileSync(

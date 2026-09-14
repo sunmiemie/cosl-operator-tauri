@@ -210,7 +210,7 @@ button:focus-visible {
 }
 
 /* 输入框基础样式（排除 Element Plus 组件和特殊组件的输入框） */
-input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):not(.search-input):not(.label-input):not(.form-input),
+input:not(.el-input__inner):not(.el-select__input):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):not(.search-input):not(.label-input):not(.form-input),
 textarea:not(.el-textarea__inner):not(.form-textarea),
 select:not(.el-select__input):not(.form-select) {
   font-family: inherit;
@@ -223,7 +223,7 @@ select:not(.el-select__input):not(.form-select) {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-input:not(.el-input__inner):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):not(.search-input):not(.label-input):not(.form-input):focus,
+input:not(.el-input__inner):not(.el-select__input):not(.el-textarea__inner):not(.lock-mask-input):not(.password-dialog-input):not(.search-input):not(.label-input):not(.form-input):focus,
 textarea:not(.el-textarea__inner):not(.form-textarea):focus,
 select:not(.el-select__input):not(.form-select):focus {
   outline: none;

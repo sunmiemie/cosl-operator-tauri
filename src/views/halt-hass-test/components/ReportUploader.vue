@@ -13,8 +13,9 @@ const props = defineProps<{
   uploadError: string
   uploadSuccess: boolean
   cycleCount: number
-  singleCycleDurationHours: number
-  totalCycleDurationHours: number
+  reportCount: number
+  uploadedCount: number
+  canUpload: boolean
 }>()
 
 // Emits
@@ -54,12 +55,8 @@ const statusClass = computed(() => {
         <strong>{{ cycleCount }} 次</strong>
       </div>
       <div class="runtime-item">
-        <span class="runtime-label">单循环时长</span>
-        <strong>{{ singleCycleDurationHours.toFixed(2) }} 小时</strong>
-      </div>
-      <div class="runtime-item">
-        <span class="runtime-label">循环总时长</span>
-        <strong>{{ totalCycleDurationHours.toFixed(2) }} 小时</strong>
+        <span class="runtime-label">逐板报告</span>
+        <strong>{{ uploadedCount }} / {{ reportCount }} 份</strong>
       </div>
     </div>
 
@@ -114,10 +111,11 @@ const statusClass = computed(() => {
         <button
           v-if="!isUploading"
           class="btn-upload"
+          :disabled="!canUpload"
           @click="emit('upload')"
         >
           <Icon icon="mdi:cloud-upload" />
-          上传报告
+          上传 {{ reportCount }} 份逐板报告
         </button>
         <button
           v-if="uploadError"
@@ -138,10 +136,15 @@ const statusClass = computed(() => {
       </button>
     </div>
 
+    <div v-if="!uploadSuccess && !canUpload" class="review-required">
+      <Icon icon="mdi:clipboard-check-outline" />
+      <span>请先逐份填写并确认测试人员审核，再上传报告。</span>
+    </div>
+
     <!-- 成功提示 -->
     <div v-if="uploadSuccess" class="success-message">
       <Icon icon="mdi:party-popper" />
-      <span>报告已成功上传，请等待审核</span>
+      <span>{{ reportCount }} 份目标板报告已成功上传，请等待逐板审核</span>
     </div>
   </div>
 </template>
@@ -159,7 +162,7 @@ const statusClass = computed(() => {
 
 .runtime-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   width: 100%;
   margin-bottom: 1.5rem;
   border: 1px solid var(--color-border, #e2e8f0);
@@ -323,6 +326,12 @@ const statusClass = computed(() => {
   opacity: 0.9;
 }
 
+.btn-upload:disabled {
+  background: #98a2b3;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
 .btn-retry {
   background: var(--color-bg-tertiary, #f1f5f9);
   color: var(--color-text-secondary, #64748b);
@@ -358,5 +367,18 @@ const statusClass = computed(() => {
 
 .success-message :deep(svg) {
   font-size: 1.125rem;
+}
+
+.review-required {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #fedf89;
+  border-radius: 0.5rem;
+  background: #fffaeb;
+  color: #b54708;
+  font-size: 0.8125rem;
 }
 </style>

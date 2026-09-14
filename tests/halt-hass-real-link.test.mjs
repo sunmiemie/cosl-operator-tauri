@@ -15,6 +15,7 @@ const scheduleDashboardPath = join(
   'src/views/halt-hass-test/components/HaltHassScheduleDashboard.vue',
 )
 const hardwareBindingPath = join(root, 'src/services/hass-hardware-binding.ts')
+const workbenchConfigPath = join(root, 'src/services/hass-workbench-config.ts')
 const flojoyApiPath = join(root, 'src/services/flojoy-api.ts')
 const preflightServicePath = join(
   root,
@@ -30,6 +31,7 @@ const processEditor = readFileSync(processEditorPath, 'utf8')
 const workOrderPage = readFileSync(workOrderPagePath, 'utf8')
 const scheduleDashboard = readFileSync(scheduleDashboardPath, 'utf8')
 const hardwareBinding = readFileSync(hardwareBindingPath, 'utf8')
+const workbenchConfig = readFileSync(workbenchConfigPath, 'utf8')
 const flojoyApi = readFileSync(flojoyApiPath, 'utf8')
 const preflightService = readFileSync(preflightServicePath, 'utf8')
 const flojoySocket = readFileSync(
@@ -67,13 +69,13 @@ assert.match(
 )
 assert.match(
   schedule,
-  /visibleOrderStatuses\s*=\s*\[1,\s*2,\s*4,\s*7\]/,
-  'orders must remain visible while testing and before report submission',
+  /visibleOrderStatuses\s*=\s*\[1,\s*4\]/,
+  'only unexecuted and redo orders may begin a newly selected process version',
 )
 assert.match(
   workOrderPage,
-  /getOrderDetail\(order\.id\)[\s\S]*if \(targetOrder\.status === 2\)[\s\S]*ensureFlojoyConnected\(\)[\s\S]*cancelCurrentFlowchartRun\(\)[\s\S]*resetRunningOrderExecution\(targetOrder\.id\)[\s\S]*setScanOrder\(freshOrder,\s*\[\]\)[\s\S]*setPhase\('detect'\)/,
-  'testing orders must clear stale execution and return to device detection with no retained scans',
+  /getOrderDetail\(order\.id\)[\s\S]*resetHardwarePreflight\(\)[\s\S]*resetScan\(\)[\s\S]*setScanOrder\(targetOrder\)[\s\S]*setPhase\('detect'\)/,
+  'scheduled orders must reload details and return to device detection with fresh scan state',
 )
 assert.match(
   scheduleDashboard,
@@ -91,35 +93,75 @@ assert.match(
   'the selected work order must display its persisted schedule range',
 )
 assert.match(
-  hardwareBinding,
-  /resolveHassHardwareBindings\(\['itech6723'\], serialDevices\)/,
-  'pre-power binding must resolve only the 6723G power supply',
+  flojoyApi,
+  /discoverHassHardwareBindings\(\['itech3123_48v'\]\)/,
+  'pre-power binding must resolve only the client-bound 48V 3123 power supply',
 )
 assert.match(
   hardwareBinding,
-  /'pulser',\s*[\r\n]+\s*'ifbox',\s*[\r\n]+\s*'itech3123',\s*[\r\n]+\s*'storage'/,
-  'preflight must check the complete powered test bench after startup',
+  /'pulser',\s*[\r\n]+\s*'ifbox',\s*[\r\n]+\s*'itech3123',[\s\S]*\.\.\.getRequiredHassHardwareRoles\(nodes\)/,
+  'preflight must check core devices and only add optional roles used by the process',
 )
 assert.match(
   hardwareBinding,
-  /displayName:\s*'存储板'[\s\S]*matches:\s*matchesExtPort/,
-  'storage board must bind to the composite device EXT Port',
+  /func === 'OPEN_SERIAL' && label\.includes\('脉冲器'\)/,
+  'all explicitly labelled pulser serial nodes must receive the runtime COM binding',
+)
+assert.match(
+  flojoyApi,
+  /devices\/halt-hass\/resolve-bindings[\s\S]*json:\s*\{ roles, baudrates, profiles \}/,
+  'runtime hardware binding must send the current client profiles to Flojoy',
 )
 assert.match(
   flojoyApi,
   /powerStabilizationSeconds:\s*20/,
-  'preflight must wait 20 seconds after enabling 6723G output',
+  'preflight must wait 20 seconds after enabling the 48V 3123 output',
 )
 assert.match(flojoyApi, /timeout:\s*60000/, 'the client timeout must cover the 20-second startup wait')
 assert.match(
+  workbenchConfig,
+  /role:\s*'pulser'[\s\S]*vid:\s*0x0403,[\s\S]*pid:\s*0x6001/,
+  'the initial client profile must identify the pulser model without pinning another bench unit',
+)
+assert.match(
+  workbenchConfig,
+  /role:\s*'itech3123_48v'[\s\S]*vid:\s*0x2ec7,[\s\S]*pid:\s*0x0666/,
+  'the initial client profile must recognize the 48V supply model before local assignment',
+)
+assert.match(
+  workbenchConfig,
+  /role:\s*'itech3123'[\s\S]*vid:\s*0x2ec7,[\s\S]*pid:\s*0x0666/,
+  'the initial client profile must recognize the 90V supply model before local assignment',
+)
+assert.match(
+  workbenchConfig,
+  /role:\s*'ifbox'[\s\S]*interfaceMarker:\s*'TBUS PORT'/,
+  'the client profile must identify the IFBOX TBus interface',
+)
+assert.match(
+  workbenchConfig,
+  /role:\s*'storage'[\s\S]*interfaceMarker:\s*'EXT PORT'/,
+  'the client profile must distinguish the storage EXT interface from IFBOX TBus',
+)
+assert.doesNotMatch(
   preflightService,
-  /"pulser": \(0x0403, 0x6001, "B003PLDPA"\)/,
-  'the powered pulser must be rediscovered by its stable USB identity',
+  /ROLE_FIXED_PORTS|ROLE_USB_IDENTITIES|ROLE_INSTRUMENT_SERIALS|"itech3123":\s*"COM\d+"/,
+  'backend discovery must not hardcode a workstation port or device identity',
+)
+assert.doesNotMatch(
+  workbenchConfig,
+  /803510011817110007|803510011817110003|BG02KQYKA|04A2744B8000/,
+  'default client configuration must not contain unit-specific identities from another bench',
 )
 assert.match(
   preflightService,
-  /"storage":\s*"EXT PORT"/,
-  'storage board discovery must distinguish EXT Port from the IFBOX TBus Port',
+  /profile:\s*HaltHassHardwareProfile[\s\S]*_get_persistent_serial_port/,
+  'backend discovery must resolve stable Linux paths from client-owned profiles',
+)
+assert.match(
+  hardwareBinding,
+  /normalizeHassHardwareNodes[\s\S]*HARDWARE_CONTROL_TYPES[\s\S]*value:\s*''/,
+  'saved processes must clear workstation-specific serial and VISA resources',
 )
 const powerCallIndex = preflightService.indexOf(') = _prepare_halt_hass_power(')
 const waitIndex = preflightService.indexOf('time.sleep(stabilization_seconds)', powerCallIndex)
@@ -128,19 +170,19 @@ const enumerationIndex = preflightService.indexOf(
   waitIndex,
 )
 const deviceCheckIndex = preflightService.indexOf('results.append(checker(binding))', enumerationIndex)
-assert.ok(powerCallIndex >= 0, 'preflight must verify and enable 6723G output')
-assert.ok(waitIndex > powerCallIndex, 'preflight must wait only after 6723G output is enabled')
+assert.ok(powerCallIndex >= 0, 'preflight must verify and enable the 48V 3123 output')
+assert.ok(waitIndex > powerCallIndex, 'preflight must wait only after the 48V 3123 output is enabled')
 assert.ok(enumerationIndex > waitIndex, 'powered devices must be enumerated after the startup wait')
 assert.ok(deviceCheckIndex > enumerationIndex, 'other device communication checks must run after enumeration')
 assert.match(
   preflightService,
   /def _restore_local[\s\S]*instrument\.write\("SYST:LOC"\)/,
-  '6723G preflight must provide an explicit return-to-local-control command',
+  '3123 preflight must provide an explicit return-to-local-control command',
 )
 assert.match(
   preflightService,
   /finally:[\s\S]*_restore_local\(power_instrument\)[\s\S]*power_instrument\.close\(\)/,
-  'preflight must restore local control before releasing the 6723G serial handle',
+  'preflight must restore local control before releasing the 3123 serial handle',
 )
 assert.doesNotMatch(
   preflightService,
@@ -164,7 +206,7 @@ assert.doesNotMatch(
 )
 const onlineCheckSource = preflightService.slice(
   preflightService.indexOf('def _check_serial_online'),
-  preflightService.indexOf('def run_halt_hass_preflight'),
+  preflightService.indexOf('def _check_ifbox'),
 )
 assert.match(
   onlineCheckSource,
@@ -179,7 +221,7 @@ assert.doesNotMatch(
 assert.match(
   preflightService,
   /def turn_off_halt_hass_power[\s\S]*instrument\.write\("OUTP OFF"\)[\s\S]*_restore_local\(instrument\)[\s\S]*instrument\.close\(\)/,
-  'power-off must restore local control before closing the 6723G connection',
+  'power-off must restore local control before closing the 3123 connection',
 )
 
 assert.equal(
@@ -201,42 +243,22 @@ assert.match(
 assert.match(service, /boardSerials,\s*[\s\S]*scannedBoards,/, 'mapHaltHassOrder must preserve management preset board serials')
 assert.match(service, /scheduleSegments,/, 'mapHaltHassOrder must preserve backend schedule segments')
 assert.match(service, /cycleCount:\s*Number\(dto\.cycle_count \?\? dto\.cycleCount/, 'order mapping must preserve cycle count')
-assert.match(service, /totalCycleDurationHours:\s*Number\(/, 'order mapping must preserve cycle total duration')
-assert.match(service, /remainingRuntimeSeconds:\s*Number\(/, 'order mapping must preserve remaining runtime')
+assert.doesNotMatch(service, /totalCycleDurationHours:\s*Number\(/, 'order mapping must not retain planned process duration')
+assert.doesNotMatch(service, /remainingRuntimeSeconds:\s*Number\(/, 'order mapping must not retain planned remaining runtime')
 
-assert.match(service, /operatorId:\s*data\.operatorId/, 'startOrder must send camelCase operatorId')
-assert.match(service, /boardSerials:\s*data\.boardSerials/, 'startOrder must send camelCase boardSerials')
-assert.doesNotMatch(service, /restart:\s*data\.restart/, 'normal start must not carry the removed restart mode')
-assert.match(
-  service,
-  /startOrderCycleRuntime[\s\S]*\/test\/halt-hass\/order\/cycle\/start\/\$\{orderId\}\//,
-  'cycle runtime must start through its dedicated endpoint',
-)
+assert.match(service, /listExecutionProcessOptions[\s\S]*orderId:\s*String\(order\.id\)/, 'client process selection must request options from the frozen order data')
+assert.match(service, /item\.productModelId === order\.productModel\?\.id/, 'client process selection must recheck the product type')
+assert.match(service, /item\.clientTestType === order\.clientTestType/, 'client process selection must recheck the client page type')
+assert.match(service, /item\.experimentType === order\.experimentType/, 'client process selection must reject an unknown or mismatched experiment mode')
+assert.match(service, /createHaltHassSession[\s\S]*processId:\s*number[\s\S]*orderIds:\s*number\[\][\s\S]*boards:/, 'session creation must carry the client-selected process and boards')
 assert.match(
   workOrderPage,
-  /await runFlowchart\([\s\S]*activateCycleRuntime\(\)/,
-  'cycle runtime accounting must start only after Flojoy accepts the cycle flow',
+  /await runFlowchart\([\s\S]*循环流开始运行，测试时间由工作台曲线控制/,
+  'cycle flow must be accepted by Flojoy before it is reported as running',
 )
-assert.match(
-  service,
-  /pauseOrderCycleRuntime[\s\S]*\/test\/halt-hass\/order\/cycle\/pause\/\$\{orderId\}\//,
-  'cycle runtime must provide an idempotent pause endpoint',
-)
-assert.match(
-  workOrderPage,
-  /completeActiveFlowchartRun[\s\S]*pauseCycleRuntime\(\)[\s\S]*onFlowchartComplete/,
-  'cycle completion must freeze accumulated runtime before report upload',
-)
-assert.match(
-  service,
-  /resetRunningOrderExecution[\s\S]*\/test\/halt-hass\/order\/reset-running\/\$\{orderId\}\//,
-  'running-order reset must use a dedicated endpoint without scanned serials',
-)
-assert.doesNotMatch(service, /operator_id:\s*data\.operatorId/, 'startOrder must not send operator_id')
-assert.doesNotMatch(service, /board_serials:\s*data\.boardSerials/, 'startOrder must not send board_serials')
-
-assert.match(service, /data:\s*tempData/, 'uploadTempData must send data')
-assert.doesNotMatch(service, /data_json:\s*tempData/, 'uploadTempData must not send data_json')
+assert.doesNotMatch(service, /startOrderCycleRuntime|pauseOrderCycleRuntime/, 'order runtime endpoints must be removed')
+assert.doesNotMatch(service, /resetRunningOrderExecution/, 'legacy running-order reset must not remain in the client')
+assert.doesNotMatch(service, /startOrder\(|uploadTempData|downloadTempData|downloadFeedbackData/, 'legacy order execution and resume APIs must not remain in the client')
 
 assert.match(service, /orderId:\s*data\.orderId/, 'uploadReport must send orderId')
 assert.match(service, /reportJson:\s*data\.reportJson/, 'uploadReport must send reportJson')
@@ -255,16 +277,7 @@ assert.match(
   'downloadProcessData must fetch process detail from the existing detail endpoint',
 )
 
-assert.match(
-  testFlow,
-  /restoreTemp[\s\S]*activateOrderRuntime\(order\)/,
-  'restoring saved work must resume backend runtime accounting',
-)
-assert.match(
-  testFlow,
-  /loadFeedback[\s\S]*activateOrderRuntime\(order\)/,
-  'redo work must restart backend runtime accounting',
-)
+assert.doesNotMatch(testFlow, /activateOrderRuntime|pauseCycleRuntime/, 'client must not account planned order runtime')
 assert.doesNotMatch(testFlow, /restartRunningTest/, 'the removed partial restart mode must not remain')
 assert.match(
   flojoyApi,
@@ -272,12 +285,7 @@ assert.match(
   'restart must support cancelling the active Flojoy topology after the local job id is lost',
 )
 assert.match(reportUploader, /循环次数/, 'report upload must display cycle count')
-assert.match(reportUploader, /循环总时长/, 'report upload must display total cycle duration')
-assert.match(
-  service,
-  /downloadFeedbackData[\s\S]*unwrapBackendEnvelope/,
-  'downloadFeedbackData must unwrap backend feedback envelope',
-)
+assert.doesNotMatch(reportUploader, /循环总时长/, 'report upload must not display planned cycle duration')
 assert.match(
   service,
   /const preset = order\.boardSerials \|\| \[\][\s\S]*if \(!matched\) return \{ valid: false \}/,

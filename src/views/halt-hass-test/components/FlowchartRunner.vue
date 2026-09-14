@@ -5,16 +5,24 @@
  */
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { Icon } from '@iconify/vue'
+import FlojoyExecutionLogPanel from './FlojoyExecutionLogPanel.vue'
 import HaltHassTelemetryPanel from './HaltHassTelemetryPanel.vue'
+import HassHardwareBindingSettings from './HassHardwareBindingSettings.vue'
 import type {
   HaltHassFlowType,
   HaltHassProcessJson,
 } from '@/views/process-halt-hass/types'
-import type { NodeRunResult } from '../types'
+import type { HaltHassTelemetrySnapshot, NodeRunResult } from '../types'
 import type { WorkerJobResponse } from '@/composables/useFlojoySocket'
 import type {
   HassHardwarePreflightResponse,
+  FlojoyExecutionLogEntry,
 } from '@/services/flojoy-api'
+import {
+  getHassPreflightRequiredRoles,
+  type HassHardwareRole,
+} from '@/services/hass-hardware-binding'
+import { sortFlowNodesByExecutionOrder } from '../utils/flowOrder'
 
 // Props
 const props = defineProps<{
@@ -22,7 +30,6 @@ const props = defineProps<{
   activeFlowType: HaltHassFlowType
   testFlowPassed: boolean
   isRunning: boolean
-  cycleTotalSeconds: number | null
   cycleRemainingSeconds: number | null
   cycleFinishState: 'idle' | 'running' | 'finishing' | 'recovering'
   currentNodeId: string
@@ -33,21 +40,51 @@ const props = defineProps<{
   isPreflightChecking: boolean
   preflightReady: boolean
   lastSocketMessage: WorkerJobResponse | null
+  jobsetId: string
+  sessionId: number | null
+  defaultWorkbenchTestName?: string
+  socketId: string
+  executionLogs: FlojoyExecutionLogEntry[]
 }>()
+
+const telemetryPanelRef = ref<{
+  finalizeTelemetry: () => HaltHassTelemetrySnapshot
+  getTelemetrySnapshot: () => HaltHassTelemetrySnapshot
+  waitForRectifierStages: () => Promise<void>
+} | null>(null)
+const hardwareSettingsOpen = ref(false)
+
+function finalizeTelemetry(): HaltHassTelemetrySnapshot | null {
+  return telemetryPanelRef.value?.finalizeTelemetry() ?? null
+}
+
+function getTelemetrySnapshot(): HaltHassTelemetrySnapshot | null {
+  return telemetryPanelRef.value?.getTelemetrySnapshot() ?? null
+}
+
+async function waitForRectifierStages(): Promise<void> {
+  await telemetryPanelRef.value?.waitForRectifierStages()
+}
+
+defineExpose({ finalizeTelemetry, getTelemetrySnapshot, waitForRectifierStages })
 
 // Emits
 const emit = defineEmits<{
   run: []
   stop: []
   preflight: []
+  hardwareConfigChanged: []
+  workbenchFinished: [{ status: string; elapsedSeconds: number; remainingSeconds: number }]
+  rectifierFailure: [{ message: string }]
 }>()
 
 // 计算属性
 const nodes = computed(() => {
   if (!props.processJson) return []
-  return props.activeFlowType === 'test'
-    ? props.processJson.testFlow.nodes
-    : props.processJson.cycleFlow.nodes
+  const flowchart = props.activeFlowType === 'test'
+    ? props.processJson.testFlow
+    : props.processJson.cycleFlow
+  return sortFlowNodesByExecutionOrder(flowchart.nodes, flowchart.edges)
 })
 const activeFlowLabel = computed(() =>
   props.activeFlowType === 'test' ? '测试流' : '循环流'
@@ -70,6 +107,90 @@ const isComplete = computed(() =>
   completedCount.value >= totalNodes.value && totalNodes.value > 0
 )
 const hasError = computed(() => failedCount.value > 0)
+
+type PreflightDisplayState = 'waiting' | 'checking' | 'success' | 'error'
+
+const preflightRoleNames: Record<HassHardwareRole, string> = {
+  itech3123_48v: 'ITECH 3123（48 V）',
+  itech3123: 'ITECH 3123（90 V）',
+  itech3123_input: 'ITECH 3123（整流稳压输入源）',
+  itech8513_48v_load: 'ITECH 8513（48 V 负载）',
+  itech8513_90v_load: 'ITECH 8513（90 V 负载）',
+  pulser: '脉冲器',
+  ifbox: 'IFBOX',
+  storage: '存储板',
+}
+const preflightRevealCount = ref(0)
+let preflightRevealTimer: ReturnType<typeof setInterval> | null = null
+
+const expectedPreflightRoles = computed<HassHardwareRole[]>(() => {
+  if (!props.processJson) return []
+  const reportType = props.processJson.metadata.reportType || 'drive_control'
+  const required = getHassPreflightRequiredRoles([
+    ...props.processJson.testFlow.nodes,
+    ...props.processJson.cycleFlow.nodes,
+  ], reportType)
+  return reportType === 'rectifier_regulator'
+    ? required
+    : Array.from(new Set<HassHardwareRole>(['itech3123_48v', ...required]))
+})
+
+const preflightDisplayItems = computed(() => {
+  const resultByRole = new Map(
+    (props.preflightResult?.results ?? []).map(result => [result.role, result]),
+  )
+  const roles = Array.from(new Set([
+    ...expectedPreflightRoles.value,
+    ...(props.preflightResult?.results ?? []).map(result => result.role as HassHardwareRole),
+  ]))
+
+  return roles.map((role, index) => {
+    const result = resultByRole.get(role)
+    let state: PreflightDisplayState = 'waiting'
+    let message = index === 0 ? '准备检测' : '等待前置设备检测'
+
+    if (props.isPreflightChecking) {
+      state = index === 0 ? 'checking' : 'waiting'
+      message = index === 0 ? '正在检测并准备 48 V 供电' : '等待逐项通信检测'
+    } else if (props.preflightResult) {
+      if (index < preflightRevealCount.value) {
+        state = result?.success ? 'success' : 'error'
+        message = result?.message || props.preflightResult.message || '未返回设备检测结果'
+      } else {
+        message = '正在确认检测结果'
+      }
+    }
+
+    return {
+      role,
+      displayName: result?.displayName || preflightRoleNames[role] || role,
+      state,
+      message,
+    }
+  })
+})
+
+watch(
+  [() => props.isPreflightChecking, () => props.preflightResult],
+  ([checking, result]) => {
+    if (preflightRevealTimer) clearInterval(preflightRevealTimer)
+    preflightRevealTimer = null
+    preflightRevealCount.value = 0
+    if (checking || !result) return
+
+    const total = Math.max(expectedPreflightRoles.value.length, result.results.length)
+    if (!total) return
+    preflightRevealCount.value = 1
+    preflightRevealTimer = setInterval(() => {
+      preflightRevealCount.value += 1
+      if (preflightRevealCount.value >= total) {
+        if (preflightRevealTimer) clearInterval(preflightRevealTimer)
+        preflightRevealTimer = null
+      }
+    }, 220)
+  },
+  { immediate: true },
+)
 
 // 获取节点状态
 function getNodeStatus(nodeId: string): 'pending' | 'running' | 'success' | 'error' {
@@ -105,6 +226,10 @@ watch(() => props.isRunning, (running) => {
 onUnmounted(() => {
   if (timer) {
     clearInterval(timer)
+  }
+  if (preflightRevealTimer) {
+    clearInterval(preflightRevealTimer)
+    preflightRevealTimer = null
   }
 })
 
@@ -201,36 +326,61 @@ const runningStatusText = computed(() => {
           />
           <div>
             <strong>设备通信检测</strong>
-            <p>先检测 6723G 并输出 48 V / 1 A，等待 20 秒后检测脉冲器、IFBOX 和其余设备</p>
+            <p v-if="processJson?.metadata.reportType === 'rectifier_regulator'">按仪器序列号分别检测 3123 输入源、48 V 负载和 90 V 负载；检测阶段不输出电压</p>
+            <p v-else>先按序列号检测固定的 3123 并输出 48 V / 1 A，等待 20 秒后检测脉冲器、IFBOX 和其余设备</p>
           </div>
         </div>
-        <button
-          class="btn-preflight"
-          :disabled="isRunning || isPreflightChecking"
-          @click="emit('preflight')"
-        >
-          <Icon
-            :icon="isPreflightChecking ? 'mdi:loading' : 'mdi:access-point-check'"
-            :class="{ spin: isPreflightChecking }"
-          />
-          {{
-            isPreflightChecking
-              ? '检测中...'
-              : preflightResult
-                ? '重新检测'
-                : '开始检测'
-          }}
-        </button>
+        <div class="preflight-actions">
+          <button
+            class="btn-preflight secondary"
+            :disabled="isRunning || isPreflightChecking"
+            @click="hardwareSettingsOpen = true"
+          >
+            <Icon icon="mdi:usb-port" />
+            设备绑定
+          </button>
+          <button
+            class="btn-preflight"
+            :disabled="isRunning || isPreflightChecking"
+            @click="emit('preflight')"
+          >
+            <Icon
+              :icon="isPreflightChecking ? 'mdi:loading' : 'mdi:access-point-check'"
+              :class="{ spin: isPreflightChecking }"
+            />
+            {{
+              isPreflightChecking
+                ? '检测中...'
+                : preflightResult
+                  ? '重新检测'
+                  : '开始检测'
+            }}
+          </button>
+        </div>
       </div>
 
-      <div v-if="preflightResult" class="preflight-results">
+      <div
+        v-if="preflightDisplayItems.length"
+        class="preflight-results"
+        aria-live="polite"
+        aria-label="设备通信检测进度"
+      >
         <div
-          v-for="item in preflightResult.results"
+          v-for="item in preflightDisplayItems"
           :key="item.role"
           class="preflight-item"
-          :class="{ success: item.success, error: !item.success }"
+          :class="item.state"
         >
-          <Icon :icon="item.success ? 'mdi:check-circle' : 'mdi:close-circle'" />
+          <Icon
+            :icon="item.state === 'success'
+              ? 'mdi:check-circle'
+              : item.state === 'error'
+                ? 'mdi:close-circle'
+                : item.state === 'checking'
+                  ? 'mdi:loading'
+                  : 'mdi:clock-outline'"
+            :class="{ spin: item.state === 'checking' }"
+          />
           <span class="preflight-device">{{ item.displayName }}</span>
           <span class="preflight-message">{{ item.message }}</span>
         </div>
@@ -252,92 +402,129 @@ const runningStatusText = computed(() => {
       </span>
     </div>
 
-    <HaltHassTelemetryPanel
-      v-if="activeFlowType === 'cycle'"
-      :process-json="processJson"
-      :last-message="lastSocketMessage"
-      :is-running="isRunning"
-      :can-run="Boolean(processJson && preflightReady)"
-      :cycle-total-seconds="cycleTotalSeconds"
-      :cycle-remaining-seconds="cycleRemainingSeconds"
-      :cycle-finish-state="cycleFinishState"
-      :server-status="serverStatus"
-      :preflight-result="preflightResult"
-      @run="emit('run')"
-      @stop="emit('stop')"
-    />
+    <div v-if="activeFlowType === 'cycle'" class="cycle-flow-workspace">
+      <HaltHassTelemetryPanel
+        ref="telemetryPanelRef"
+        :process-json="processJson"
+        :last-message="lastSocketMessage"
+        :is-running="isRunning"
+        :can-run="Boolean(processJson && preflightReady)"
+        :cycle-remaining-seconds="cycleRemainingSeconds"
+        :cycle-finish-state="cycleFinishState"
+        :server-status="serverStatus"
+        :preflight-result="preflightResult"
+        :jobset-id="jobsetId"
+        :session-id="sessionId"
+        :default-workbench-test-name="defaultWorkbenchTestName"
+        @run="emit('run')"
+        @stop="emit('stop')"
+        @workbench-finished="emit('workbenchFinished', $event)"
+        @rectifier-failure="emit('rectifierFailure', $event)"
+      >
+        <template #below-overview>
+          <FlojoyExecutionLogPanel
+            :jobset-id="jobsetId"
+            :running="isRunning"
+            :flow-label="activeFlowLabel"
+            :socket-id="socketId"
+            :live-entries="executionLogs"
+            display-mode="cycle-key"
+            persistent
+            layout="inline"
+          />
+        </template>
+      </HaltHassTelemetryPanel>
+    </div>
 
-    <template v-else>
-      <!-- 测试流保留节点执行视图；循环流将主体空间全部交给实时曲线。 -->
-      <div class="progress-section">
-        <div class="progress-header">
-          <span class="progress-label">运行进度</span>
-          <span class="progress-value">{{ completedCount }} / {{ totalNodes }}</span>
+    <div v-else class="test-flow-workspace">
+      <!-- 测试流保留节点执行视图，右侧日志栏常驻显示。 -->
+      <main class="test-flow-main">
+        <div class="progress-section">
+          <div class="progress-header">
+            <span class="progress-label">运行进度</span>
+            <span class="progress-value">{{ completedCount }} / {{ totalNodes }}</span>
+          </div>
+          <div class="progress-bar">
+            <div
+              class="progress-fill"
+              :class="{ error: hasError }"
+              :style="{ width: `${progress}%` }"
+            ></div>
+          </div>
+          <div class="progress-stats">
+            <span class="stat-item success">
+              <Icon icon="mdi:check-circle" />
+              {{ successCount }} 成功
+            </span>
+            <span class="stat-item error">
+              <Icon icon="mdi:close-circle" />
+              {{ failedCount }} 失败
+            </span>
+          </div>
         </div>
-        <div class="progress-bar">
-          <div
-            class="progress-fill"
-            :class="{ error: hasError }"
-            :style="{ width: `${progress}%` }"
-          ></div>
-        </div>
-        <div class="progress-stats">
-          <span class="stat-item success">
-            <Icon icon="mdi:check-circle" />
-            {{ successCount }} 成功
-          </span>
-          <span class="stat-item error">
-            <Icon icon="mdi:close-circle" />
-            {{ failedCount }} 失败
-          </span>
-        </div>
-      </div>
 
-      <!-- 运行状态指示 -->
-      <div v-if="isRunning" class="running-indicator">
-        <div class="pulse-ring"></div>
-        <div class="running-info">
-          <span class="running-label">正在执行</span>
-          <span class="running-node">{{ runningStatusText }}</span>
+        <!-- 运行状态指示 -->
+        <div v-if="isRunning" class="running-indicator">
+          <div class="pulse-ring"></div>
+          <div class="running-info">
+            <span class="running-label">正在执行</span>
+            <span class="running-node">{{ runningStatusText }}</span>
+          </div>
         </div>
-      </div>
 
-      <!-- 完成状态 -->
-      <div v-else-if="isComplete" class="complete-indicator" :class="{ error: hasError }">
-        <Icon :icon="hasError ? 'mdi:alert-circle' : 'mdi:check-circle'" />
-        <span>{{ hasError ? '运行完成，存在异常' : '运行完成' }}</span>
-      </div>
-
-      <!-- 节点列表 -->
-      <div class="node-list">
-        <div class="list-header">
-          <span>节点列表</span>
-          <span class="node-count">{{ totalNodes }} 个节点</span>
+        <!-- 完成状态 -->
+        <div v-else-if="isComplete" class="complete-indicator" :class="{ error: hasError }">
+          <Icon :icon="hasError ? 'mdi:alert-circle' : 'mdi:check-circle'" />
+          <span>{{ hasError ? '运行完成，存在异常' : '运行完成' }}</span>
         </div>
-        <div class="node-items">
-          <div
-            v-for="node in nodes"
-            :key="node.id"
-            class="node-item"
-            :class="getNodeStatus(node.id)"
-          >
-            <div class="node-status-icon">
-              <Icon v-if="getNodeStatus(node.id) === 'running'" icon="mdi:loading" class="spin" />
-              <Icon v-else-if="getNodeStatus(node.id) === 'success'" icon="mdi:check" />
-              <Icon v-else-if="getNodeStatus(node.id) === 'error'" icon="mdi:close" />
-              <Icon v-else icon="mdi:circle-outline" />
-            </div>
-            <div class="node-info">
-              <span class="node-name">{{ node.data?.label || node.id }}</span>
-              <span class="node-type">{{ node.data?.type || 'Unknown' }}</span>
-            </div>
-            <div class="node-result" v-if="getNodeStatus(node.id) === 'error'">
-              {{ nodeResults.find(r => r.nodeId === node.id)?.error || '执行失败' }}
+
+        <!-- 节点列表 -->
+        <div class="node-list">
+          <div class="list-header">
+            <span>节点列表</span>
+            <span class="node-count">{{ totalNodes }} 个节点</span>
+          </div>
+          <div class="node-items">
+            <div
+              v-for="(node, index) in nodes"
+              :key="node.id"
+              class="node-item"
+              :class="getNodeStatus(node.id)"
+            >
+              <span class="node-order">{{ String(index + 1).padStart(2, '0') }}</span>
+              <div class="node-status-icon">
+                <Icon v-if="getNodeStatus(node.id) === 'running'" icon="mdi:loading" class="spin" />
+                <Icon v-else-if="getNodeStatus(node.id) === 'success'" icon="mdi:check" />
+                <Icon v-else-if="getNodeStatus(node.id) === 'error'" icon="mdi:close" />
+                <Icon v-else icon="mdi:circle-outline" />
+              </div>
+              <div class="node-info">
+                <span class="node-name">{{ node.data?.label || node.id }}</span>
+                <span class="node-type">{{ node.data?.type || 'Unknown' }}</span>
+              </div>
+              <div class="node-result" v-if="getNodeStatus(node.id) === 'error'">
+                {{ nodeResults.find(r => r.nodeId === node.id)?.error || '执行失败' }}
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </template>
+      </main>
+
+      <FlojoyExecutionLogPanel
+        :jobset-id="jobsetId"
+        :running="isRunning"
+        :flow-label="activeFlowLabel"
+        :socket-id="socketId"
+        :live-entries="executionLogs"
+        persistent
+        layout="rail"
+      />
+    </div>
+
+    <HassHardwareBindingSettings
+      v-model="hardwareSettingsOpen"
+      @saved="emit('hardwareConfigChanged')"
+    />
   </div>
 </template>
 
@@ -515,6 +702,12 @@ const runningStatusText = computed(() => {
   gap: 1rem;
 }
 
+.preflight-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
 .preflight-title {
   display: flex;
   align-items: center;
@@ -563,6 +756,11 @@ const runningStatusText = computed(() => {
   background: rgba(245, 158, 11, 0.1);
 }
 
+.btn-preflight.secondary {
+  border-color: var(--color-border, #cbd5e1);
+  color: var(--color-text-primary, #475569);
+}
+
 .btn-preflight:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -593,6 +791,19 @@ const runningStatusText = computed(() => {
 
 .preflight-item.error > svg {
   color: rgb(220, 38, 38);
+}
+
+.preflight-item.checking > svg {
+  color: var(--color-primary, #3b82f6);
+}
+
+.preflight-item.waiting > svg {
+  color: var(--color-text-tertiary, #94a3b8);
+}
+
+.preflight-item.checking {
+  border: 1px solid color-mix(in srgb, var(--color-primary, #3b82f6) 30%, transparent);
+  background: var(--color-primary-light, rgba(59, 130, 246, 0.08));
 }
 
 .preflight-device {
@@ -796,6 +1007,39 @@ const runningStatusText = computed(() => {
   background: rgba(239, 68, 68, 0.05);
 }
 
+.test-flow-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 30vw, 480px);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cycle-flow-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.test-flow-main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.node-order {
+  flex: 0 0 2rem;
+  color: var(--color-text-tertiary, #94a3b8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
 .node-status-icon {
   width: 1.5rem;
   height: 1.5rem;
@@ -855,5 +1099,24 @@ const runningStatusText = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (max-width: 1080px) {
+  .test-flow-workspace {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+
+@media (max-width: 820px) {
+  .test-flow-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(320px, 1fr) 260px;
+    overflow-y: auto;
+  }
+
+  .test-flow-main {
+    min-height: 320px;
+  }
+
 }
 </style>

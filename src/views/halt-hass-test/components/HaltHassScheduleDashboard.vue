@@ -287,7 +287,7 @@ function startSelectedOrder() {
             <thead>
               <tr>
                 <th>工单号</th>
-                <th>工艺</th>
+                <th>产品类型</th>
                 <th>操作</th>
                 <th>状态</th>
               </tr>
@@ -310,7 +310,9 @@ function startSelectedOrder() {
                       <span class="device-summary" :title="order.orderNo">{{ order.orderNo }}</span>
                     </div>
                   </td>
-                  <td class="cell-process" :title="order.process?.name">{{ order.process?.name || '-' }}</td>
+                  <td class="cell-process" :title="order.productModel?.name || ''">
+                    {{ order.productModel?.name || '-' }}
+                  </td>
                   <td class="cell-action">
                     <button class="op-btn view" type="button" @click.stop="openDetail(order)">详情</button>
                   </td>

@@ -5,9 +5,8 @@
 import { ref, computed } from 'vue'
 import type {
   PagePhase,
-  TestMode,
   HaltHassOrder,
-  HaltHassTempData,
+  HaltHassTestSession,
   DeviceStatus,
   NodeRunResult,
 } from '@/views/halt-hass-test/types'
@@ -16,17 +15,10 @@ import type {
   HaltHassProcessJson,
 } from '@/views/process-halt-hass/types'
 import {
-  startOrder,
-  startOrderCycleRuntime,
-  pauseOrderCycleRuntime,
-  uploadTempData,
-  downloadTempData,
-  downloadFeedbackData,
+  startHaltHassSession,
   downloadProcessData,
-  type HaltHassStartResult,
 } from '@/services/halt-hass-order'
 import { useAuth } from '@/composables/useAuth'
-import { isMockHaltHassOrder, MOCK_HALT_HASS_PROCESS } from '../mock-halt-hass-fixture'
 
 export function useHaltHassTest() {
   const { userInfo } = useAuth()
@@ -36,11 +28,11 @@ export function useHaltHassTest() {
   // 当前阶段
   const phase = ref<PagePhase>('schedule')
 
-  // 测试模式
-  const testMode = ref<TestMode>('normal')
-
   // 当前工单
   const currentOrder = ref<HaltHassOrder | null>(null)
+
+  // 当前测试场次。工单只是排程入口，实际执行以场次及其板卡为准。
+  const currentSession = ref<HaltHassTestSession | null>(null)
 
   // 工艺数据
   const processJson = ref<HaltHassProcessJson | null>(null)
@@ -158,90 +150,12 @@ export function useHaltHassTest() {
     currentOrder.value = order
   }
 
-  function getOrderSerials(order: HaltHassOrder): string[] {
-    const scannedSerials = (order.scannedBoards || []).map(board => board.serial.trim()).filter(Boolean)
-    if (scannedSerials.length) return scannedSerials
-
-    return (order.boardSerials || [])
-      .map((item) => {
-        if (typeof item === 'string') return item.trim()
-        return String(item.serial || item.sn || item.serialNumber || item.serial_num || '').trim()
-      })
-      .filter(Boolean)
+  function setSession(session: HaltHassTestSession | null): void {
+    currentSession.value = session
   }
 
-  function applyRuntimeState(order: HaltHassOrder, runtime?: HaltHassStartResult): void {
-    if (!runtime) return
-    order.status = 2
-    order.startedAt = runtime.startedAt || order.startedAt
-    order.cycleCount = runtime.cycleCount ?? order.cycleCount
-    order.singleCycleDurationHours = runtime.singleCycleDurationHours ?? order.singleCycleDurationHours
-    order.totalCycleDurationHours = runtime.totalCycleDurationHours ?? order.totalCycleDurationHours
-    order.requiredRuntimeSeconds = runtime.requiredRuntimeSeconds ?? order.requiredRuntimeSeconds
-    order.elapsedRuntimeSeconds = runtime.elapsedRuntimeSeconds ?? order.elapsedRuntimeSeconds
-    order.remainingRuntimeSeconds = runtime.remainingRuntimeSeconds ?? order.remainingRuntimeSeconds
-    order.runtimeProgress = runtime.runtimeProgress ?? order.runtimeProgress
-    order.runtimeConfigured = runtime.runtimeConfigured ?? order.runtimeConfigured
-    order.runtimeCompleted = runtime.runtimeCompleted ?? order.runtimeCompleted
-    if (runtime.currentRunStartedAt !== undefined) {
-      order.currentRunStartedAt = runtime.currentRunStartedAt
-    }
-  }
-
-  async function activateOrderRuntime(
-    order: HaltHassOrder,
-    serials = getOrderSerials(order),
-  ): Promise<boolean> {
-    if (isMockHaltHassOrder(order)) return true
-    if (!userInfo.value) {
-      errorMessage.value = '用户信息不存在'
-      return false
-    }
-    if (serials.length !== order.boardCount) {
-      errorMessage.value = `需要 ${order.boardCount} 个有效电路板序列号，当前仅有 ${serials.length} 个`
-      return false
-    }
-
-    const result = await startOrder(order.id, {
-      operatorId: userInfo.value.id,
-      boardSerials: serials,
-    })
-    if (!result.success) {
-      errorMessage.value = result.error || '开始测试失败'
-      return false
-    }
-    applyRuntimeState(order, result.data)
-    return true
-  }
-
-  async function activateCycleRuntime(): Promise<boolean> {
-    if (!currentOrder.value) {
-      errorMessage.value = '工单不存在'
-      return false
-    }
-    if (isMockHaltHassOrder(currentOrder.value)) return true
-
-    const result = await startOrderCycleRuntime(currentOrder.value.id)
-    if (!result.success) {
-      errorMessage.value = result.error || '启动循环流计时失败'
-      return false
-    }
-    applyRuntimeState(currentOrder.value, result.data)
-    return true
-  }
-
-  async function pauseCycleRuntime(): Promise<boolean> {
-    if (!currentOrder.value || isMockHaltHassOrder(currentOrder.value)) {
-      return true
-    }
-
-    const result = await pauseOrderCycleRuntime(currentOrder.value.id)
-    if (!result.success) {
-      errorMessage.value = result.error || '暂停循环流计时失败'
-      return false
-    }
-    applyRuntimeState(currentOrder.value, result.data)
-    return true
+  function setProcess(process: HaltHassProcessJson | null): void {
+    processJson.value = process
   }
 
   function resetExecutionState(): void {
@@ -257,16 +171,42 @@ export function useHaltHassTest() {
     testFlowResults.value = []
   }
 
+  function restoreLocalExecution(snapshot: {
+    phase: PagePhase
+    installStep: number
+    activeFlowType: HaltHassFlowType
+    testFlowPassed: boolean
+    testFlowResults: NodeRunResult[]
+    nodeResults: NodeRunResult[]
+    completedNodes: string[]
+    currentNodeId: string
+    flowchartStartTime?: string | null
+  }): void {
+    phase.value = snapshot.phase
+    installStep.value = snapshot.installStep
+    activeFlowType.value = snapshot.activeFlowType
+    testFlowPassed.value = snapshot.testFlowPassed
+    testFlowResults.value = snapshot.testFlowResults || []
+    nodeResults.value = snapshot.nodeResults || []
+    completedNodes.value = snapshot.completedNodes || []
+    currentNodeId.value = snapshot.currentNodeId || ''
+    flowchartStartTime.value = snapshot.flowchartStartTime
+      ? new Date(snapshot.flowchartStartTime)
+      : null
+    // 客户端重启后不能假定 Flojoy worker 仍由当前页面控制，需人工重新运行。
+    isFlowchartRunning.value = false
+  }
+
   /**
    * 开始测试（调用 API）
    */
-  async function startTest(boardSerials: string[]): Promise<boolean> {
-    if (!currentOrder.value) {
-      errorMessage.value = '工单不存在'
+  async function startTest(session: HaltHassTestSession): Promise<boolean> {
+    if (!currentOrder.value?.process?.id) {
+      errorMessage.value = '请先选择本次执行的工艺版本'
       return false
     }
 
-    if (!isMockHaltHassOrder(currentOrder.value) && !userInfo.value) {
+    if (!userInfo.value) {
       errorMessage.value = '用户信息不存在'
       return false
     }
@@ -275,17 +215,17 @@ export function useHaltHassTest() {
     errorMessage.value = ''
 
     try {
-      if (isMockHaltHassOrder(currentOrder.value)) {
-        setPhase('download')
-        return true
-      }
-
-      const activated = await activateOrderRuntime(currentOrder.value, boardSerials)
-      if (!activated) {
+      currentSession.value = session
+      const result = await startHaltHassSession(session.id, {
+        flojoyBackend: deviceStatus.value.flojoyBackend,
+        scanner: deviceStatus.value.scanner,
+      })
+      if (!result.success || !result.data) {
+      errorMessage.value = result.error || '开始测试失败'
         return false
       }
-
-      setPhase('download')
+      currentSession.value = result.data
+      setPhase('install')
       return true
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : '未知错误'
@@ -298,9 +238,10 @@ export function useHaltHassTest() {
   /**
    * 下载工艺数据
    */
-  async function downloadProcess(): Promise<boolean> {
-    if (!currentOrder.value) {
-      errorMessage.value = '工单不存在'
+  async function downloadProcess(advanceToInstall = true): Promise<boolean> {
+    const processId = currentOrder.value?.process?.id
+    if (!processId) {
+      errorMessage.value = '请先选择本次执行的工艺版本'
       return false
     }
 
@@ -308,13 +249,7 @@ export function useHaltHassTest() {
     errorMessage.value = ''
 
     try {
-      if (isMockHaltHassOrder(currentOrder.value)) {
-        processJson.value = MOCK_HALT_HASS_PROCESS
-        setPhase('install')
-        return true
-      }
-
-      const result = await downloadProcessData(currentOrder.value.process.id)
+      const result = await downloadProcessData(processId)
 
       if (!result.success || !result.data) {
         errorMessage.value = result.error || '下载工艺失败'
@@ -322,7 +257,7 @@ export function useHaltHassTest() {
       }
 
       processJson.value = result.data
-      setPhase('install')
+      if (advanceToInstall) setPhase('install')
       return true
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : '未知错误'
@@ -410,7 +345,8 @@ export function useHaltHassTest() {
       }
     }
 
-    currentNodeId.value = result.nodeId
+    // 节点结果只负责记录完成状态；当前执行节点由 Flojoy RUNNING_NODE 驱动，
+    // 避免完成消息把页面上的“正在执行”回退到上一节点。
   }
 
   /**
@@ -446,137 +382,6 @@ export function useHaltHassTest() {
     flowchartEndTime.value = new Date()
   }
 
-  // ==================== 暂存和恢复方法 ====================
-
-  /**
-   * 暂存当前测试数据
-   */
-  async function saveTemp(): Promise<boolean> {
-    if (!currentOrder.value) {
-      errorMessage.value = '工单不存在'
-      return false
-    }
-
-    isLoading.value = true
-    errorMessage.value = ''
-
-    try {
-      const tempData: HaltHassTempData = {
-        phase: phase.value,
-        installStep: installStep.value,
-        flowchartState: {
-          activeFlowType: activeFlowType.value,
-          testFlowPassed: testFlowPassed.value,
-          testFlowResults: testFlowResults.value,
-          currentNodeId: currentNodeId.value,
-          completedNodes: completedNodes.value,
-          nodeResults: nodeResults.value,
-        },
-        updatedAt: new Date().toISOString(),
-      }
-
-      const result = await uploadTempData(currentOrder.value.id, tempData)
-
-      if (!result.success) {
-        errorMessage.value = result.error || '暂存失败'
-        return false
-      }
-
-      return true
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '未知错误'
-      return false
-    } finally {
-      isLoading.value = false
-    }
-  }
-
-  /**
-   * 恢复暂存的测试数据
-   */
-  async function restoreTemp(order: HaltHassOrder): Promise<boolean> {
-    isLoading.value = true
-    errorMessage.value = ''
-
-    try {
-      const result = await downloadTempData(order.id)
-
-      if (!result.success || !result.data) {
-        errorMessage.value = result.error || '恢复暂存数据失败'
-        return false
-      }
-
-      const tempData = result.data
-
-      const activated = await activateOrderRuntime(order)
-      if (!activated) return false
-
-      // 恢复状态
-      currentOrder.value = order
-      testMode.value = 'continue'
-      phase.value = tempData.phase
-      installStep.value = tempData.installStep
-
-      if (tempData.flowchartState) {
-        activeFlowType.value = tempData.flowchartState.activeFlowType
-        testFlowPassed.value = tempData.flowchartState.testFlowPassed
-        testFlowResults.value = tempData.flowchartState.testFlowResults
-        currentNodeId.value = tempData.flowchartState.currentNodeId || ''
-        completedNodes.value = tempData.flowchartState.completedNodes || []
-        nodeResults.value = tempData.flowchartState.nodeResults || []
-      }
-
-      // 下载工艺后恢复到暂存时所在阶段。
-      const savedPhase = tempData.phase
-      const processLoaded = await downloadProcess()
-      if (!processLoaded) return false
-      phase.value = savedPhase
-
-      return true
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '未知错误'
-      return false
-    } finally {
-      isLoading.value = false
-    }
-  }
-
-  /**
-   * 加载反馈数据（审核打回后重做）
-   */
-  async function loadFeedback(order: HaltHassOrder): Promise<boolean> {
-    isLoading.value = true
-    errorMessage.value = ''
-
-    try {
-      const result = await downloadFeedbackData(order.id)
-
-      if (!result.success || !result.data) {
-        errorMessage.value = result.error || '加载反馈数据失败'
-        return false
-      }
-
-      const activated = await activateOrderRuntime(order)
-      if (!activated) return false
-
-      currentOrder.value = order
-      testMode.value = 'feedback'
-      // 从头开始测试
-      phase.value = 'install'
-      installStep.value = 0
-
-      // 下载工艺
-      await downloadProcess()
-
-      return true
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '未知错误'
-      return false
-    } finally {
-      isLoading.value = false
-    }
-  }
-
   // ==================== 重置方法 ====================
 
   /**
@@ -584,8 +389,8 @@ export function useHaltHassTest() {
    */
   function reset(): void {
     phase.value = 'schedule'
-    testMode.value = 'normal'
     currentOrder.value = null
+    currentSession.value = null
     processJson.value = null
     deviceStatus.value = { flojoyBackend: false, scanner: false, camera: false }
     resetExecutionState()
@@ -596,8 +401,8 @@ export function useHaltHassTest() {
   return {
     // 状态（只读）
     phase,
-    testMode,
     currentOrder,
+    currentSession,
     processJson,
     deviceStatus,
     installStep,
@@ -631,6 +436,8 @@ export function useHaltHassTest() {
 
     // 工单和工艺
     setOrder,
+    setSession,
+    setProcess,
     startTest,
     downloadProcess,
 
@@ -642,17 +449,11 @@ export function useHaltHassTest() {
 
     // 流程图运行
     beginFlowchartRun,
-    activateCycleRuntime,
-    pauseCycleRuntime,
     updateNodeResult,
     advanceToCycleFlow,
     onFlowchartComplete,
     stopFlowchart,
-
-    // 暂存和恢复
-    saveTemp,
-    restoreTemp,
-    loadFeedback,
+    restoreLocalExecution,
 
     // 重置
     reset,
