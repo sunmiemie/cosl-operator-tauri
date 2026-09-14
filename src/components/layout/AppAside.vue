@@ -55,6 +55,7 @@ const menuGroups: MenuGroup[] = [
       { icon: 'mdi:vibrate', activeIcon: 'mdi:vibrate', label: '振动台', to: '/vibration' },
       { icon: 'mdi:water-sync', activeIcon: 'mdi:water-sync', label: '水循环', to: '/water-cycle' },
       { icon: 'mdi:thermometer-high', activeIcon: 'mdi:thermometer-high', label: '高温箱', to: '/high-temp-box' },
+      { icon: 'mdi:heat-wave', activeIcon: 'mdi:heat-wave', label: '无感烘箱', to: '/sensorless-oven' },
       {
         icon: 'mdi:pipe',
         activeIcon: 'mdi:pipe',

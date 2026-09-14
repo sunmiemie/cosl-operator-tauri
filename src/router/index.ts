@@ -55,6 +55,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '高温箱', requiresAuth: true }
       },
       {
+        path: 'sensorless-oven',
+        name: 'SensorlessOven',
+        component: () => import('@/views/sensorless-oven/index.vue'),
+        meta: { title: '无感烘箱', requiresAuth: true }
+      },
+      {
         path: 'simulation-well',
         name: 'SimulationWell',
         component: () => import('@/views/simulation-well/index.vue'),

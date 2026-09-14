@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
@@ -116,12 +117,8 @@ const safetyRiskItems = computed(() => {
           <template v-if="previewSelection">
             <div class="info-grid start-order-grid">
               <div class="info-item">
-                <div class="info-key">委托单号</div>
-                <div class="info-val">{{ previewSelection.order.entrustNo }}</div>
-              </div>
-              <div class="info-item">
-                <div class="info-key">工单编号</div>
-                <div class="info-val">{{ previewSelection.order.no }}</div>
+                <div class="info-key">测试单号</div>
+                <div class="info-val">{{ displayOrderNumber(previewSelection.order) }}</div>
               </div>
               <div class="info-item">
                 <div class="info-key">申请人</div>

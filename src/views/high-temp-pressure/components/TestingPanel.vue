@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
@@ -14,6 +15,8 @@ const props = defineProps<{
   t2: number[]
   p: number[]
   testRunning: boolean
+  testStarted: boolean
+  startSubmitting: boolean
   testStartTime: number | null
   onlineTimerStr: string
   csvCount: number
@@ -31,6 +34,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  'start-test': []
   'connect-ocr': []
   pause: []
   resume: []
@@ -58,7 +62,7 @@ const allChartSeriesVisible = computed(() => Object.values(props.chartSeriesVisi
 
 const currentOrder = computed(() => props.currentSelected?.order ?? null)
 const currentInstrument = computed(() => props.currentSelected?.instrument ?? null)
-const currentOrderBadge = computed(() => currentOrder.value?.no || currentOrder.value?.receivingNo || '未选择')
+const currentOrderBadge = computed(() => currentOrder.value ? displayOrderNumber(currentOrder.value) : '未选择')
 const ocrReadySafe = computed(() => {
   const value = Number(props.ocrReadyPct)
   if (!Number.isFinite(value)) return 0
@@ -120,9 +124,9 @@ const scheduleRemainingText = computed(() => {
 const scheduleEndText = computed(() => formatDateTime(scheduleEndTimestamp.value))
 
 const handleTestStart = () => {
-  if (props.testRunning) return
+  if (props.testRunning || props.startSubmitting) return
   if (props.ocrDeviceName) emit('resume')
-  else emit('connect-ocr')
+  else emit('start-test')
 }
 
 const displayValue = (value: unknown) => {
@@ -162,7 +166,7 @@ const reportInfoCards = computed(() => {
 
   return [
     { label: '表格编号 Ref No.', value: displayValue(order.tableNo) },
-    { label: '报告编号 Serial Number', value: displayValue(order.no || order.receivingNo) },
+    { label: '测试单号', value: displayOrderNumber(order) },
     { label: '联系电话 Tel', value: displayValue(order.applicantPhone) },
   ]
 })
@@ -244,9 +248,9 @@ const testPurposeText = computed(() => {
           </div>
 
           <div class="test-controls">
-            <button class="control-action control-action-start" :disabled="testRunning" @click="handleTestStart">
+            <button class="control-action control-action-start" :disabled="testRunning || startSubmitting" @click="handleTestStart">
               <span class="control-icon"><Icon icon="mdi:play" /></span>
-              <span class="control-copy"><strong>测试开始</strong><small>启动或恢复 OCR 采集</small></span>
+              <span class="control-copy"><strong>{{ startSubmitting ? '正在启动' : '测试开始' }}</strong><small>启动或恢复 OCR 采集</small></span>
             </button>
             <button class="control-action control-action-pause" :disabled="!testRunning" @click="emit('pause')">
               <span class="control-icon"><Icon icon="mdi:pause" /></span>
@@ -256,7 +260,7 @@ const testPurposeText = computed(() => {
               <span class="control-icon"><Icon icon="mdi:check" /></span>
               <span class="control-copy"><strong>测试结束</strong><small>保存本次识别结果</small></span>
             </button>
-            <button class="control-action control-action-reconnect" @click="emit('connect-ocr')">
+            <button class="control-action control-action-reconnect" :disabled="!testStarted || startSubmitting" @click="emit('connect-ocr')">
               <span class="control-icon"><Icon icon="mdi:camera-wireless-outline" /></span>
               <span class="control-copy"><strong>重新连接采集卡</strong><small>{{ ocrDeviceName || '尚未连接采集卡' }}</small></span>
             </button>
@@ -429,7 +433,8 @@ const testPurposeText = computed(() => {
               <div class="report-grid two-cols">
                 <div class="info-item"><div class="info-key">使用设备</div><div class="info-val">{{ displayValue(currentOrder.vesselType) }}</div></div>
                 <div class="info-item"><div class="info-key">设备类型</div><div class="info-val">{{ displayValue(currentOrder.type) }}</div></div>
-                <div class="info-item"><div class="info-key">在线测试</div><div class="info-val">{{ currentOrder.sanxinIsSanxin ? '是' : '否' }}</div></div>
+                <div class="info-item"><div class="info-key">测试容器</div><div class="info-val">{{ displayValue(currentOrder.testContainer) }}</div></div>
+                <div class="info-item"><div class="info-key">在线测试</div><div class="info-val">{{ currentOrder.onlineTest === true ? '是' : currentOrder.onlineTest === false ? '否' : '未填写' }}</div></div>
                 <div class="info-item"><div class="info-key">其它要求</div><div class="info-val">{{ displayValue(currentOrder.remark) }}</div></div>
               </div>
             </div>
@@ -495,8 +500,7 @@ const testPurposeText = computed(() => {
             </div>
             <div class="hthp-rpt-card">
               <div class="report-grid">
-                <div class="info-item"><div class="info-key">任务编号</div><div class="info-val">{{ currentOrder.no }}</div></div>
-                <div class="info-item"><div class="info-key">委托编号</div><div class="info-val">{{ displayValue(currentOrder.entrustNo) }}</div></div>
+                <div class="info-item"><div class="info-key">测试单号</div><div class="info-val">{{ displayOrderNumber(currentOrder) }}</div></div>
                 <div class="info-item"><div class="info-key">接收编号</div><div class="info-val">{{ displayValue(currentOrder.receivingNo) }}</div></div>
                 <div class="info-item"><div class="info-key">申请人</div><div class="info-val">{{ displayValue(currentOrder.applicant) }}</div></div>
                 <div class="info-item"><div class="info-key">申请单位</div><div class="info-val">{{ displayValue(currentOrder.applicantUnit) }}</div></div>
@@ -518,7 +522,7 @@ const testPurposeText = computed(() => {
                 <div class="info-item"><div class="info-key">当前仪器 Name</div><div class="info-val">{{ currentInstrument?.label || '-' }}</div></div>
                 <div class="info-item"><div class="info-key">SN 编号 NO.</div><div class="info-val">{{ currentInstrument?.sn || '-' }}</div></div>
                 <div class="info-item"><div class="info-key">数量 Quantity</div><div class="info-val">{{ displayValue(currentInstrument?.quantity) }}</div></div>
-                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(currentInstrument?.testType || currentOrder.testType) }}</div></div>
+                <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(currentOrder.testType) }}</div></div>
                 <div class="info-item"><div class="info-key">仪器长度</div><div class="info-val">{{ displayValue(currentInstrument?.instrumentLength) }}</div></div>
                 <div class="info-item"><div class="info-key">最大直径</div><div class="info-val">{{ displayValue(currentInstrument?.maxDiameter || currentOrder.maxDiameter) }}</div></div>
               </div>
@@ -578,7 +582,7 @@ const testPurposeText = computed(() => {
         </div>
 
         <div class="modal-footer hthp-report-footer">
-          <div>报告编号：{{ currentOrder.no || '-' }} · {{ currentOrder.applyDate || '-' }}</div>
+          <div>测试单号：{{ displayOrderNumber(currentOrder) || '-' }} · {{ currentOrder.applyDate || '-' }}</div>
           <button class="btn btn-primary" @click="detailModalVisible = false">关闭</button>
         </div>
       </div>
@@ -607,32 +611,31 @@ const testPurposeText = computed(() => {
 .testing-scroll-region {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   overflow-x: hidden;
-  padding-right: 8px;
-  scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
 .ocr-capture-card {
   --capture-amber-soft: rgba(245, 158, 11, 0.12);
   border: 1px solid var(--capture-line);
-  border-radius: 20px;
+  border-radius: 16px;
   background:
     linear-gradient(135deg, rgba(248, 250, 252, 0.94), rgba(241, 245, 249, 0.82)),
     radial-gradient(circle at 18% 0%, rgba(245, 158, 11, 0.13), transparent 34%);
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
-  padding: 18px;
-  margin: 0 0 12px;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 12px;
+  margin: 0;
   display: flex;
   flex-direction: column;
 }
 
 .overview-zone {
-  flex: 0 0 35%;
-  min-height: 260px;
-  padding: 15px;
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 10px;
   border: 1px solid #dce5f4;
   border-radius: 12px;
   background: #ffffff;
@@ -643,26 +646,26 @@ const testPurposeText = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 11px;
+  gap: 12px;
+  margin-bottom: 6px;
 }
 
 .overview-title {
   color: var(--capture-ink);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 800;
 }
 
 .overview-live {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 9px;
   border: 1px solid #e2e8f1;
   border-radius: 999px;
   background: #f8fafc;
   color: #667085;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -688,13 +691,13 @@ const testPurposeText = computed(() => {
 .overview-metrics {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .overview-metric {
   min-width: 0;
-  min-height: 70px;
-  padding: 10px 11px;
+  min-height: 52px;
+  padding: 6px 8px;
   border: 1px solid #e3e9f2;
   border-radius: 9px;
   background: #f8fafc;
@@ -704,7 +707,7 @@ const testPurposeText = computed(() => {
   display: block;
   overflow: hidden;
   color: #667085;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -712,11 +715,11 @@ const testPurposeText = computed(() => {
 
 .overview-metric > strong {
   display: block;
-  margin-top: 8px;
+  margin-top: 4px;
   overflow: hidden;
   color: #172033;
   font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 800;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -751,11 +754,11 @@ const testPurposeText = computed(() => {
 
 .overview-status-metric > strong {
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .overview-time-metric > strong {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .overview-time-metric.remaining {
@@ -765,7 +768,7 @@ const testPurposeText = computed(() => {
 
 .overview-time-metric.remaining > strong {
   color: #2557a7;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .ocr-capture-head {
@@ -786,7 +789,7 @@ const testPurposeText = computed(() => {
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.18em;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .ocr-status {
@@ -848,15 +851,16 @@ const testPurposeText = computed(() => {
 }
 
 .monitoring-board {
-  flex: 1 1 65%;
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: minmax(0, 2.45fr) minmax(310px, 1fr);
-  gap: 14px;
-  min-height: 500px;
-  margin-top: 14px;
+  gap: 10px;
+  min-height: 0;
+  margin-top: 10px;
 }
 
 .monitoring-chart-card {
+  min-height: 0;
   border: 1px solid #dce5f4;
   border-radius: 10px;
   background: #ffffff;
@@ -867,11 +871,14 @@ const testPurposeText = computed(() => {
 }
 
 .monitoring-order-card {
+  min-height: 0;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.82);
   box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .monitoring-card-head {
@@ -884,8 +891,8 @@ const testPurposeText = computed(() => {
 }
 
 .monitoring-chart-card .monitoring-card-head {
-  min-height: 52px;
-  padding: 11px 14px;
+  min-height: 42px;
+  padding: 8px 12px;
   border-bottom-color: #e6ebf3;
 }
 
@@ -970,7 +977,7 @@ const testPurposeText = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 10px 14px;
+  padding: 7px 12px;
   border-bottom: 1px solid #edf1f7;
   background: #fbfcfe;
 }
@@ -999,8 +1006,8 @@ const testPurposeText = computed(() => {
 }
 
 .chart-window-control button {
-  height: 28px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 9px;
   border: 1px solid #d8e0ec;
   border-radius: 6px;
   background: #ffffff;
@@ -1159,15 +1166,15 @@ const testPurposeText = computed(() => {
 
 .monitoring-chart-body {
   flex: 1 1 auto;
-  min-height: 400px;
+  min-height: 0;
   position: relative;
-  padding: 0 10px 10px;
+  padding: 0 8px 8px;
 }
 
 .monitoring-chart {
   width: 100%;
   height: 100%;
-  min-height: 440px;
+  min-height: 0;
 }
 
 .monitoring-chart-empty {
@@ -1211,7 +1218,11 @@ const testPurposeText = computed(() => {
 }
 
 .compact-order-body {
-  padding: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  scrollbar-gutter: stable;
 }
 
 .testing-item-block {
@@ -1679,21 +1690,21 @@ const testPurposeText = computed(() => {
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
-  margin-top: 10px;
+  gap: 7px;
+  margin-top: 7px;
 }
 
 .control-action {
   border: 1px solid rgba(148, 163, 184, 0.34);
-  border-radius: 14px;
+  border-radius: 11px;
   background: #fff;
   color: var(--capture-ink);
   cursor: pointer;
-  min-height: 58px;
-  padding: 8px 11px;
+  min-height: 46px;
+  padding: 6px 9px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   text-align: left;
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
@@ -1712,29 +1723,29 @@ const testPurposeText = computed(() => {
 }
 
 .control-icon {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 11px;
-  font-size: 17px;
+  border-radius: 9px;
+  font-size: 15px;
 }
 
 .control-copy {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .control-copy strong {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.15;
 }
 
 .control-copy small {
   color: var(--capture-muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .control-action-pause .control-icon {
@@ -1767,8 +1778,20 @@ const testPurposeText = computed(() => {
 }
 
 @media (max-width: 1100px) {
+  .testing-scroll-region {
+    overflow-y: auto;
+    padding-right: 8px;
+    scrollbar-gutter: stable;
+  }
+
+  .ocr-capture-card {
+    height: auto;
+    min-height: 100%;
+  }
+
   .monitoring-board {
     grid-template-columns: 1fr;
+    min-height: auto;
   }
 
   .test-controls {
@@ -1787,6 +1810,28 @@ const testPurposeText = computed(() => {
   .monitoring-chart {
     height: 320px;
     min-height: 320px;
+  }
+}
+
+@media (min-width: 1101px) and (max-height: 820px) {
+  .testing-scroll-region {
+    overflow-y: auto;
+    padding-right: 8px;
+    scrollbar-gutter: stable;
+  }
+
+  .ocr-capture-card {
+    height: auto;
+    min-height: 720px;
+  }
+
+  .monitoring-board {
+    min-height: 380px;
+  }
+
+  .monitoring-chart-body,
+  .monitoring-chart {
+    min-height: 280px;
   }
 }
 

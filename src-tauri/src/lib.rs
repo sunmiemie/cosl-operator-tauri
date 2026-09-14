@@ -8,6 +8,7 @@ mod high_temp_pressure_ocr;
 mod ocr;
 mod ocr_runtime;
 mod scanner;
+mod sensorless_oven;
 mod simulated_well_monitor;
 mod simulated_well_upload;
 mod vibration_ocr;
@@ -118,6 +119,7 @@ pub fn run() {
         .manage(simulated_well_upload::SimulatedWellUploadState::default())
         .manage(simulated_well_monitor::SimulatedWellMonitorState::default())
         .manage(file_receiver::FileReceiverState::default())
+        .manage(sensorless_oven::SensorlessOvenState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
@@ -201,6 +203,11 @@ pub fn run() {
             high_temp_pressure_ocr::read_high_temp_pressure_business_report,
             high_temp_pressure_ocr::read_high_temp_pressure_curve_records,
             high_temp_pressure_ocr::write_high_temp_pressure_curve_chart,
+            sensorless_oven::list_sensorless_oven_ports,
+            sensorless_oven::start_sensorless_oven_monitor,
+            sensorless_oven::pause_sensorless_oven_monitor,
+            sensorless_oven::resume_sensorless_oven_monitor,
+            sensorless_oven::stop_sensorless_oven_monitor,
             simulated_well_upload::get_simulated_well_upload_files,
             simulated_well_upload::upload_simulated_well_file_chunk,
             simulated_well_upload::cancel_simulated_well_upload,
@@ -240,6 +247,9 @@ pub fn run() {
                 app_handle.try_state::<simulated_well_monitor::SimulatedWellMonitorState>()
             {
                 state.shutdown_now();
+            }
+            if let Some(state) = app_handle.try_state::<sensorless_oven::SensorlessOvenState>() {
+                sensorless_oven::cleanup_sensorless_oven(state.inner());
             }
         }
     });

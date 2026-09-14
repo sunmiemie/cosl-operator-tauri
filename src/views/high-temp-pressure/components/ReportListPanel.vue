@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
@@ -38,6 +39,7 @@ const filteredServerReports = computed(() => {
   return serverReports.value.filter((report) => [
     report.report_no,
     report.task_number,
+    ...(report.display_order_numbers || []),
     report.instrument_name,
     report.instrument_sn,
     report.tester,
@@ -49,8 +51,14 @@ function uniqueText(values: unknown[]) {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean))).join('、') || '-'
 }
 
+function serverOrderNumbers(report: HighTempPressureReportItem) {
+  return report.display_order_numbers?.length
+    ? uniqueText(report.display_order_numbers)
+    : report.task_number || uniqueText(report.order_numbers || [])
+}
+
 function pendingOrderNos(report: HighTempPressurePendingReport) {
-  return uniqueText(report.selections.map((selection) => selection.order.no))
+  return uniqueText(report.selections.map((selection) => displayOrderNumber(selection.order)))
 }
 
 function pendingInstrumentNames(report: HighTempPressurePendingReport) {
@@ -235,7 +243,7 @@ onBeforeUnmount(clearDetailPdf)
           </colgroup>
           <thead>
             <tr>
-              <th>工单编号</th>
+              <th>测试单号</th>
               <th>测试设备</th>
               <th>采集数据</th>
               <th>保存时间</th>
@@ -318,7 +326,7 @@ onBeforeUnmount(clearDetailPdf)
           <thead>
             <tr>
               <th>报告编号</th>
-              <th>工单编号</th>
+              <th>测试单号</th>
               <th>测试设备</th>
               <th>测试台</th>
               <th>测试人员</th>
@@ -330,7 +338,7 @@ onBeforeUnmount(clearDetailPdf)
           <tbody>
             <tr v-for="report in filteredServerReports" :key="report.id">
               <td><div class="cell-primary wrap-id">{{ report.report_no }}</div></td>
-              <td><div class="cell-primary wrap-id">{{ report.task_number || uniqueText(report.order_numbers || []) }}</div></td>
+              <td><div class="cell-primary wrap-id">{{ serverOrderNumbers(report) }}</div></td>
               <td>
                 <div class="cell-primary clamp-two">{{ report.instrument_name || '-' }}</div>
                 <div class="cell-secondary">{{ report.instrument_sn || '-' }}</div>
@@ -371,7 +379,7 @@ onBeforeUnmount(clearDetailPdf)
           </div>
           <div class="detail-body">
             <div class="detail-info">
-              <div><span>工单编号</span><strong>{{ detailReport.task_number || uniqueText(detailReport.order_numbers || []) }}</strong></div>
+              <div><span>测试单号</span><strong>{{ serverOrderNumbers(detailReport) }}</strong></div>
               <div><span>测试设备</span><strong>{{ detailReport.instrument_name || '-' }}</strong></div>
               <div><span>设备 SN</span><strong>{{ detailReport.instrument_sn || '-' }}</strong></div>
               <div><span>测试台 psi_id</span><strong>{{ detailReport.equipment_id || '-' }}</strong></div>

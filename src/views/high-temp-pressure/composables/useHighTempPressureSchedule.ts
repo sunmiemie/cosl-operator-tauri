@@ -1,3 +1,4 @@
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed, ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 import { http } from '@/services/http'
@@ -91,7 +92,7 @@ function applyTaskDragPreview(e: DragEvent, order: WorkOrder) {
   preview.style.minWidth = '160px'
 
   const title = document.createElement('div')
-  title.textContent = order.no || '未命名任务'
+  title.textContent = displayOrderNumber(order)
   title.style.fontSize = '13px'
   title.style.fontWeight = '700'
   title.style.lineHeight = '1.3'
@@ -148,7 +149,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
       dbId: it.id,
       label: name,
       sn,
-      testType: it.test_type || '',
+      testType: dto.test_type || '',
       quantity: it.quantity || 1,
       instrumentLength: it.instrument_length || '',
       maxDiameter: formatDisplayValue(it.max_diameter, 'mm'),
@@ -173,6 +174,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     id: `wo-${dto.id}`,
     dbId: dto.id,
     no: taskNumber,
+    testNumber: dto.test_number?.trim() || null,
     tableNo: dto.table_no?.trim() || '',
     entrustNo: taskNumber,
     applicant: dto.applicant?.trim() || '-',
@@ -195,6 +197,8 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     keepCondition: formatHoldTime(dto.hold_time),
     maxDiameter: formatDisplayValue(dto.max_diameter, 'mm'),
     testType: dto.test_type || '',
+    testContainer: dto.test_container || '',
+    onlineTest: typeof dto.online_test === 'boolean' ? dto.online_test : null,
     projectMembers: dto.project_members || '',
     equipmentList: dto.equipment_list || '',
     instrumentCombination: dto.instrument_combination || '',
@@ -736,7 +740,9 @@ export function useHighTempPressureSchedule() {
         : []
       setInstrumentEvents(instrumentId, order ? eventsFromInstrument(instrument, order.id) : [])
       const assistantSync = resp.data.data?.assistantSync
-      if (schedule && assistantSync?.success === false) {
+      if (schedule && assistantSync?.queued === true) {
+        ElMessage.info('排程已保存，小助手同步处理中')
+      } else if (schedule && assistantSync?.success === false) {
         const reason = assistantSync.error
           || assistantSync.list?.find((item) => item.error || item.reason)?.error
           || assistantSync.list?.find((item) => item.error || item.reason)?.reason
@@ -928,6 +934,7 @@ export function useHighTempPressureSchedule() {
       return shouldShowInSchedule && (
         keyword === '' ||
         order.no.toLowerCase().includes(keyword) ||
+        displayOrderNumber(order).toLowerCase().includes(keyword) ||
         (order.useDevice || '').toLowerCase().includes(keyword) ||
         order.type.toLowerCase().includes(keyword) ||
         order.applicant.toLowerCase().includes(keyword) ||

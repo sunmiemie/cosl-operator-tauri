@@ -52,6 +52,7 @@
       "resources/vibration/ocr-service/ocr_service/vision/*.py",
       "resources/vibration/ocr-service/bin/**/*",
       "resources/high-temp-pressure/**/*",
+      "resources/sensorless-oven/**/*",
       "resources/ocr-runtime/**/*"
     ]
   }

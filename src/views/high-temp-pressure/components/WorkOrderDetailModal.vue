@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed } from 'vue'
 import type { WorkOrder } from '../types'
 
@@ -83,6 +84,8 @@ const instrumentStatusClass = (status?: number, completed?: boolean) => {
               <div class="detail-section-title">测试参数</div>
               <div class="detail-grid">
                 <div class="info-item"><div class="info-key">测试类型</div><div class="info-val">{{ displayValue(order.testType) }}</div></div>
+                <div class="info-item"><div class="info-key">测试容器</div><div class="info-val">{{ displayValue(order.testContainer) }}</div></div>
+                <div class="info-item"><div class="info-key">是否在线测试</div><div class="info-val">{{ order.onlineTest === true ? '是' : order.onlineTest === false ? '否' : '未填写' }}</div></div>
                 <div class="info-item"><div class="info-key">目标温度</div><div class="info-val">{{ order.targetTemp }}</div></div>
                 <div class="info-item"><div class="info-key">目标压力</div><div class="info-val">{{ order.targetPressure }}</div></div>
                 <div class="info-item"><div class="info-key">保温保压时间</div><div class="info-val">{{ order.keepCondition }}</div></div>
@@ -121,7 +124,7 @@ const instrumentStatusClass = (status?: number, completed?: boolean) => {
             <div class="detail-section">
               <div class="detail-section-title">基础信息</div>
               <div class="detail-grid">
-                <div class="info-item"><div class="info-key">任务编号</div><div class="info-val">{{ order.no }}</div></div>
+                <div class="info-item"><div class="info-key">测试单号</div><div class="info-val">{{ displayOrderNumber(order) }}</div></div>
                 <div class="info-item"><div class="info-key">工单状态</div><div class="info-val">{{ order.status }}</div></div>
                 <div class="info-item"><div class="info-key">测试台</div><div class="info-val">{{ order.applicantUnit }}</div></div>
                 <div class="info-item"><div class="info-key">使用设备</div><div class="info-val">{{ order.type }}</div></div>
@@ -169,7 +172,7 @@ const instrumentStatusClass = (status?: number, completed?: boolean) => {
                   <tr v-for="i in (order.items || [])" :key="i.id">
                     <td>{{ i.label }}</td>
                     <td class="text-muted">{{ i.sn }}</td>
-                    <td>{{ displayValue(i.testType) }}</td>
+                    <td>{{ displayValue(order.testType) }}</td>
                     <td>{{ displayValue(i.quantity) }}</td>
                     <td>{{ displayValue(i.instrumentLength) }}</td>
                     <td>{{ displayValue(i.maxDiameter) }}</td>
@@ -192,7 +195,7 @@ const instrumentStatusClass = (status?: number, completed?: boolean) => {
           </div>
           <div class="card-body">
             <div class="info-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 12px">
-              <div class="info-item"><div class="info-key">任务单编号</div><div class="info-val">{{ order?.no || '-' }}</div></div>
+              <div class="info-item"><div class="info-key">测试单号</div><div class="info-val">{{ displayOrderNumber(order) }}</div></div>
               <div class="info-item"><div class="info-key">确认日期</div><div class="info-val">{{ confirmDate }}</div></div>
             </div>
             <div class="alert" :class="isSanxin ? 'alert-warning' : ''">

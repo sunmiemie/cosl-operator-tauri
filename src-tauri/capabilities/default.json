@@ -22,6 +22,7 @@
     "fs:allow-app-meta",
     "fs:allow-app-meta-recursive",
     "fs:allow-exists",
+    "fs:allow-stat",
     "fs:allow-mkdir",
     "fs:allow-read",
     "fs:allow-read-dir",

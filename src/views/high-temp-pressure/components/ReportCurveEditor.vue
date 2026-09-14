@@ -62,6 +62,7 @@ export type HighTempPressureCurveRangeDraft = {
 const props = defineProps<{
   exportDir: string
   orderNumbers: string
+  displayOrderNumbers?: string
   instruments: string
   operatorName: string
   initialRanges?: HighTempPressureCurveRangeDraft[]
@@ -845,7 +846,7 @@ onBeforeUnmount(() => {
           <span>{{ displayStat(item.max, item.unit) }}</span>
         </div>
       </div>
-      <div class="curve-business-meta">任务单：{{ orderNumbers || '-' }} · 试件：{{ instruments || '-' }} · 操作员：{{ operatorName || '待填写' }}</div>
+      <div class="curve-business-meta">测试单号：{{ displayOrderNumbers || orderNumbers || '-' }} · 试件：{{ instruments || '-' }} · 操作员：{{ operatorName || '待填写' }}</div>
     </template>
   </div>
 </template>

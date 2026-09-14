@@ -152,28 +152,12 @@ export function useVibrationReport(options: UseVibrationReportOptions) {
     }
   }
 
-  async function ensureSharedReportDirAccessible(dir: string) {
-    if (!dir) return true
-    try {
-      const info = await stat(dir)
-      if (!info.isDirectory) {
-        ElMessage.warning(`振动台共享报告路径不是文件夹：${dir}`)
-        return false
-      }
-      return true
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      ElMessage.warning(`无法访问振动台共享报告文件夹：${dir}。请检查路径、网络连接和 Windows 共享凭据。${message}`)
-      return false
-    }
-  }
-
   async function selectThirdPartyReport() {
     await initConfig()
     try {
       const defaultSharedReportDir = sharedReportDir.value
-      if (!(await ensureSharedReportDirAccessible(defaultSharedReportDir))) return
-
+      // 配置路径仅用于定位对话框；用户选中文件后才获得该文件的访问 scope。
+      // 不在选择前 stat 手动配置的目录，避免未授权路径阻断文件选择。
       const selected = await open({
         title: '选择振动台第三方报告',
         multiple: false,

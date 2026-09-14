@@ -14,8 +14,9 @@ screen:
   aspect_ratio_tolerance: 0.01
   anchor:
     enabled: true
-    template_path: data/test2-hardware/reference-1280x1024.png
-    template_rect: { x: 0, y: 0, width: 550, height: 120 }
+    # VT-TASK-20260909-610 实测标定：使用静态工具栏，避开标题和运行状态。
+    template_path: data/test2-hardware/reference-20260909-1280x1024.png
+    template_rect: { x: 20, y: 55, width: 380, height: 54 }
     search_margin: 12
     minimum_score: 0.96
 
@@ -63,10 +64,10 @@ logging:
   json: true
 
 regions:
-  - { id: target, label: "目标", rect: { x: 14, y: 150, width: 80, height: 18 }, value_type: decimal, decimal_places: 4, variable_decimal_places: true }
-  - { id: level, label: "量级", rect: { x: 104, y: 150, width: 80, height: 18 }, value_type: decimal, decimal_places: 2, variable_decimal_places: true, allow_negative: true }
-  - { id: response, label: "响应", rect: { x: 194, y: 150, width: 80, height: 18 }, value_type: decimal, decimal_places: 4, variable_decimal_places: true }
-  - { id: drive, label: "驱动", rect: { x: 304, y: 150, width: 60, height: 18 }, value_type: decimal, decimal_places: 1, variable_decimal_places: true }
-  - { id: elapsed, label: "试验历经时间", rect: { x: 374, y: 146, width: 87, height: 26 }, value_type: time, decimal_places: 0 }
-  - { id: remaining, label: "剩余时间", rect: { x: 473, y: 146, width: 87, height: 26 }, value_type: time, decimal_places: 0 }
-  - { id: right_level, label: "右侧量级", rect: { x: 1192, y: 232, width: 67, height: 24 }, value_type: decimal, decimal_places: 2, variable_decimal_places: true, allow_negative: true }
+  - { id: target, label: "目标", rect: { x: 22, y: 154, width: 80, height: 24 }, value_type: decimal, decimal_places: 4, variable_decimal_places: true }
+  - { id: level, label: "量级", rect: { x: 112, y: 154, width: 80, height: 24 }, value_type: decimal, decimal_places: 2, variable_decimal_places: true, allow_negative: true }
+  - { id: response, label: "响应", rect: { x: 202, y: 154, width: 80, height: 24 }, value_type: decimal, decimal_places: 4, variable_decimal_places: true }
+  - { id: drive, label: "驱动", rect: { x: 312, y: 158, width: 60, height: 18 }, value_type: decimal, decimal_places: 1, variable_decimal_places: true }
+  - { id: elapsed, label: "试验历经时间", rect: { x: 382, y: 154, width: 87, height: 26 }, value_type: time, decimal_places: 0 }
+  - { id: remaining, label: "剩余时间", rect: { x: 481, y: 154, width: 87, height: 26 }, value_type: time, decimal_places: 0 }
+  - { id: right_level, label: "右侧量级", rect: { x: 1190, y: 240, width: 78, height: 24 }, value_type: decimal, decimal_places: 2, variable_decimal_places: true, allow_negative: true }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { Icon } from '@iconify/vue'
 import type { HighTempPressureModal, ScheduledSelection } from '../types'
 
@@ -59,8 +60,8 @@ function requestConfirmEnd() {
               <div v-for="selection in selectedScheduledOrders" :key="selection.instrument.id" class="selected-order-card">
                 <div class="selected-order-head">
                   <div>
-                    <div class="selected-order-no">{{ selection.order.no }}</div>
-                    <div class="selected-order-meta">{{ selection.order.entrustNo || '无委托单号' }} · {{ selection.order.applicant || '-' }}</div>
+                    <div class="selected-order-no">{{ displayOrderNumber(selection.order) }}</div>
+                    <div class="selected-order-meta">{{ selection.order.applicant || '-' }}</div>
                   </div>
                   <span class="selected-instrument-sn">{{ selection.instrument.sn }}</span>
                 </div>
@@ -85,7 +86,7 @@ function requestConfirmEnd() {
                 </div>
               </div>
             </div>
-            <div v-else-if="currentSelected" class="text-muted">已选择 {{ currentSelected.order.no }}，但选中列表为空，请返回日历重新选择。</div>
+            <div v-else-if="currentSelected" class="text-muted">已选择 {{ displayOrderNumber(currentSelected.order) }}，但选中列表为空，请返回日历重新选择。</div>
             <div v-else class="text-muted">未选择排程仪器</div>
           </div>
         </div>

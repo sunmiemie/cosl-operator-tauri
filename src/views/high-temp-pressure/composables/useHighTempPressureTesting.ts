@@ -161,6 +161,7 @@ export function useHighTempPressureTesting() {
   const pendingOcrRecords = new Map<number, any>()
   let chartRenderTimer: number | null = null
   let chartInst: echarts.ECharts | null = null
+  let chartResizeObserver: ResizeObserver | null = null
   let applyingChartOption = false
   let manualChartRange: { start: number; end: number } | null = null
 
@@ -253,6 +254,12 @@ export function useHighTempPressureTesting() {
     disposeChart()
     echarts.getInstanceByDom(el)?.dispose()
     chartInst = echarts.init(el)
+    if (typeof ResizeObserver !== 'undefined') {
+      chartResizeObserver = new ResizeObserver(() => {
+        chartInst?.resize()
+      })
+      chartResizeObserver.observe(el)
+    }
     chartInst.on('datazoom', () => {
       if (applyingChartOption || !chartInst) return
       const option = chartInst.getOption() as any
@@ -264,9 +271,12 @@ export function useHighTempPressureTesting() {
       chartRangeLocked.value = true
     })
     updateChart()
+    requestAnimationFrame(() => chartInst?.resize())
   }
 
   function disposeChart() {
+    chartResizeObserver?.disconnect()
+    chartResizeObserver = null
     if (!chartInst) return
     chartInst.dispose()
     chartInst = null
@@ -481,6 +491,13 @@ export function useHighTempPressureTesting() {
     updateChart()
   }
 
+  function applyDefaultChartSeriesVisibility(testType?: string) {
+    const pressureOnly = String(testType || '').trim() === '高压测试'
+    chartSeriesVisibility.upperTemp = !pressureOnly
+    chartSeriesVisibility.lowerTemp = !pressureOnly
+    chartSeriesVisibility.pressure = true
+  }
+
   function parseTimestampMs(value: unknown) {
     if (typeof value === 'number' && Number.isFinite(value)) return value
     if (typeof value !== 'string' || !value.trim()) return null
@@ -583,6 +600,12 @@ export function useHighTempPressureTesting() {
     updateChart()
   }
 
+  async function stopOcrStream() {
+    await invoke('stop_high_temp_pressure_ocr_stream', {
+      outputDir: captureOutputDir.value || null,
+    }).catch(() => undefined)
+  }
+
   function clearOcrDevice() {
     ocrDeviceIndex.value = null
     ocrDeviceName.value = ''
@@ -594,14 +617,10 @@ export function useHighTempPressureTesting() {
     onlineTimerStr.value = formatRuntimeTimer(seconds)
   }
 
-  function resetTestSession() {
+  async function resetTestSession() {
     stopCapturePolling()
     cleanupStreamListener()
-    if (captureOutputDir.value) {
-      void invoke('stop_high_temp_pressure_ocr_stream', {
-        outputDir: captureOutputDir.value,
-      }).catch(() => undefined)
-    }
+    await stopOcrStream()
     resetCaptureState()
     clearOcrDevice()
     testRunning.value = false
@@ -1060,11 +1079,7 @@ export function useHighTempPressureTesting() {
   }
 
   async function connectOcrDevice() {
-    if (captureOutputDir.value) {
-      await invoke('stop_high_temp_pressure_ocr_stream', {
-        outputDir: captureOutputDir.value,
-      }).catch(() => undefined)
-    }
+    await stopOcrStream()
     await initConfig()
     const configuredDevice = Number(getConfigItem('highTempPressureCaptureDevice'))
     const configuredDeviceName = String(getConfigItem('highTempPressureCaptureDeviceName') || '').trim()
@@ -1075,6 +1090,10 @@ export function useHighTempPressureTesting() {
 
     ocrDeviceIndex.value = configuredDevice
     ocrDeviceName.value = configuredDeviceName || `采集卡 ${configuredDevice}`
+    if (testStartTime.value === null) {
+      testStartTime.value = Date.now()
+      syncRuntime(testStartTime.value)
+    }
     const started = await startOcrCollection()
     if (!started) return
     ElMessage.success(`已连接 ${ocrDeviceName.value}，开始 OCR 识别采集`)
@@ -1092,11 +1111,10 @@ export function useHighTempPressureTesting() {
     activeModal.value = null
   }
 
-  function confirmStart() {
-    resetTestSession()
+  async function confirmStart(testType?: string) {
+    await resetTestSession()
+    applyDefaultChartSeriesVisibility(testType)
     closeModal()
-    testStartTime.value = Date.now()
-    syncRuntime(testStartTime.value)
     switchPanel('testing')
     nextTick(() => initChart())
     captureStatusText.value = '等待连接采集卡并启动 OCR 识别'
@@ -1125,8 +1143,8 @@ export function useHighTempPressureTesting() {
     ElMessage.warning('请先连接采集卡，再启动 OCR 识别采集')
   }
 
-  function stopTest() {
-    resetTestSession()
+  async function stopTest() {
+    await resetTestSession()
     closeModal()
     switchPanel('dashboard')
   }
@@ -1185,6 +1203,8 @@ export function useHighTempPressureTesting() {
 
   function endTest(endAtMs = Date.now()) {
     stopCapturePolling()
+    cleanupStreamListener()
+    captureOutputDir.value = ''
     syncRuntime(endAtMs)
     testRunning.value = false
     testStartTime.value = null
@@ -1205,11 +1225,7 @@ export function useHighTempPressureTesting() {
     revokeLatestFrameObjectUrl()
     stopCapturePolling()
     cleanupStreamListener()
-    if (captureOutputDir.value) {
-      void invoke('stop_high_temp_pressure_ocr_stream', {
-        outputDir: captureOutputDir.value,
-      }).catch(() => undefined)
-    }
+    void stopOcrStream()
     window.removeEventListener('resize', resizeChart)
     disposeChart()
   })

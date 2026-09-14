@@ -43,6 +43,57 @@ impl Default for HighTempPressureOcrState {
     }
 }
 
+fn wait_for_high_temp_pressure_ocr_exit(child: &mut Child) -> Result<(), String> {
+    for _ in 0..300 {
+        if child
+            .try_wait()
+            .map_err(|error| format!("等待 OCR 采集进程退出失败: {}", error))?
+            .is_some()
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = create_hidden_command("taskkill")
+            .args(["/PID", &child.id().to_string(), "/F", "/T"])
+            .output();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = child.kill();
+    }
+
+    match child.wait() {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            if child
+                .try_wait()
+                .map_err(|wait_error| format!("等待 OCR 采集进程退出失败: {}", wait_error))?
+                .is_some()
+            {
+                Ok(())
+            } else {
+                Err(format!("等待 OCR 采集进程退出失败: {}", error))
+            }
+        }
+    }
+}
+
+fn release_high_temp_pressure_ocr_process(
+    process: &Mutex<Option<Child>>,
+) -> Result<(), String> {
+    let mut guard = process.lock().map_err(|error| error.to_string())?;
+    if let Some(child) = guard.as_mut() {
+        wait_for_high_temp_pressure_ocr_exit(child)?;
+    }
+    *guard = None;
+    Ok(())
+}
+
 fn create_hidden_command(program: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
@@ -961,20 +1012,7 @@ pub fn start_high_temp_pressure_ocr_stream(
     let script_path = resolve_script_path(&app)?;
     let output_dir = create_output_dir(&app)?;
 
-    {
-        let mut guard = state.process.lock().map_err(|e| e.to_string())?;
-        if let Some(child) = guard.as_mut() {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    *guard = None;
-                }
-                Ok(None) => {
-                    return Err("已有高温高压井 OCR 任务正在运行".to_string());
-                }
-                Err(e) => return Err(format!("检查高温高压井 OCR 进程状态失败: {}", e)),
-            }
-        }
-    }
+    release_high_temp_pressure_ocr_process(&state.process)?;
 
     let script_path_str = script_path.to_string_lossy().to_string();
     let output_dir_str = output_dir.to_string_lossy().to_string();
@@ -1061,12 +1099,11 @@ pub fn start_high_temp_pressure_ocr_stream(
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
 
-        let wait_result = {
-            let mut guard = process_handle.lock().ok();
-            match guard.as_mut().and_then(|inner| inner.take()) {
-                Some(mut child) => child.wait().ok(),
-                None => None,
-            }
+        let wait_result = match process_handle.lock() {
+            Ok(mut guard) => guard
+                .as_mut()
+                .and_then(|child| child.try_wait().ok().flatten()),
+            Err(_) => None,
         };
 
         if let Some(status) = wait_result {
@@ -1143,32 +1180,7 @@ pub fn stop_high_temp_pressure_ocr_stream(
     if let Some(dir) = output_dir.as_ref() {
         let _ = write_control_action(Path::new(dir), "stop");
     }
-    let mut guard = state.process.lock().map_err(|e| e.to_string())?;
-    if let Some(child) = guard.as_mut() {
-        for _ in 0..300 {
-            if child
-                .try_wait()
-                .map_err(|e| format!("等待 OCR 采集进程退出失败: {}", e))?
-                .is_some()
-            {
-                return Ok(());
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            let _ = create_hidden_command("taskkill")
-                .args(["/PID", &child.id().to_string(), "/F", "/T"])
-                .output();
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = child.kill();
-        }
-    }
-    Ok(())
+    release_high_temp_pressure_ocr_process(&state.process)
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { displayOrderNumber } from './utils/orderNumber'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import DashboardPanel from './components/DashboardPanel.vue'
@@ -13,6 +14,7 @@ import { useHighTempPressureSchedule } from './composables/useHighTempPressureSc
 import { useHighTempPressureStartupCheck } from './composables/useHighTempPressureStartupCheck'
 import { useHighTempPressureTesting } from './composables/useHighTempPressureTesting'
 import { useAuth } from '@/composables/useAuth'
+import { useLayout } from '@/composables/useLayout'
 import {
   cancelHighTempPressureOrder,
   finishHighTempPressureOrder,
@@ -33,6 +35,7 @@ const schedule = useHighTempPressureSchedule()
 const startupCheck = useHighTempPressureStartupCheck()
 const testing = useHighTempPressureTesting()
 const { initAuth, getAuthHeaders } = useAuth()
+const { enterEditMode, exitEditMode } = useLayout()
 const completedSelections = ref<ScheduledSelection[]>([])
 const activeTestSelections = ref<ScheduledSelection[]>([])
 const productPickerVisible = ref(false)
@@ -43,6 +46,28 @@ const pendingReportCount = computed(() => pendingReportSessions.value.length)
 const reportCenterInitialTab = ref<'pending' | 'server'>('pending')
 const testCompletionSaving = ref(false)
 const testCompletionSavingText = ref('')
+const testStartSubmitting = ref(false)
+const backendTestStarted = ref(false)
+const canReturnToScheduleBeforeTest = computed(() =>
+  testing.currentPanel.value === 'testing' &&
+  !backendTestStarted.value &&
+  !testStartSubmitting.value &&
+  !testing.testRunning.value &&
+  !testing.captureOutputDir.value
+)
+
+watch(
+  () => testing.currentPanel.value,
+  (panel) => {
+    if (panel === 'start' || panel === 'testing') {
+      enterEditMode()
+    } else {
+      exitEditMode()
+    }
+  },
+  { immediate: true }
+)
+
 const pageHeaderMeta = computed(() => {
   if (testing.currentPanel.value === 'reports') {
     return {
@@ -70,7 +95,7 @@ const productPickerRows = computed(() =>
     id: selection.instrument.id,
     name: selection.instrument.label,
     sn: selection.instrument.sn,
-    orderNo: selection.order.no,
+    orderNo: displayOrderNumber(selection.order),
     customer: selection.order.applicant,
   }))
 )
@@ -97,6 +122,14 @@ function returnToDashboard() {
   testing.switchPanel('dashboard')
 }
 
+async function handleHeaderReturnToDashboard() {
+  if (canReturnToScheduleBeforeTest.value) {
+    await testing.resetTestSession()
+    backendTestStarted.value = false
+  }
+  returnToDashboard()
+}
+
 function openPendingReport(session: HighTempPressurePendingReport) {
   pendingReportSession.value = session
   completedSelections.value = session.selections.slice()
@@ -109,7 +142,7 @@ function openPendingReport(session: HighTempPressurePendingReport) {
 async function removePendingReport(session: HighTempPressurePendingReport) {
   try {
     await ElMessageBox.confirm(
-      `确认从待办列表移除工单 ${Array.from(new Set(session.selections.map((item) => item.order.no))).join('、')} 的报告记录吗？采集目录中的文件不会被删除。`,
+      `确认从待办列表移除工单 ${Array.from(new Set(session.selections.map((item) => displayOrderNumber(item.order)))).join('、')} 的报告记录吗？采集目录中的文件不会被删除。`,
       '移除待报告记录',
       { type: 'warning', confirmButtonText: '确认移除', cancelButtonText: '取消' }
     )
@@ -166,12 +199,22 @@ async function confirmProductSelection() {
     ElMessage.warning('请先选择要开始实验的测试产品')
     return
   }
-  schedule.selectedScheduledOrderIds.value = selectedProductIds.value.slice()
-  const selectedSelections = schedule.selectedScheduledOrders.value
+  const selectedProductIdSet = new Set(selectedProductIds.value)
+  const selectedSelections = schedule.selectedScheduledOrders.value.filter((selection) =>
+    selectedProductIdSet.has(selection.instrument.id)
+  )
   if (!selectedSelections.length) {
     ElMessage.warning('未找到已选中的仪器')
     return
   }
+  const selectedTestTypes = new Set(
+    selectedSelections.map((selection) => String(selection.order.testType || '').trim())
+  )
+  if (selectedTestTypes.size > 1) {
+    ElMessage.warning('同一次实验请选择相同测试类型的设备')
+    return
+  }
+  schedule.selectedScheduledOrderIds.value = selectedProductIds.value.slice()
   activeTestSelections.value = selectedSelections.slice()
   productPickerVisible.value = false
   startupCheck.openStartupCheck()
@@ -188,8 +231,21 @@ async function handleConfirmStart() {
     ElMessage.error('未找到已选中的仪器')
     return
   }
-  const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
+
+  backendTestStarted.value = false
   completedSelections.value = []
+  await testing.confirmStart(String(selections[0]?.order.testType || '').trim())
+}
+
+async function handleBeginTest() {
+  if (testStartSubmitting.value || backendTestStarted.value) return
+
+  const selections = activeTestSelections.value.length ? activeTestSelections.value : schedule.selectedScheduledOrders.value
+  if (!selections.length) {
+    ElMessage.error('未找到已选中的仪器')
+    return
+  }
+  const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
   const missingDbOrder = uniqueOrders.find((order) => typeof order.dbId !== 'number')
   if (missingDbOrder) {
@@ -197,6 +253,7 @@ async function handleConfirmStart() {
     return
   }
 
+  testStartSubmitting.value = true
   try {
     const authOk = await initAuth()
     if (!authOk) {
@@ -208,7 +265,7 @@ async function handleConfirmStart() {
     const startResults = await Promise.all(uniqueOrders.map(async (order) => {
       const dbId = order.dbId
       if (typeof dbId !== 'number') {
-        throw new Error(`工单 ${order.no} 未找到工单ID`)
+        throw new Error(`工单 ${displayOrderNumber(order)} 未找到工单ID`)
       }
       const orderInstrumentSns = Array.from(new Set(
         selections
@@ -222,16 +279,19 @@ async function handleConfirmStart() {
 
     const failed = startResults.find(({ res }) => !res.success || res.data?.code !== 0)
     if (failed) {
-      ElMessage.error(failed.res.data?.msg || failed.res.error || `工单 ${failed.order.no} 开始测试失败`)
+      ElMessage.error(failed.res.data?.msg || failed.res.error || `工单 ${displayOrderNumber(failed.order)} 开始测试失败`)
       return
     }
 
     uniqueOrders.forEach((order) => schedule.markOrderStarted(order.id))
     schedule.markInstrumentsRunning(runningInstrumentIds)
-    testing.confirmStart()
+    backendTestStarted.value = true
     refreshWorkOrdersInBackground()
+    await testing.connectOcrDevice()
   } catch (e) {
     ElMessage.error('开始测试失败')
+  } finally {
+    testStartSubmitting.value = false
   }
 }
 
@@ -288,7 +348,7 @@ async function handleConfirmEnd() {
     const partialOrderNos: string[] = []
     groupedByOrder.forEach(({ order }) => {
       if (typeof order.dbId !== 'number') {
-        throw new Error(`工单 ${order.no} 未找到工单ID`)
+        throw new Error(`工单 ${displayOrderNumber(order)} 未找到工单ID`)
       }
       ordersToFinish.push(order)
     })
@@ -302,18 +362,18 @@ async function handleConfirmEnd() {
       }
       for (const order of ordersToFinish) {
         if (typeof order.dbId !== 'number') {
-          throw new Error(`工单 ${order.no} 未找到工单ID`)
+          throw new Error(`工单 ${displayOrderNumber(order)} 未找到工单ID`)
         }
         const orderSelections = groupedByOrder.get(order.id)?.selections || []
         const instrumentSns = Array.from(new Set(orderSelections.map((selection) => selection.instrument.sn).filter(Boolean)))
         const res = await finishHighTempPressureOrder(order.dbId, { instrument_sns: instrumentSns }, getAuthHeaders())
         if (!res.success || res.data?.code !== 0) {
-          throw new Error(res.data?.msg || res.error || `工单 ${order.no} 结束测试失败`)
+          throw new Error(res.data?.msg || res.error || `工单 ${displayOrderNumber(order)} 结束测试失败`)
         }
         if ((res.data.data?.remaining_count ?? 0) === 0) {
-          readyReportOrderNos.push(order.no)
+          readyReportOrderNos.push(displayOrderNumber(order))
         } else {
-          partialOrderNos.push(order.no)
+          partialOrderNos.push(displayOrderNumber(order))
         }
       }
     }
@@ -404,7 +464,7 @@ async function handleConfirmStop() {
   const currentSelections = activeTestSelections.value.length
     ? activeTestSelections.value
     : schedule.selectedScheduledOrders.value
-  testing.stopTest()
+  await testing.stopTest()
 
   if (!currentSelections.length) {
     ElMessage.info('已中止本次测试，OCR 采集状态已重置')
@@ -429,12 +489,12 @@ async function handleConfirmStop() {
 
     for (const { order, selections } of groupedByOrder.values()) {
       if (typeof order.dbId !== 'number') {
-        throw new Error(`工单 ${order.no} 未找到工单ID`)
+        throw new Error(`工单 ${displayOrderNumber(order)} 未找到工单ID`)
       }
       const instrumentSns = Array.from(new Set(selections.map((selection) => selection.instrument.sn).filter(Boolean)))
       const res = await cancelHighTempPressureOrder(order.dbId, { instrument_sns: instrumentSns }, getAuthHeaders())
       if (!res.success || res.data?.code !== 0) {
-        throw new Error(res.data?.msg || res.error || `工单 ${order.no} 中止测试失败`)
+        throw new Error(res.data?.msg || res.error || `工单 ${displayOrderNumber(order)} 中止测试失败`)
       }
     }
 
@@ -454,13 +514,13 @@ async function handleShutdownComplete() {
   completedSelections.value = []
   activeTestSelections.value = []
   schedule.clearSelectedSchedule()
-  testing.resetTestSession()
+  await testing.resetTestSession()
   testing.switchPanel('dashboard')
   await schedule.refreshWorkOrders()
 }
 
 onMounted(async () => {
-  testing.resetTestSession()
+  await testing.resetTestSession()
   schedule.resetScheduleState()
   await schedule.refreshWorkOrders()
   reloadPendingReports()
@@ -468,10 +528,17 @@ onMounted(async () => {
     ElMessage.info(`发现 ${pendingReportSessions.value.length} 份待处理的高温高压报告，可从报告中心继续填写`)
   }
 })
+
+onUnmounted(() => {
+  exitEditMode()
+})
 </script>
 
 <template>
-  <div class="high-temp-pressure-page">
+  <div
+    class="high-temp-pressure-page"
+    :class="{ 'is-testing-panel': testing.currentPanel.value === 'testing' }"
+  >
     <div class="page-header">
       <div class="header-left">
         <div class="header-icon">
@@ -500,9 +567,9 @@ onMounted(async () => {
           <Icon icon="mdi:format-list-bulleted" /> 报告列表
         </button>
         <button
-          v-if="testing.currentPanel.value === 'reports' || testing.currentPanel.value === 'report'"
+          v-if="testing.currentPanel.value === 'start' || canReturnToScheduleBeforeTest || testing.currentPanel.value === 'reports' || testing.currentPanel.value === 'report'"
           class="week-cal-nav header-nav-button"
-          @click="returnToDashboard"
+          @click="handleHeaderReturnToDashboard"
         >
           <Icon icon="mdi:calendar-clock-outline" /> 返回排程
         </button>
@@ -582,6 +649,8 @@ onMounted(async () => {
         :t2="testing.state.chartData.t2"
         :p="testing.state.chartData.p"
         :test-running="testing.testRunning.value"
+        :test-started="backendTestStarted"
+        :start-submitting="testStartSubmitting"
         :test-start-time="testing.testStartTime.value"
         :online-timer-str="testing.onlineTimerStr.value"
         :csv-count="testing.csvCount.value"
@@ -596,6 +665,7 @@ onMounted(async () => {
         :chart-range-locked="testing.chartRangeLocked.value"
         :chart-summary="testing.chartSummary"
         :chart-series-visibility="testing.chartSeriesVisibility"
+        @start-test="handleBeginTest"
         @connect-ocr="testing.connectOcrDevice"
         @set-chart-window="testing.setChartWindowMinutes"
         @toggle-chart-series="testing.toggleChartSeries"
@@ -687,6 +757,38 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+}
+
+.high-temp-pressure-page.is-testing-panel .page-header {
+  min-height: 42px;
+  margin-bottom: 8px;
+}
+
+.high-temp-pressure-page.is-testing-panel .header-left {
+  gap: 10px;
+}
+
+.high-temp-pressure-page.is-testing-panel .page-header .header-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  font-size: 17px;
+}
+
+.high-temp-pressure-page.is-testing-panel .header-title {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.high-temp-pressure-page.is-testing-panel .header-subtitle {
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.high-temp-pressure-page.is-testing-panel .header-nav-button {
+  min-height: 34px;
+  padding: 7px 11px;
 }
 
 .report-center-button {

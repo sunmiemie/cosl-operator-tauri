@@ -55,24 +55,29 @@ async function stopFlojoyBackend() {
   }
 }
 
-// 关闭窗口（带确认弹窗）
-async function closeWindow() {
+// 退出登录并关闭程序（带确认弹窗）
+async function confirmLogoutAndClose() {
   try {
     await ElMessageBox.confirm(
-      '确定要退出应用程序吗？',
+      '确定要退出登录并关闭应用程序吗？',
       '退出确认',
       {
-        confirmButtonText: '确定退出',
+        confirmButtonText: '退出登录并关闭',
         cancelButtonText: '取消',
         type: 'warning',
       }
     )
-    // 用户点击确认，停止后端并关闭窗口
+    // 先清除持久化登录态，再停止本地服务并关闭窗口
+    await logout()
     await stopFlojoyBackend()
     await appWindow.destroy()
   } catch {
     // 用户点击取消，不做任何操作
   }
+}
+
+async function closeWindow() {
+  await confirmLogoutAndClose()
 }
 
 // 监听窗口关闭请求事件（Alt+F4 或任务栏关闭）
@@ -81,22 +86,7 @@ onMounted(async () => {
     // 阻止默认关闭行为
     event.preventDefault()
 
-    try {
-      await ElMessageBox.confirm(
-        '确定要退出应用程序吗？',
-        '退出确认',
-        {
-          confirmButtonText: '确定退出',
-          cancelButtonText: '取消',
-          type: 'warning',
-        }
-      )
-      // 用户点击确认，停止后端并关闭窗口
-      await stopFlojoyBackend()
-      await appWindow.destroy()
-    } catch {
-      // 用户点击取消，不做任何操作
-    }
+    await confirmLogoutAndClose()
   })
 })
 

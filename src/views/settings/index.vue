@@ -15,6 +15,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { platform as getPlatform } from '@tauri-apps/plugin-os'
 import { http } from '@/services/http'
 import { cacheApi, type CacheSizes } from '@/services/process'
+import { listSensorlessOvenPorts, type SensorlessOvenPort } from '@/services/sensorless-oven-monitor-api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 注意: 如果需要目录选择功能，需要安装 @tauri-apps/plugin-dialog
 // 当前使用输入框手动输入作为临时方案
@@ -73,6 +74,10 @@ const highTempPressureCaptureDevices = ref<HighTempPressureCaptureDevice[]>([])
 const highTempPressureCaptureDevice = ref(-1)
 const highTempPressureCaptureDeviceName = ref('')
 const isRefreshingHighTempPressureCaptureDevices = ref(false)
+const sensorlessOvenPorts = ref<SensorlessOvenPort[]>([])
+const sensorlessOvenLeftPort = ref('')
+const sensorlessOvenRightPort = ref('')
+const isRefreshingSensorlessOvenPorts = ref(false)
 
 // 离线功能设置
 const dataDir = ref('')
@@ -177,6 +182,8 @@ onMounted(async () => {
   xrayDevice.value = config.value.xrayDevice ?? -1
   highTempPressureCaptureDevice.value = config.value.highTempPressureCaptureDevice ?? -1
   highTempPressureCaptureDeviceName.value = config.value.highTempPressureCaptureDeviceName ?? ''
+  sensorlessOvenLeftPort.value = config.value.sensorlessOvenLeftPort ?? ''
+  sensorlessOvenRightPort.value = config.value.sensorlessOvenRightPort ?? ''
   if (highTempPressureCaptureDevice.value >= 0) {
     highTempPressureCaptureDevices.value = [{
       index: highTempPressureCaptureDevice.value,
@@ -200,6 +207,7 @@ onMounted(async () => {
   
   // 加载摄像头列表
   await loadCameraList()
+  void refreshSensorlessOvenPorts(false)
   
   // 加载缓存大小
   await loadCacheSizes()
@@ -254,6 +262,56 @@ async function saveHighTempPressureCaptureDevice() {
   await setConfigItem('highTempPressureCaptureDevice', highTempPressureCaptureDevice.value)
   await setConfigItem('highTempPressureCaptureDeviceName', highTempPressureCaptureDeviceName.value)
   if (selected) ElMessage.success(`OCR视频采集卡已设为 ${selected.name}`)
+}
+
+function sensorlessOvenPortOptions(currentPort: string) {
+  const ports = [...sensorlessOvenPorts.value]
+  if (currentPort && !ports.some((port) => port.device === currentPort)) {
+    ports.unshift({
+      device: currentPort,
+      description: '当前未连接',
+      hwid: '',
+      serial_number: '',
+      manufacturer: '',
+      vid: null,
+      pid: null,
+      by_id: null,
+      display: `${currentPort}（当前未连接）`,
+    })
+  }
+  return ports
+}
+
+async function refreshSensorlessOvenPorts(showMessage = true) {
+  isRefreshingSensorlessOvenPorts.value = true
+  try {
+    sensorlessOvenPorts.value = await listSensorlessOvenPorts()
+    if (!showMessage) return
+    if (!sensorlessOvenPorts.value.length) {
+      ElMessage.warning('未搜索到串口设备')
+      return
+    }
+    ElMessage.success(`已搜索到 ${sensorlessOvenPorts.value.length} 个串口设备`)
+  } catch (error) {
+    console.error('搜索无感烘箱串口失败:', error)
+    if (showMessage) ElMessage.error(`搜索无感烘箱串口失败：${String(error)}`)
+  } finally {
+    isRefreshingSensorlessOvenPorts.value = false
+  }
+}
+
+async function saveSensorlessOvenPort(side: 'left' | 'right') {
+  const key = side === 'left' ? 'sensorlessOvenLeftPort' : 'sensorlessOvenRightPort'
+  const value = side === 'left' ? sensorlessOvenLeftPort.value : sensorlessOvenRightPort.value
+  const other = side === 'left' ? sensorlessOvenRightPort.value : sensorlessOvenLeftPort.value
+  if (value && value === other) {
+    ElMessage.error('左右侧设备不能选择同一个串口')
+    if (side === 'left') sensorlessOvenLeftPort.value = config.value.sensorlessOvenLeftPort || ''
+    else sensorlessOvenRightPort.value = config.value.sensorlessOvenRightPort || ''
+    return
+  }
+  await setConfigItem(key, value)
+  ElMessage.success(value ? `${side === 'left' ? '左侧' : '右侧'}设备已设为 ${value}` : `${side === 'left' ? '左侧' : '右侧'}设备已清空`)
 }
 
 // ==================== 缓存管理 ====================
@@ -1274,6 +1332,76 @@ function getFlojoyInitStatusText(): string {
                 title="区域校准"
               >
                 <Icon icon="mdi:crop" />
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-item">
+            <span class="item-label">无感烘箱左侧设备</span>
+            <div class="device-selector">
+              <select
+                v-model="sensorlessOvenLeftPort"
+                class="item-select"
+                :disabled="isRefreshingSensorlessOvenPorts"
+                @change="saveSensorlessOvenPort('left')"
+              >
+                <option value="">
+                  {{ isRefreshingSensorlessOvenPorts ? '正在搜索...' : '未选择' }}
+                </option>
+                <option
+                  v-for="port in sensorlessOvenPortOptions(sensorlessOvenLeftPort)"
+                  :key="`left-${port.device}`"
+                  :value="port.device"
+                  :disabled="port.device === sensorlessOvenRightPort"
+                >
+                  {{ port.display || port.device }}
+                </option>
+              </select>
+              <button
+                class="preview-btn"
+                :disabled="isRefreshingSensorlessOvenPorts"
+                title="刷新搜索串口设备"
+                @click="refreshSensorlessOvenPorts()"
+              >
+                <Icon
+                  :icon="isRefreshingSensorlessOvenPorts ? 'mdi:loading' : 'mdi:refresh'"
+                  :class="{ spin: isRefreshingSensorlessOvenPorts }"
+                />
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-item">
+            <span class="item-label">无感烘箱右侧设备</span>
+            <div class="device-selector">
+              <select
+                v-model="sensorlessOvenRightPort"
+                class="item-select"
+                :disabled="isRefreshingSensorlessOvenPorts"
+                @change="saveSensorlessOvenPort('right')"
+              >
+                <option value="">
+                  {{ isRefreshingSensorlessOvenPorts ? '正在搜索...' : '未选择' }}
+                </option>
+                <option
+                  v-for="port in sensorlessOvenPortOptions(sensorlessOvenRightPort)"
+                  :key="`right-${port.device}`"
+                  :value="port.device"
+                  :disabled="port.device === sensorlessOvenLeftPort"
+                >
+                  {{ port.display || port.device }}
+                </option>
+              </select>
+              <button
+                class="preview-btn"
+                :disabled="isRefreshingSensorlessOvenPorts"
+                title="刷新搜索串口设备"
+                @click="refreshSensorlessOvenPorts()"
+              >
+                <Icon
+                  :icon="isRefreshingSensorlessOvenPorts ? 'mdi:loading' : 'mdi:refresh'"
+                  :class="{ spin: isRefreshingSensorlessOvenPorts }"
+                />
               </button>
             </div>
           </div>

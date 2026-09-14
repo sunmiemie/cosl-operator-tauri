@@ -7,6 +7,7 @@ export interface HighTempPressureOrderDTO {
   device_name: string
   device_number: string
   task_number: string
+  test_number?: string | null
   table_no?: string | null
   target_temp: number
   target_pressure: number
@@ -21,6 +22,8 @@ export interface HighTempPressureOrderDTO {
   client?: string
   planned_time?: string | null
   test_type?: string
+  test_container?: string
+  online_test?: boolean | null
   use_device?: string
   max_diameter?: number | null
   hold_time?: number | null
@@ -223,6 +226,9 @@ export type HighTempPressureInstrumentScheduleResponse = {
     order_id?: number
     assistantSync?: {
       success?: boolean
+      queued?: boolean
+      skipped?: boolean
+      reason?: string
       error?: string
       list?: Array<{ error?: string; reason?: string }>
     }

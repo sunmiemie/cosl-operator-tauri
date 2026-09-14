@@ -10,12 +10,15 @@ import { Icon } from '@iconify/vue'
 const props = withDefaults(defineProps<{
   visible: boolean
   status: 'checking' | 'success' | 'error'
-  scannerOk: boolean
-  cameraOk: boolean
+  scannerOk?: boolean
+  cameraOk?: boolean
+  items?: { label: string; ok: boolean }[]
   errorMsg?: string
   accentColor?: 'green' | 'orange'
 }>(), {
-  accentColor: 'green'
+  accentColor: 'green',
+  scannerOk: false,
+  cameraOk: false,
 })
 
 // Emits
@@ -26,7 +29,15 @@ const emit = defineEmits<{
 }>()
 
 // 计算属性
-const allDevicesOk = computed(() => props.scannerOk && props.cameraOk)
+const displayItems = computed(() => {
+  if (props.items?.length) return props.items
+  return [
+    { label: '扫码枪', ok: props.scannerOk },
+    { label: '摄像头', ok: props.cameraOk },
+  ]
+})
+
+const allDevicesOk = computed(() => displayItems.value.every((item) => item.ok))
 
 const checkComplete = computed(() => 
   props.status === 'success' || props.status === 'error'
@@ -115,13 +126,14 @@ const accentClass = computed(() => {
         
         <!-- 设备状态列表 -->
         <div v-if="checkComplete" class="device-list">
-          <div class="device-item" :class="{ 'is-ok': scannerOk }">
-            <Icon :icon="scannerOk ? 'mdi:check-circle' : 'mdi:close-circle'" />
-            <span>扫码枪</span>
-          </div>
-          <div class="device-item" :class="{ 'is-ok': cameraOk }">
-            <Icon :icon="cameraOk ? 'mdi:check-circle' : 'mdi:close-circle'" />
-            <span>摄像头</span>
+          <div
+            v-for="item in displayItems"
+            :key="item.label"
+            class="device-item"
+            :class="{ 'is-ok': item.ok }"
+          >
+            <Icon :icon="item.ok ? 'mdi:check-circle' : 'mdi:close-circle'" />
+            <span>{{ item.label }}</span>
           </div>
         </div>
         

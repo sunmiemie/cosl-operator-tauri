@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ScheduledSelection } from '../types'
@@ -69,8 +70,9 @@ const testerSignatureLoading = ref(false)
 const testerSignatureError = ref('')
 const testerSignaturePreviewUrl = ref('')
 const confirmChecks = ref([false, false, false, false])
-const createDefaultPaperReportChecks = (): PaperReportChecks => ({
-  onlineTest: false,
+const createDefaultPaperReportChecks = (onlineTest?: boolean | null): PaperReportChecks => ({
+  // 未提供新字段的旧工单沿用原默认值；明确的“否”必须保留。
+  onlineTest: onlineTest ?? true,
   otherRequirements: '无',
   testingProtectiveCapProvider: 'applicant',
   testingPlugProvider: 'applicant',
@@ -79,7 +81,7 @@ const createDefaultPaperReportChecks = (): PaperReportChecks => ({
   curveStatus: 'normal',
   otherDescriptions: '无',
   testingCurveCopies: 1,
-  otherCopies: 5,
+  otherCopies: 0,
 })
 const paperReportChecks = ref<PaperReportChecks>(createDefaultPaperReportChecks())
 const reportUnitDraftMap = ref<Record<string, HighTempPressureReportUnitDraft>>({})
@@ -117,6 +119,7 @@ const reportSelections = computed(() => {
 const primaryOrder = computed(() => reportSelections.value[0]?.order ?? null)
 const selectionSignature = computed(() => reportSelections.value.map((item) => `${item.order.dbId ?? item.order.id}:${item.instrument.id}:${item.instrument.sn}`).join('|'))
 const orderNos = computed(() => Array.from(new Set(reportSelections.value.map((item) => item.order.no))).join(' / ') || '-')
+const displayOrderNos = computed(() => Array.from(new Set(reportSelections.value.map((item) => displayOrderNumber(item.order)))).join(' / ') || '-')
 const instruments = computed(() => reportSelections.value.map((item) => `${item.instrument.label} ${item.instrument.sn}`).join(', ') || '-')
 const canGenerateReport = computed(() => fileStatuses.value.json === 'done' && curveReady.value)
 const savePath = computed(() => props.exportedCaptureDir || '未获取到保存目录，请先完成 OCR 识别结果保存')
@@ -153,7 +156,7 @@ const activeInstrumentText = computed(() => {
   const selection = activeReportSelection.value
   return selection ? `${selection.instrument.label} ${selection.instrument.sn}`.trim() : '-'
 })
-const activeOrderNo = computed(() => activeReportOrder.value?.no || '-')
+const activeOrderNo = computed(() => displayOrderNumber(activeReportOrder.value))
 const overallResult = computed<HighTempPressureReportResult>(() => {
   const results = instrumentRows.value.map((row) => reportUnitDraftMap.value[row.key]?.result || row.state.result)
   if (results.includes('fail')) return 'fail'
@@ -292,7 +295,7 @@ async function loadScheduledReportBindings() {
       bindings.set(key, { orderId: detail.id, instrumentId: instrument.id, equipmentId })
       return
     }
-    unresolved.push(`${selection.order.no}/${selection.instrument.sn}`)
+    unresolved.push(`${displayOrderNumber(selection.order)}/${selection.instrument.sn}`)
   })
 
   if (unresolved.length) {
@@ -319,6 +322,7 @@ function resetReportStateForSelections() {
   activeReportIndex.value = 0
   reportStage.value = 'editing'
   reviewConfirmed.value = false
+  paperReportChecks.value = createDefaultPaperReportChecks(reportSelections.value[0]?.order.onlineTest)
 }
 
 function clonePaperReportChecks(value: PaperReportChecks): PaperReportChecks {
@@ -391,6 +395,8 @@ function openReportForEditing(index: number, inheritCurrent = false) {
   let target = reportUnitDraftMap.value[targetRow.key]
   if (!target && inheritCurrent && source) {
     target = cloneReportUnitDraft(source, false)
+    // 继承其它报告内容时，在线要求仍优先使用目标工单，避免跨工单串值。
+    target.paperReportChecks.onlineTest = targetRow.selection.order.onlineTest ?? target.paperReportChecks.onlineTest
     reportUnitDraftMap.value = {
       ...reportUnitDraftMap.value,
       [targetRow.key]: target,
@@ -400,6 +406,7 @@ function openReportForEditing(index: number, inheritCurrent = false) {
   reportStage.value = 'editing'
   reviewConfirmed.value = false
   if (target) applyReportUnitDraft(target)
+  else paperReportChecks.value = createDefaultPaperReportChecks(targetRow.selection.order.onlineTest)
 }
 
 function canOpenReport(index: number) {
@@ -756,9 +763,9 @@ const finishReportUpload = async () => {
     const orderIds = Array.from(new Set(Array.from(bindings.values()).map((binding) => binding.orderId)))
     const instrumentResults = instrumentRows.value.map(({ key, selection, state }) => {
       const binding = bindings.get(key)
-      if (!binding) throw new Error(`未找到 ${selection.order.no}/${selection.instrument.sn} 的服务端关联信息`)
+      if (!binding) throw new Error(`未找到 ${displayOrderNumber(selection.order)}/${selection.instrument.sn} 的服务端关联信息`)
       const draft = reportUnitDraftMap.value[key]
-      if (!draft?.completed) throw new Error(`${selection.order.no}/${selection.instrument.sn} 的报告尚未填写完成`)
+      if (!draft?.completed) throw new Error(`${displayOrderNumber(selection.order)}/${selection.instrument.sn} 的报告尚未填写完成`)
       return {
         order_id: binding.orderId,
         order_no: selection.order.no,
@@ -909,7 +916,7 @@ const finishShutdown = () => {
           <div class="report-section">
             <div class="report-section-title">基本信息（自动填写）</div>
             <div class="form-row">
-              <div class="form-group"><div class="form-label">工单编号</div><input class="form-control report-readonly" :value="activeOrderNo" readonly /></div>
+              <div class="form-group"><div class="form-label">测试单号</div><input class="form-control report-readonly" :value="activeOrderNo" readonly /></div>
               <div class="form-group"><div class="form-label">测试申请人</div><input class="form-control report-readonly" :value="activeApplicantName" readonly /></div>
             </div>
             <div class="form-row">
@@ -931,7 +938,7 @@ const finishShutdown = () => {
                 <span>单台观察记录</span>
               </div>
               <div v-if="activeReportRow" :key="activeReportRow.key" class="instrument-result-row">
-                <span>{{ activeReportRow.selection.order.no }}</span>
+                <span>{{ displayOrderNumber(activeReportRow.selection.order) }}</span>
                 <span>{{ activeReportRow.selection.instrument.label }}</span>
                 <span>{{ activeReportRow.selection.instrument.sn || '-' }}</span>
                 <select v-model="activeReportRow.state.result" class="form-control result-select">
@@ -1026,6 +1033,7 @@ const finishShutdown = () => {
               ref="curveEditor"
               :export-dir="exportedCaptureDir"
               :order-numbers="orderNos"
+              :display-order-numbers="displayOrderNos"
               :instruments="instruments"
               :operator-name="operatorName"
               :initial-ranges="curveRanges"
@@ -1090,7 +1098,7 @@ const finishShutdown = () => {
             <div class="report-review-main">
               <div class="report-review-title">{{ row.selection.instrument.label }} · {{ row.selection.instrument.sn || '-' }}</div>
               <div class="report-review-meta">
-                <span>工单：{{ row.selection.order.no }}</span>
+                <span>工单：{{ displayOrderNumber(row.selection.order) }}</span>
                 <span>结论：{{ resultText(reportUnitDraftMap[row.key]?.result || row.state.result) }}</span>
                 <span>测试人：{{ reportUnitDraftMap[row.key]?.operatorName || '-' }}</span>
                 <span>复核签名：待管理端审核填写</span>

@@ -40,6 +40,8 @@ export interface AppConfig {
   xrayDevice: number       // X光机摄像头索引
   highTempPressureCaptureDevice: number // OCR视频采集卡索引（保留原配置键）
   highTempPressureCaptureDeviceName: string // OCR视频采集卡名称（保留原配置键）
+  sensorlessOvenLeftPort: string // 无感烘箱左侧设备串口
+  sensorlessOvenRightPort: string // 无感烘箱右侧设备串口
   
   // X-Ray 裁剪区域设置
   xrayCropArea: XrayCropArea
@@ -84,6 +86,8 @@ const defaultConfig: AppConfig = {
   xrayDevice: -1,
   highTempPressureCaptureDevice: -1,
   highTempPressureCaptureDeviceName: '',
+  sensorlessOvenLeftPort: '',
+  sensorlessOvenRightPort: '',
   // X-Ray 裁剪区域默认值（默认不启用，使用全画面）
   xrayCropArea: {
     w: [0, 1920],    // 默认水平范围
@@ -153,6 +157,8 @@ export async function initializeConfig(): Promise<AppConfig> {
       const xrayDevice = await store.get<number>('xrayDevice')
       const highTempPressureCaptureDevice = await store.get<number>('highTempPressureCaptureDevice')
       const highTempPressureCaptureDeviceName = await store.get<string>('highTempPressureCaptureDeviceName')
+      const sensorlessOvenLeftPort = await store.get<string>('sensorlessOvenLeftPort')
+      const sensorlessOvenRightPort = await store.get<string>('sensorlessOvenRightPort')
       const xrayCropArea = await store.get<XrayCropArea>('xrayCropArea')
       const dataDir = await store.get<string>('dataDir')
       const downloadDir = await store.get<string>('downloadDir')
@@ -230,6 +236,14 @@ export async function initializeConfig(): Promise<AppConfig> {
       }
       if (highTempPressureCaptureDeviceName === null || highTempPressureCaptureDeviceName === undefined) {
         await store.set('highTempPressureCaptureDeviceName', defaultConfig.highTempPressureCaptureDeviceName)
+        needsSave = true
+      }
+      if (sensorlessOvenLeftPort === null || sensorlessOvenLeftPort === undefined) {
+        await store.set('sensorlessOvenLeftPort', defaultConfig.sensorlessOvenLeftPort)
+        needsSave = true
+      }
+      if (sensorlessOvenRightPort === null || sensorlessOvenRightPort === undefined) {
+        await store.set('sensorlessOvenRightPort', defaultConfig.sensorlessOvenRightPort)
         needsSave = true
       }
       if (xrayCropArea === null || xrayCropArea === undefined) {
@@ -311,6 +325,8 @@ export async function initializeConfig(): Promise<AppConfig> {
         xrayDevice: xrayDevice ?? defaultConfig.xrayDevice,
         highTempPressureCaptureDevice: highTempPressureCaptureDevice ?? defaultConfig.highTempPressureCaptureDevice,
         highTempPressureCaptureDeviceName: highTempPressureCaptureDeviceName ?? defaultConfig.highTempPressureCaptureDeviceName,
+        sensorlessOvenLeftPort: sensorlessOvenLeftPort ?? defaultConfig.sensorlessOvenLeftPort,
+        sensorlessOvenRightPort: sensorlessOvenRightPort ?? defaultConfig.sensorlessOvenRightPort,
         xrayCropArea: xrayCropArea ?? defaultConfig.xrayCropArea,
         dataDir: dataDir ?? defaultConfig.dataDir,
         downloadDir: downloadDir ?? defaultConfig.downloadDir,

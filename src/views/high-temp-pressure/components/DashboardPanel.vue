@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { displayOrderNumber } from '../utils/orderNumber'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import WorkOrderDetailModal from './WorkOrderDetailModal.vue'
@@ -175,7 +176,8 @@ const getOrderStatusMeta = (order: WorkOrder) => {
 }
 
 const getOrderTestTypeSummary = (order: WorkOrder) => {
-  return order.testType?.trim() || order.type?.trim() || '-'
+  const online = order.onlineTest === true ? '在线测试' : order.onlineTest === false ? '非在线测试' : '在线要求未填写'
+  return [order.testContainer?.trim() || '容器未填写', order.testType?.trim() || '类型未填写', online].join(' / ')
 }
 
 const canDragOrder = (order: WorkOrder) => {
@@ -261,7 +263,7 @@ const handleGridDrop = (e: DragEvent) => {
           <input
             :value="searchKeyword"
             type="text"
-            placeholder="搜索任务编号/使用设备/申请人/仪器SN"
+            placeholder="搜索测试单号/使用设备/申请人/仪器SN"
             @input="emit('update:searchKeyword', ($event.target as HTMLInputElement).value)"
           />
           <button v-if="searchKeyword" class="clear-btn" @click="emit('update:searchKeyword', '')">
@@ -298,8 +300,8 @@ const handleGridDrop = (e: DragEvent) => {
               <thead>
                 <tr>
                   <th>申请人</th>
-                  <th>任务编号</th>
-                  <th>测试类型</th>
+                  <th>测试单号</th>
+                  <th>测试要求</th>
                   <th>操作</th>
                   <th>状态</th>
                 </tr>
@@ -319,7 +321,7 @@ const handleGridDrop = (e: DragEvent) => {
                     @dragend="emit('drag-end', $event)"
                   >
                     <td class="cell-applicant" :title="order.applicant">{{ order.applicant }}</td>
-                    <td class="cell-id" :title="order.no">{{ order.no }}</td>
+                    <td class="cell-id" :title="displayOrderNumber(order)">{{ displayOrderNumber(order) }}</td>
                     <td class="cell-detail" :title="getOrderTestTypeSummary(order)">
                       <span class="expand-icon" @click.stop="order.expanded = !order.expanded">
                         <Icon :icon="order.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
@@ -448,7 +450,7 @@ const handleGridDrop = (e: DragEvent) => {
                     ]"
                     :style="getScheduledStyle(it)"
                     @click.stop="emit('select-scheduled-order', it.instrumentIds)"
-                    :title="`${getOrderByInstrumentId(it.instrumentId)?.no || ''} · ${it.hostDeviceName || '-'}`"
+                    :title="`${displayOrderNumber(getOrderByInstrumentId(it.instrumentId))} · ${it.hostDeviceName || '-'}`"
                   >
                     <div class="scheduled-head">
                       <button class="remove-btn" title="删除排程" @click.stop="emit('unschedule', it.instrumentIds, it.eventId)">
@@ -456,7 +458,7 @@ const handleGridDrop = (e: DragEvent) => {
                       </button>
                     </div>
                     <div class="scheduled-content">
-                      <span class="device-name">{{ getOrderByInstrumentId(it.instrumentId)?.no }}</span>
+                      <span class="device-name">{{ displayOrderNumber(getOrderByInstrumentId(it.instrumentId)) }}</span>
                       <span class="host-name">{{ it.hostDeviceName || '-' }}</span>
                     </div>
                     <div class="resize-handle-top" @mousedown.stop.prevent="startResizeTop(it.instrumentIds, it.eventId, $event)"></div>
@@ -492,7 +494,7 @@ const handleGridDrop = (e: DragEvent) => {
               </div>
               <span class="selected-divider">|</span>
               <span v-for="group in selectedScheduledOrderGroups" :key="group.order.id" class="selected-device">
-                {{ group.order.no }} · {{ group.count }}台
+                {{ displayOrderNumber(group.order) }} · {{ group.count }}台
               </span>
             </template>
             <span v-else class="selected-placeholder">请在日历中选择已排程的工单</span>

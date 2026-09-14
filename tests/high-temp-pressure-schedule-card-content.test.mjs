@@ -14,8 +14,8 @@ const scheduledItemTemplate = scheduledItemMatch[0]
 
 assert.match(
   scheduledItemTemplate,
-  /<span class="device-name">\{\{ getOrderByInstrumentId\(it\.instrumentId\)\?\.no \}\}<\/span>/,
-  'scheduled block should display the work order number',
+  /<span class="device-name">\{\{ displayOrderNumber\(getOrderByInstrumentId\(it\.instrumentId\)\) \}\}<\/span>/,
+  'scheduled block should display the test number with legacy fallback',
 )
 
 assert.match(

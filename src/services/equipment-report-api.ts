@@ -33,6 +33,7 @@ export interface EquipmentReportPayload {
 }
 
 export interface EquipmentReportItem extends EquipmentReportPayload {
+  display_order_numbers?: string[]
   id: number
   report_no: string
   status: number

@@ -31,6 +31,7 @@ export interface WorkOrder {
   id: string
   dbId?: number
   no: string
+  testNumber?: string | null
   tableNo?: string
   entrustNo: string
   applicant: string
@@ -53,6 +54,8 @@ export interface WorkOrder {
   keepCondition: string
   maxDiameter?: string
   testType?: string
+  testContainer?: string
+  onlineTest?: boolean | null
   projectMembers?: string
   equipmentList?: string
   instrumentCombination?: string
