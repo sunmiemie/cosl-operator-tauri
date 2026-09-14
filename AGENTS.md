@@ -91,3 +91,7 @@ pnpm tauri build
 ## 相关项目
 - cnooc-backend: Django 后端服务（API 数据源）
 - cosl-front-rebuild: Web 前端（共享部分设计）
+
+## 本地 HALT-HASS 任务范围
+
+本机存在 [工作区任务范围](../../AGENTS.md) 时，HALT-HASS 相关任务需读取并遵循其中的历史故障处理边界。已临时处置的事件不自动成为页面、报告或只读数据工作的重复排查任务；真实设备控制仍需按当前操作核验安全条件。
