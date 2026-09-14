@@ -1,8 +1,13 @@
+import logging
 from typing import Optional
 from flojoy import String, SerialConnection, flojoy, DataContainer
+from flojoy.execution_log import record_execution_event
 
 from blocks.HARDWARE.TBUS.tbus_decoder import decode_tbus_payload
 from blocks.HARDWARE.TBUS.tbus_polling import bounded_tbus_query
+
+
+logger = logging.getLogger(__name__)
 
 
 @flojoy(inject_connection=True)
@@ -18,23 +23,37 @@ def READ_MAST(
         expected_length=21,
     )
     if not response:
+        logger.error("READ_MAST 未收到完整的 21 字节响应")
         return String(s="")
 
+    serial_hex = response.hex().upper()
+    logger.info("READ_MAST serial response: %s", serial_hex)
     try:
         tbus_hex, board_information = decode_tbus_payload(response)
-    except (UnicodeDecodeError, ValueError):
-        return String(
-            s="",
-            extra={
-                "serial_hex": response.hex().upper(),
-                "decoder_error": True,
-            },
+    except (UnicodeDecodeError, ValueError) as exc:
+        logger.error(
+            "READ_MAST decode failed: serial_response=%s error=%s",
+            serial_hex,
+            exc,
         )
+        record_execution_event(
+            "device-response",
+            "READ_MAST：串口回执解析失败",
+            level="error",
+            direction="receive",
+            data={"responseHex": serial_hex, "error": str(exc)},
+        )
+        return String(s="")
 
-    return String(
-        s=board_information,
-        extra={
-            "serial_hex": response.hex().upper(),
-            "tbus_hex": tbus_hex,
-        },
+    logger.info(
+        "READ_MAST tbus response: %s; board information: %s",
+        tbus_hex,
+        board_information,
     )
+    record_execution_event(
+        "device-response",
+        "READ_MAST：接口板信息解析完成",
+        direction="receive",
+        data={"tbusHex": tbus_hex, "boardInformation": board_information},
+    )
+    return String(s=board_information)

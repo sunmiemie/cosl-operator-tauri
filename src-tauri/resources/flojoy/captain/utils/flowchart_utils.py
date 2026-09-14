@@ -340,10 +340,19 @@ async def prepare_jobs_and_run_fc(request: PostWFC, manager: Manager):
 
 
 async def cancel_when_max_time(manager: Manager, request: PostWFC):
+    if request.maximumRuntime <= 0:
+        return
     await asyncio.sleep(request.maximumRuntime)
-    if manager.running_topology and not manager.running_topology.is_cancelled():
+    topology = manager.running_topology
+    # 上一场流程的超时协程可能在下一场已经启动后才醒来。必须同时校验
+    # jobsetId，避免旧定时器误取消当前正在执行的新流程。
+    if (
+        topology
+        and topology.jobset_id == request.jobsetId
+        and not topology.is_cancelled()
+    ):
         logger.debug("Maximum runtime exceeded, cancelling topology")
-        manager.running_topology.cancel()
+        topology.cancel()
         await Signaler(manager.ws).signal_max_runtime_exceeded(request.jobsetId)
 
 

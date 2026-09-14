@@ -1,6 +1,8 @@
 from typing import Optional
 from flojoy import String, SerialConnection, flojoy, DataContainer
 
+from blocks.HARDWARE.PULSER.command_protocol import exchange_pulser_command
+
 
 @flojoy(inject_connection=True)
 def READ_ZERO_POSITION(
@@ -10,8 +12,10 @@ def READ_ZERO_POSITION(
     ser = connection.get_handle()
 
     hex_data = "55AA00003F"
-    data_bytes = bytes.fromhex(hex_data)
-    ser.write(data_bytes)
-    response = ser.read(8)
-    response_str = response.hex()
+    response_str = exchange_pulser_command(
+        ser,
+        hex_data,
+        "读取脉冲器零位",
+        8,
+    )
     return String(s=response_str)

@@ -89,6 +89,11 @@ class DefaultDeviceFinder:
                     description=description,
                     hwid=port.hwid,
                     manufacturer=port.manufacturer,
+                    vid=port.vid,
+                    pid=port.pid,
+                    serialNumber=port.serial_number,
+                    interfaceName=getattr(port, "interface", None),
+                    location=getattr(port, "location", None),
                 )
             )
 

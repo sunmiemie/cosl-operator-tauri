@@ -36,6 +36,9 @@ class Topology:
         self.queued_jobs: set[str] = set()
         self.is_ci = os.getenv(key="CI", default=False)
         self.cancelled = False
+        # A graceful stop prevents the producer from scheduling another loop
+        # iteration while allowing jobs that are already executing to return.
+        self.stop_requested = False
         self.time_start = 0.0
         self.finished = False
         self.loop_nodes = (
@@ -49,8 +52,11 @@ class Topology:
         Handle when producer receives the consumer's response (worker response).
         Returns potential new tasks (jobs) to be run.
         """
-        if self.is_cancelled():
-            logger.debug("Flowchart is cancelled, ignoring worker response")
+        if self.stop_requested or self.is_cancelled():
+            logger.debug(
+                "Flowchart stop requested, accepting worker completion without "
+                "scheduling follow-up jobs"
+            )
             return
 
         # handle failed job
@@ -89,6 +95,13 @@ class Topology:
             self.run_job(job_id, task_queue)
 
     def run_job(self, job_id: str, task_queue: Queue[Any]):
+        # The producer can calculate its next jobs immediately before a stop
+        # request. Guard the actual enqueue as well so that race cannot start a
+        # new loop iteration.
+        if self.stop_requested or self.cancelled:
+            logger.debug("Skipping job %s because flowchart is stopping", job_id)
+            return
+
         node = cast(dict[str, Any], self.working_graph.nodes[job_id])
 
         previous_jobs = self.get_job_dependencies_with_label(job_id, original=True)
@@ -118,6 +131,24 @@ class Topology:
     # also used for when the topology finishes
     def cancel(self):
         logger.debug("Topology cancelled")
+        self.stop_requested = True
+        self.cancelled = True
+        self.queued_jobs.clear()
+        self.cleanup()
+        self.finalizer()
+
+    def request_stop(self):
+        """Stop scheduling new work without interrupting an in-flight node."""
+        if self.cancelled:
+            return
+        logger.info("Graceful flowchart stop requested")
+        self.stop_requested = True
+
+    def finalize_requested_stop(self):
+        """Finalize a graceful stop after every in-flight job has returned."""
+        if self.cancelled:
+            return
+        logger.info("Graceful flowchart stop finalized")
         self.cancelled = True
         self.queued_jobs.clear()
         self.cleanup()

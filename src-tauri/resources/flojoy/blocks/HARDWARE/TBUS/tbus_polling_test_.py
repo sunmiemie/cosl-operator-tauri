@@ -7,6 +7,7 @@ FLOJOY_ROOT = Path(__file__).parents[3]
 if str(FLOJOY_ROOT) not in sys.path:
     sys.path.insert(0, str(FLOJOY_ROOT))
 
+from blocks.HARDWARE.TBUS import tbus_polling
 from blocks.HARDWARE.TBUS.tbus_polling import bounded_tbus_query
 from blocks.HARDWARE.TBUS.tbus_decoder import decode_tbus_payload, decrypt
 
@@ -56,6 +57,29 @@ def test_bounded_query_returns_complete_frame_and_restores_timeout():
     assert result == bytes(range(21))
     assert serial_handle.written == b"\x01\x02"
     assert serial_handle.timeout == 1
+
+
+def test_bounded_query_records_command_and_raw_response(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        tbus_polling,
+        "record_execution_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    serial_handle = FakeSerial(b"\xAA\x55\x01")
+
+    result = bounded_tbus_query(
+        serial_handle,
+        query_name="READ_LOG_TEST",
+        command_hex="0102",
+        expected_length=3,
+        response_timeout=0.05,
+    )
+
+    assert result == b"\xAA\x55\x01"
+    assert [event[1]["direction"] for event in events] == ["send", "receive"]
+    assert events[0][1]["data"]["commandHex"] == "0102"
+    assert events[1][1]["data"]["responseHex"] == "AA5501"
 
 
 def test_bounded_query_times_out_without_raising():

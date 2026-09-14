@@ -40,66 +40,72 @@ class Worker:
 
             if isinstance(queue_fetch, PoisonPill):
                 logger.debug(f"Worker {self.uuid} got poison pill.")
+                self.task_queue.task_done()
                 break
 
-            # cast for type purposes
             try:
+                # cast for type purposes
                 job = cast(JobInfo, queue_fetch)
-            except Exception:
-                logger.error("Error in job: wrong arguments passed. Ignoring...")
-                continue
-
-            func = self.imported_functions.get(job.job_id, None)
-            if func is None:
-                raise ValueError(
-                    f"Function {job.job_id} not found in imported functions"
-                )
-            if self.signaler:
-                # signal the running node to the front-end:
-                await self.signaler.signal_current_running_node(
-                    job.jobset_id, job.job_id, func.__name__
-                )
-
-            kwargs: dict[str, Any] = {
-                "ctrls": job.ctrls,
-                "previous_jobs": job.previous_jobs,
-                "observe_blocks": self.observe_blocks,
-                "jobset_id": job.jobset_id,
-                "node_id": job.job_id,
-                "job_id": job.iteration_id,
-            }
-
-            logger.debug("=" * 100)
-            logger.debug(f"Executing job {job.job_id}, kwargs = {kwargs}")
-
-            response = func(**kwargs)
-
-            match response:
-                case JobSuccess():
-                    logger.debug(f"Job finished: {job.job_id}, status: ok")
-                    if self.signaler:
-                        # send results to frontend
-                        await self.signaler.signal_node_results(
-                            job.jobset_id, job.job_id, func.__name__, response.result
-                        )
-
-                case JobFailure():
-                    logger.debug(f"Job finished: {job.job_id}, status: failed")
-                    logger.error(
-                        f"Node {func.__name__} failed! reason: {response.error}"
+                func = self.imported_functions.get(job.job_id, None)
+                if func is None:
+                    raise ValueError(
+                        f"Function {job.job_id} not found in imported functions"
+                    )
+                if self.signaler:
+                    # signal the running node to the front-end:
+                    await self.signaler.signal_current_running_node(
+                        job.jobset_id, job.job_id, func.__name__
                     )
 
-                    if self.signaler:
-                        # signal to frontend that the node has failed
-                        await self.signaler.signal_failed_nodes(
-                            job.jobset_id, job.job_id, func.__name__, response.error
+                kwargs: dict[str, Any] = {
+                    "ctrls": job.ctrls,
+                    "previous_jobs": job.previous_jobs,
+                    "observe_blocks": self.observe_blocks,
+                    "jobset_id": job.jobset_id,
+                    "node_id": job.job_id,
+                    "job_id": job.iteration_id,
+                }
+
+                logger.debug("=" * 100)
+                logger.debug(f"Executing job {job.job_id}, kwargs = {kwargs}")
+
+                response = func(**kwargs)
+
+                match response:
+                    case JobSuccess():
+                        logger.debug(f"Job finished: {job.job_id}, status: ok")
+                        if self.signaler:
+                            # send results to frontend
+                            await self.signaler.signal_node_results(
+                                job.jobset_id,
+                                job.job_id,
+                                func.__name__,
+                                response.result,
+                            )
+
+                    case JobFailure():
+                        logger.debug(f"Job finished: {job.job_id}, status: failed")
+                        logger.error(
+                            f"Node {func.__name__} failed! reason: {response.error}"
                         )
 
-                    PipInstallThread.terminate_all()
-                    raise Exception(response.error)
+                        if self.signaler:
+                            # signal to frontend that the node has failed
+                            await self.signaler.signal_failed_nodes(
+                                job.jobset_id,
+                                job.job_id,
+                                func.__name__,
+                                response.error,
+                            )
 
-            # put the job result in the queue for producer to process
-            self.finish_queue.put(response)
-            self.task_queue.task_done()
+                        PipInstallThread.terminate_all()
+                        raise Exception(response.error)
+
+                # put the job result in the queue for producer to process
+                self.finish_queue.put(response)
+            finally:
+                # Queue.join()/unfinished_tasks is the authoritative signal used
+                # by graceful shutdown. Always release it, including node errors.
+                self.task_queue.task_done()
 
         logger.info(f"Worker {self.uuid} has finished")

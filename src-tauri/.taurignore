@@ -1,0 +1,5 @@
+# Python 运行缓存不是应用资源。忽略它们，避免开发模式下执行测试流时触发
+# Tauri 资源监听器重编译并重启客户端。
+resources/flojoy/**/__pycache__/**
+resources/flojoy/**/*.pyc
+resources/flojoy/**/*.pyo

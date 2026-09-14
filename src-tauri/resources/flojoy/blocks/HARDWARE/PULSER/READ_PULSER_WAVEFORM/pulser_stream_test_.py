@@ -63,6 +63,7 @@ def test_background_reader_keeps_latest_samples_without_node_blocking():
     assert status["streaming"] is True
     assert status["fresh"] is True
     assert status["sequence"] == 2
+    assert status["actual_span_raw"] == 100
 
     cached_samples, cached_status = reader.snapshot(250)
     assert cached_samples == [(10, 100), (20, 200)]

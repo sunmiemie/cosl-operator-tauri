@@ -5,6 +5,8 @@ import threading
 import time
 from typing import Any
 
+from flojoy.execution_log import record_execution_event
+
 
 SERIAL_LOCK_ATTRIBUTE = "_halt_hass_tbus_query_lock"
 WARNING_STATE_ATTRIBUTE = "_halt_hass_tbus_warning_state"
@@ -77,7 +79,20 @@ def bounded_serial_query(
             if callable(reset_input_buffer):
                 reset_input_buffer()
 
-            serial_handle.write(bytes.fromhex(command_hex))
+            normalized_command = command_hex.replace(" ", "").upper()
+            record_execution_event(
+                "device-command",
+                f"{query_name}：发送串口报文",
+                direction="send",
+                data={
+                    "transport": "serial",
+                    "port": getattr(serial_handle, "port", ""),
+                    "commandHex": normalized_command,
+                    "expectedResponseLength": expected_length,
+                    "responseTimeoutSeconds": response_timeout,
+                },
+            )
+            serial_handle.write(bytes.fromhex(normalized_command))
             flush = getattr(serial_handle, "flush", None)
             if callable(flush):
                 flush()
@@ -102,6 +117,7 @@ def bounded_serial_query(
                     response.extend(chunk)
 
             if len(response) != expected_length:
+                response_hex = bytes(response).hex().upper()
                 _warn_throttled(
                     serial_handle,
                     query_name,
@@ -110,11 +126,48 @@ def bounded_serial_query(
                         f"实际 {len(response)} 字节"
                     ),
                 )
+                record_execution_event(
+                    "device-response",
+                    f"{query_name}：串口回执超时或长度不完整",
+                    level="error",
+                    direction="receive",
+                    data={
+                        "transport": "serial",
+                        "port": getattr(serial_handle, "port", ""),
+                        "responseHex": response_hex or "<empty>",
+                        "responseLength": len(response),
+                        "expectedResponseLength": expected_length,
+                    },
+                )
                 return b""
 
-            return bytes(response)
+            response_bytes = bytes(response)
+            record_execution_event(
+                "device-response",
+                f"{query_name}：收到完整串口回执",
+                direction="receive",
+                data={
+                    "transport": "serial",
+                    "port": getattr(serial_handle, "port", ""),
+                    "responseHex": response_bytes.hex().upper(),
+                    "responseLength": len(response_bytes),
+                },
+            )
+            return response_bytes
         except Exception as exc:
             _warn_throttled(serial_handle, query_name, str(exc))
+            record_execution_event(
+                "device-response",
+                f"{query_name}：串口通信异常",
+                level="error",
+                direction="receive",
+                data={
+                    "transport": "serial",
+                    "port": getattr(serial_handle, "port", ""),
+                    "commandHex": command_hex.replace(" ", "").upper(),
+                    "error": str(exc),
+                },
+            )
             return b""
         finally:
             if timeout_changed and getattr(serial_handle, "is_open", True):
@@ -140,3 +193,61 @@ def bounded_tbus_query(
         expected_length=expected_length,
         response_timeout=response_timeout,
     )
+
+
+def logged_serial_exchange(
+    serial_handle: Any,
+    *,
+    operation_name: str,
+    command_hex: str,
+    expected_length: int,
+) -> bytes:
+    """保持原节点的一次写入/一次读取语义，并完整记录发送与回执。"""
+    normalized_command = command_hex.replace(" ", "").upper()
+    record_execution_event(
+        "device-command",
+        f"{operation_name}：发送串口报文",
+        direction="send",
+        data={
+            "transport": "serial",
+            "port": getattr(serial_handle, "port", ""),
+            "commandHex": normalized_command,
+            "expectedResponseLength": expected_length,
+        },
+    )
+    try:
+        serial_handle.write(bytes.fromhex(normalized_command))
+        response = bytes(serial_handle.read(expected_length))
+    except Exception as exc:
+        record_execution_event(
+            "device-response",
+            f"{operation_name}：串口通信异常",
+            level="error",
+            direction="receive",
+            data={
+                "transport": "serial",
+                "port": getattr(serial_handle, "port", ""),
+                "error": str(exc),
+            },
+        )
+        raise
+
+    complete = len(response) == expected_length
+    record_execution_event(
+        "device-response",
+        (
+            f"{operation_name}：收到串口回执"
+            if complete
+            else f"{operation_name}：串口回执长度不完整"
+        ),
+        level="info" if complete else "error",
+        direction="receive",
+        data={
+            "transport": "serial",
+            "port": getattr(serial_handle, "port", ""),
+            "responseHex": response.hex().upper() or "<empty>",
+            "responseLength": len(response),
+            "expectedResponseLength": expected_length,
+        },
+    )
+    return response

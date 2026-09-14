@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 from .config import logger
 from .connection_manager import DeviceConnectionManager
 from .data_container import DataContainer, Stateful
+from .execution_log import execution_log_context, record_execution_event
 from .job_result_utils import get_dc_from_result, get_frontend_res_obj_from_result
 from .job_service import JobService
 from .models.JobResults.JobFailure import JobFailure
@@ -233,13 +234,24 @@ def flojoy(
                 ):
                     args["default"] = None
 
-                ##########################
-                # calling the node function
-                ##########################
-                dc_obj = func(**args)  # DataContainer object from node
-                ##########################
-                # end calling the node function
-                ##########################
+                with execution_log_context(
+                    jobset_id=jobset_id,
+                    node_id=node_id,
+                    function_name=func.__name__,
+                ):
+                    record_execution_event(
+                        "node-start",
+                        "开始执行节点",
+                        data={"parameters": func_params},
+                    )
+
+                    ##########################
+                    # calling the node function
+                    ##########################
+                    dc_obj = func(**args)  # DataContainer object from node
+                    ##########################
+                    # end calling the node function
+                    ##########################
 
                 # some special nodes like LOOP return dict instead of `DataContainer`
                 if isinstance(dc_obj, DataContainer) and not isinstance(
@@ -259,6 +271,14 @@ def flojoy(
                 result = get_frontend_res_obj_from_result(
                     node_id, observe_blocks, dc_obj
                 )
+                record_execution_event(
+                    "node-success",
+                    "节点执行成功",
+                    data={"result": dc_obj},
+                    jobset_id=jobset_id,
+                    node_id=node_id,
+                    function_name=func.__name__,
+                )
                 return JobSuccess(
                     result=result,
                     fn=FN,
@@ -270,6 +290,15 @@ def flojoy(
                 logger.error(str(e))
                 logger.error("error occurred while running the node")
                 logger.debug(traceback.format_exc())
+                record_execution_event(
+                    "node-error",
+                    str(e),
+                    level="error",
+                    data={"traceback": traceback.format_exc()},
+                    jobset_id=jobset_id,
+                    node_id=node_id,
+                    function_name=func.__name__,
+                )
                 return JobFailure(
                     func_name=func.__name__,
                     node_id=node_id,

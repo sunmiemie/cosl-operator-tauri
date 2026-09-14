@@ -2,8 +2,11 @@ import asyncio
 import threading
 import time
 
-from queue import Queue
+from queue import Empty, Queue
 from typing import Any
+
+from flojoy import DeviceConnectionManager
+from flojoy.execution_log import record_execution_event
 
 from captain.internal.wsmanager import ConnectionManager
 from captain.models.test_sequencer import MsgState, StatusTypes
@@ -19,7 +22,9 @@ from captain.utils.logger import logger
 
 class WSManager:
     def __init__(self):
-        self.ws = ConnectionManager()
+        # Flow state/results and diagnostic logs must not share backpressure.
+        self.ws = ConnectionManager(send_timeout=2.0)
+        self.log_ws = ConnectionManager(send_timeout=0.75)
 
 
 # Manager for Test Sequencer activities
@@ -117,6 +122,122 @@ class Manager(WSManager):
         for _ in range(self.thread_count):
             self.task_queue.put(PoisonPill())  # poison pill
             self.finish_queue.put(PoisonPill())  # poison pill
+
+    def _discard_pending_jobs(self) -> int:
+        """Remove work that has not started after a graceful-stop request."""
+        discarded = 0
+        while True:
+            try:
+                self.task_queue.get_nowait()
+            except Empty:
+                break
+            else:
+                self.task_queue.task_done()
+                discarded += 1
+        return discarded
+
+    def graceful_stop_flowchart(
+        self,
+        jobset_id: str | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Stop future scheduling, wait for in-flight jobs, then release devices."""
+        topology = self.running_topology
+        if topology is None:
+            DeviceConnectionManager.clear()
+            return {
+                "success": True,
+                "graceful": True,
+                "forced": False,
+                "discardedJobs": 0,
+                "unfinishedJobs": 0,
+                "message": "Flojoy 当前没有运行中的流程，设备连接已释放",
+            }
+
+        if jobset_id and topology.jobset_id != jobset_id:
+            return {
+                "success": False,
+                "graceful": False,
+                "forced": False,
+                "discardedJobs": 0,
+                "unfinishedJobs": self.task_queue.unfinished_tasks,
+                "message": (
+                    f"运行任务不匹配：当前 {topology.jobset_id}，请求 {jobset_id}"
+                ),
+            }
+
+        effective_jobset_id = jobset_id or topology.jobset_id
+        timeout_seconds = max(0.1, min(float(timeout_seconds), 120.0))
+        record_execution_event(
+            "flowchart-stop-requested",
+            "收到流程收尾请求，停止调度新一轮并等待当前节点结束",
+            jobset_id=effective_jobset_id,
+            function_name="GRACEFUL_STOP_FLOWCHART",
+            data={"timeoutSeconds": timeout_seconds},
+        )
+
+        topology.request_stop()
+        discarded_jobs = self._discard_pending_jobs()
+        deadline = time.monotonic() + timeout_seconds
+        while self.task_queue.unfinished_tasks > 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        unfinished_jobs = self.task_queue.unfinished_tasks
+        forced = unfinished_jobs > 0
+        if forced:
+            logger.warning(
+                "Graceful flowchart stop timed out with %s unfinished job(s)",
+                unfinished_jobs,
+            )
+            record_execution_event(
+                "flowchart-stop-timeout",
+                "等待当前节点结束超时，转入强制连接释放",
+                level="warning",
+                jobset_id=effective_jobset_id,
+                function_name="GRACEFUL_STOP_FLOWCHART",
+                data={
+                    "discardedJobs": discarded_jobs,
+                    "unfinishedJobs": unfinished_jobs,
+                },
+            )
+
+        # At this point either every node returned, or the bounded fallback was
+        # reached. Closing registered handles before power-off prevents the
+        # shutdown API from racing the loop's VISA/serial connections.
+        DeviceConnectionManager.clear()
+        if forced:
+            topology.cancel()
+        else:
+            topology.finalize_requested_stop()
+        self.end_worker_threads()
+        self.running_topology = None
+
+        message = (
+            "当前节点已结束，Flojoy 设备连接已释放"
+            if not forced
+            else "等待当前节点超时，已强制释放 Flojoy 设备连接"
+        )
+        record_execution_event(
+            "flowchart-stop-completed",
+            message,
+            level="warning" if forced else "info",
+            jobset_id=effective_jobset_id,
+            function_name="GRACEFUL_STOP_FLOWCHART",
+            data={
+                "graceful": not forced,
+                "forced": forced,
+                "discardedJobs": discarded_jobs,
+                "unfinishedJobs": unfinished_jobs,
+            },
+        )
+        return {
+            "success": True,
+            "graceful": not forced,
+            "forced": forced,
+            "discardedJobs": discarded_jobs,
+            "unfinishedJobs": unfinished_jobs,
+            "message": message,
+        }
 
 
 class WatchManager(object):

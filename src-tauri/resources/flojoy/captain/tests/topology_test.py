@@ -35,6 +35,32 @@ class TopologyTest(unittest.TestCase):
         assert ready_jobs.__len__() == 1
         assert ready_jobs[0].startswith("LINSPACE")
 
+    def test_graceful_stop_does_not_enqueue_new_jobs(self):
+        task_queue = Queue()
+        topology = Topology(graph=sample_app_graph, jobset_id="test_123")
+        ready_job = topology.collect_ready_jobs()[0]
+
+        topology.request_stop()
+        topology.run_job(ready_job, task_queue)
+
+        assert task_queue.empty()
+        assert topology.stop_requested is True
+        assert topology.is_cancelled() is False
+
+    def test_graceful_stop_ignores_in_flight_node_follow_up(self):
+        topology = Topology(graph=sample_app_graph, jobset_id="test_123")
+        finished_job = JobSuccess(
+            result=None,
+            fn=lambda: None,
+            node_id="LINSPACE-fb6e23f4-080c-4d26-9070-45f3081ee5f3",
+            jobset_id="test_123",
+        )
+
+        topology.request_stop()
+
+        assert topology.process_worker_response(finished_job) is None
+        assert not topology.finished_jobs
+
     # test that when a job is finished new jobs are returned
     def test_new_jobs_returned(self):
         topology = Topology(graph=sample_app_graph, jobset_id="test_123")

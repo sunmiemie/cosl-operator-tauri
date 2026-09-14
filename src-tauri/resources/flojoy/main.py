@@ -1,5 +1,12 @@
 import os
+import sys
 import argparse
+
+# Flojoy 在开发环境直接从 src-tauri/resources 运行。运行测试流时若 Python
+# 在该目录生成/更新 __pycache__，Tauri dev 会把它误判为资源代码变化并重启
+# 整个客户端。这里在任何 Flojoy/captain 模块导入前禁用字节码落盘，确保无论
+# 后端由客户端还是调试脚本启动，都不会因执行节点触发客户端热重启。
+sys.dont_write_bytecode = True
 
 import uvicorn
 

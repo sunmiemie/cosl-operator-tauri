@@ -38,7 +38,11 @@ class PulserStreamReader:
         )
         self._sequence = 0
         self._last_reported_sequence = 0
+        self._started_at_ms = int(time.time() * 1000)
+        self._first_sample_at_ms = 0
         self._last_sample_at_ms = 0
+        self._actual_min_raw: int | None = None
+        self._actual_max_raw: int | None = None
         self._last_error = ""
 
     @property
@@ -74,6 +78,9 @@ class PulserStreamReader:
             fresh = sequence > self._last_reported_sequence
             self._last_reported_sequence = sequence
             last_sample_at_ms = self._last_sample_at_ms
+            first_sample_at_ms = self._first_sample_at_ms
+            actual_min_raw = self._actual_min_raw
+            actual_max_raw = self._actual_max_raw
             last_error = self._last_error
 
         return samples, {
@@ -81,7 +88,14 @@ class PulserStreamReader:
             "fresh": fresh,
             "sequence": sequence,
             "sample_count": len(samples),
+            "reader_started_at_ms": self._started_at_ms,
+            "first_sample_at_ms": first_sample_at_ms,
             "last_sample_at_ms": last_sample_at_ms,
+            "actual_span_raw": (
+                actual_max_raw - actual_min_raw
+                if actual_min_raw is not None and actual_max_raw is not None
+                else 0
+            ),
             "sample_age_ms": (
                 max(now_ms - last_sample_at_ms, 0)
                 if last_sample_at_ms
@@ -121,7 +135,23 @@ class PulserStreamReader:
                     with self._lock:
                         self._samples.extend(samples)
                         self._sequence += len(samples)
-                        self._last_sample_at_ms = int(time.time() * 1000)
+                        sample_at_ms = int(time.time() * 1000)
+                        if not self._first_sample_at_ms:
+                            self._first_sample_at_ms = sample_at_ms
+                        self._last_sample_at_ms = sample_at_ms
+                        actual_values = [actual for _, actual in samples]
+                        batch_min = min(actual_values)
+                        batch_max = max(actual_values)
+                        self._actual_min_raw = (
+                            batch_min
+                            if self._actual_min_raw is None
+                            else min(self._actual_min_raw, batch_min)
+                        )
+                        self._actual_max_raw = (
+                            batch_max
+                            if self._actual_max_raw is None
+                            else max(self._actual_max_raw, batch_max)
+                        )
                         self._last_error = ""
                     self._sample_event.set()
                 except Exception as exc:
@@ -142,6 +172,13 @@ def get_or_start_pulser_reader(serial_handle: Any) -> PulserStreamReader:
     existing = getattr(serial_handle, READER_STATE_ATTRIBUTE, None)
     if isinstance(existing, PulserStreamReader) and existing.is_alive:
         return existing
+
+    reset_input_buffer = getattr(serial_handle, "reset_input_buffer", None)
+    if callable(reset_input_buffer):
+        try:
+            reset_input_buffer()
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
 
     reader = PulserStreamReader(serial_handle)
     setattr(serial_handle, READER_STATE_ATTRIBUTE, reader)

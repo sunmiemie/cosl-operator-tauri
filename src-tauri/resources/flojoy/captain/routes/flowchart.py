@@ -2,7 +2,12 @@ import asyncio
 
 from fastapi import APIRouter
 
-from captain.types.flowchart import PostCancelFC, PostWFC
+from captain.types.flowchart import (
+    GracefulStopFCResponse,
+    PostCancelFC,
+    PostGracefulStopFC,
+    PostWFC,
+)
 from captain.utils.broadcast import Signaler
 from captain.utils.config import manager
 from captain.utils.flowchart_utils import prepare_jobs_and_run_fc
@@ -22,6 +27,16 @@ async def cancel_fc(req: PostCancelFC):
         logger.debug("No jobsetId provided, skipping signal_standby")
         return
     asyncio.create_task(Signaler(manager.ws).signal_standby(req.jobsetId))
+
+
+@router.post(
+    "/graceful_stop_fc",
+    summary="gracefully stop flowchart after the current node",
+    response_model=GracefulStopFCResponse,
+)
+def graceful_stop_fc(req: PostGracefulStopFC) -> GracefulStopFCResponse:
+    result = manager.graceful_stop_flowchart(req.jobsetId, req.timeoutSeconds)
+    return GracefulStopFCResponse(**result)
 
 
 @router.post("/wfc", summary="write and run flowchart")

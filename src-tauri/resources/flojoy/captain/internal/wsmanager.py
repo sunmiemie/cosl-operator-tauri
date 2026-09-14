@@ -1,15 +1,13 @@
+import asyncio
+import json
+import traceback
+from typing import Any, Union
+
 from captain.types.test_sequence import TestSequenceMessage
 from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 from flojoy.utils import PlotlyJSONEncoder
-from queue import Queue
-from typing import Any, Union
-import json
 from captain.types.worker import WorkerJobResponse
-import threading
-import traceback
-
-socket_connection_lock = threading.Lock()
 
 
 class ConnectionManager:
@@ -22,55 +20,79 @@ class ConnectionManager:
             return cls._instance
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, *, send_timeout: float = 2.0):
         self.active_connections_map: dict[str, WebSocket] = {}
-        self.log_queue: Queue[WebSocket] = Queue()
+        self._connection_lock = asyncio.Lock()
+        self._send_locks: dict[str, asyncio.Lock] = {}
+        self._send_timeout = send_timeout
 
-    async def connect(self, websocket: WebSocket, socket_id: str):
+    async def connect(self, websocket: WebSocket, socket_id: str) -> bool:
         await websocket.accept()
-
-        with socket_connection_lock:
-            self.active_connections_map[socket_id] = websocket
+        duplicate = False
+        async with self._connection_lock:
+            if socket_id in self.active_connections_map:
+                duplicate = True
+            else:
+                self.active_connections_map[socket_id] = websocket
+                self._send_locks[socket_id] = asyncio.Lock()
+        if duplicate:
+            await websocket.close(code=1008, reason="socket id already connected")
+            return False
+        return True
 
         # logger.debug(
         #     f"Connected! Amt of active connections: {len(self.active_connections_map.keys())}"
         # )
 
     async def disconnect(self, socket_id: str):
-        with socket_connection_lock:
-            if socket_id not in self.active_connections_map:
-                # logger.debug(f"Client {socket_id} was already disconnected, skipping")
-                return
+        async with self._connection_lock:
+            self.active_connections_map.pop(socket_id, None)
+            self._send_locks.pop(socket_id, None)
 
-            del self.active_connections_map[socket_id]
+    async def _send_one(
+        self,
+        socket_id: str,
+        connection: WebSocket,
+        send_lock: asyncio.Lock,
+        payload: str,
+    ) -> bool:
+        try:
+            async with send_lock:
+                await asyncio.wait_for(
+                    connection.send_text(payload),
+                    timeout=self._send_timeout,
+                )
+            return True
+        except Exception as exc:
+            print(
+                f"Error in broadcast to {socket_id}",
+                exc,
+                traceback.format_exc(),
+                flush=True,
+            )
+            return False
 
     # this method sends a message to all connected websockets
     async def broadcast(
         self, message: Union[dict[str, Any], WorkerJobResponse, TestSequenceMessage]
     ):
-        dead_connections: set[str] = set()
+        payload = json.dumps(message, cls=PlotlyJSONEncoder)
+        async with self._connection_lock:
+            connections = [
+                (socket_id, connection, self._send_locks[socket_id])
+                for socket_id, connection in self.active_connections_map.items()
+                if connection.client_state != WebSocketState.DISCONNECTED
+            ]
 
-        with socket_connection_lock:
-            for id, connection in self.active_connections_map.items():
-                if id in dead_connections:
-                    continue
+        if not connections:
+            return
 
-                try:
-                    await connection.send_text(
-                        json.dumps(message, cls=PlotlyJSONEncoder)
-                    )
-                except Exception as e:
-                    print(
-                        f"Error in broadcast to {id}",
-                        e,
-                        traceback.format_exc(),
-                        flush=True,
-                    )
-                    if connection.client_state == WebSocketState.DISCONNECTED:
-                        print(
-                            f"Connection state for {id} is Disconnected, adding to dead_connection..."
-                        )
-                        dead_connections.add(id)
-
-        for connection in dead_connections:
-            await self.disconnect(socket_id=connection)
+        results = await asyncio.gather(
+            *(
+                self._send_one(socket_id, connection, send_lock, payload)
+                for socket_id, connection, send_lock in connections
+            )
+        )
+        for (socket_id, _, _), sent in zip(connections, results):
+            if not sent:
+                await self.disconnect(socket_id=socket_id)

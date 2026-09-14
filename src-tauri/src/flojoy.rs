@@ -489,6 +489,16 @@ pub fn start_flojoy_backend(
         working_dir.clone()
     };
 
+    // 执行报文和错误日志必须写到应用数据目录，禁止写入 resources/flojoy。
+    // 这样开发模式不会因日志变化触发 Tauri 热重启，打包后也不会尝试修改
+    // 只读的安装资源目录。
+    let execution_log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("无法解析应用日志目录: {}", e))?;
+    std::fs::create_dir_all(&execution_log_dir)
+        .map_err(|e| format!("无法创建应用日志目录 {:?}: {}", execution_log_dir, e))?;
+
     println!("[Flojoy] 后端目录: {:?}", backend_dir);
     println!("[Flojoy] 工作目录: {:?}", working_dir_clean);
     println!("[Flojoy] Poetry 路径: {}", poetry_path);
@@ -534,6 +544,7 @@ pub fn start_flojoy_backend(
         .args(["run", "python", "main.py", "--port", &port.to_string()])
         .current_dir(&working_dir_clean)
         .env("PATH", &new_path)
+        .env("FLOJOY_EXECUTION_LOG_DIR", &execution_log_dir)
         // 避免运行 Block 时写入 resources 下的 __pycache__，触发 tauri dev 自动重启。
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdout(Stdio::inherit())
@@ -560,6 +571,7 @@ pub fn start_flojoy_backend(
                 ])
                 .current_dir(&working_dir_clean)
                 .env("PATH", &new_path)
+                .env("FLOJOY_EXECUTION_LOG_DIR", &execution_log_dir)
                 .env("PYTHONDONTWRITEBYTECODE", "1")
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
