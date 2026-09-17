@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Icon } from '@iconify/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -509,24 +508,6 @@ async function finishTest() {
     ending.value = false
   }
 }
-
-onBeforeRouteLeave(async () => {
-  if (allowLeave || sessionStopped) return true
-  const confirmed = await ElMessageBox.confirm(
-    '离开监控页将结束当前采集会话，是否继续？',
-    '离开确认',
-    { confirmButtonText: '结束并离开', cancelButtonText: '取消', type: 'warning' },
-  ).catch(() => false)
-  if (!confirmed) return false
-  try {
-    await stopSession()
-    allowLeave = true
-    return true
-  } catch (error) {
-    ElMessage.error(`结束采集失败：${String(error)}`)
-    return false
-  }
-})
 
 onMounted(async () => {
   statusUnlisten = await listen<SimulatedWellWsStatus>('simulated-well-ws-status', (event) => {

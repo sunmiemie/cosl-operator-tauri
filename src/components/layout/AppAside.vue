@@ -1,11 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { canNavigateSimulationWell, simulationWellNavigationMessage } from '@/composables/useSimulationWellNavigationLock'
 import { Icon } from '@iconify/vue'
 import { useWindow } from '@/composables/useWindow'
 import { useConfig } from '@/composables/useConfig'
 
 const route = useRoute()
+const router = useRouter()
+
+function guardMenuNavigation(event: MouseEvent | KeyboardEvent) {
+  const link = (event.target as Element | null)?.closest('a[href]')
+  if (!link) return
+  const target = router.resolve(link.getAttribute('href') || '')
+  if (canNavigateSimulationWell(target.fullPath)) return
+  event.preventDefault()
+  event.stopPropagation()
+  ElMessage.warning(simulationWellNavigationMessage)
+}
 const { openSettingsWindow } = useWindow()
 const { config, initConfig } = useConfig()
 
@@ -169,7 +182,7 @@ async function handleOpenSettings() {
 <template>
   <aside class="app-aside" :class="{ collapsed: isCollapsed }">
     <!-- 菜单区域 -->
-    <nav class="aside-menu">
+    <nav class="aside-menu" @click.capture="guardMenuNavigation" @keydown.enter.capture="guardMenuNavigation">
       <!-- 顶级菜单项（仪表盘等） -->
       <router-link 
         v-for="item in topLevelItems" 

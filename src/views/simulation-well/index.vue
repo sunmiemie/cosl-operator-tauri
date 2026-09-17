@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import DownholeWork from './downhole-work.vue'
@@ -8,7 +8,8 @@ import SimulationWellDashboard from './components/SimulationWellDashboard.vue'
 import TestReport from './test-report.vue'
 import TestMonitor from './test-monitor.vue'
 import { useSimulationWellSchedule } from './composables/useSimulationWellScheduleV2'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
+import { allowSimulationWellNavigation, clearSimulationWellNavigationLock, syncSimulationWellNavigationLock } from '@/composables/useSimulationWellNavigationLock'
 import type { DownholeDevice, SimulationWellView, WorkOrder } from './types'
 import SanxinOrderDetailModal from './components/SanxinOrderDetailModal.vue'
 import { listSimulatedWellOrders, type SimulatedWellOrderDTO } from '@/services/simulated-well-api'
@@ -211,6 +212,22 @@ const syncViewFromRoute = () => {
 }
 
 watch(
+  () => route.fullPath,
+  () => syncSimulationWellNavigationLock(route.fullPath,
+    route.path === '/simulation-well' && ['active-test', 'test-monitor'].includes(String(route.query.view))),
+  { immediate: true, flush: 'sync' },
+)
+onBeforeUnmount(clearSimulationWellNavigationLock)
+
+function navigateTestFlow(target: RouteLocationRaw) {
+  return allowSimulationWellNavigation(router.resolve(target).fullPath, () => router.replace(target))
+}
+
+function abortActiveTest() {
+  void navigateTestFlow({ path: '/simulation-well', query: { view: 'downhole-work' } })
+}
+
+watch(
   () => route.query.view,
   () => syncViewFromRoute(),
   { immediate: true }
@@ -385,7 +402,7 @@ function activeTestParamRows() {
 async function startMonitorAndNavigate(workNo: string) {
   try {
     const session = await startSimulatedWellMonitorSession(workNo)
-    await router.replace({
+    await navigateTestFlow({
       path: '/simulation-well',
       query: {
         view: 'test-monitor',
@@ -407,13 +424,13 @@ async function enterMonitoringFlow(workNo: string) {
   }
 }
 
-async function handleEditedDownholeSaved(workNo: string) {
+async function handleEditedDownholeSaved() {
   activeTestOperation.value = null
   activeTestPayload.value = null
   activeStartDevicesSnapshot.value = []
   activeTestOrdersSnapshot.value = []
   activeTestPaused.value = false
-  await enterMonitoringFlow(workNo)
+  await router.replace({ path: '/simulation-well', query: { view: 'downhole-work' } })
 }
 
 async function finishActiveTestToReportPrep() {
@@ -427,7 +444,7 @@ async function finishActiveTestToReportPrep() {
 }
 
 function handleMonitorFinished(file: SimulatedWellMonitorCsvFile) {
-  router.replace({
+  void navigateTestFlow({
     path: '/simulation-well',
     query: {
       view: 'test-report',
@@ -766,7 +783,7 @@ async function handleSaveDownhole(payload: any) {
           <Icon :icon="activeTestPaused ? 'mdi:play-outline' : 'mdi:pause'" />
           {{ activeTestPaused ? '继续测试' : '测试暂停' }}
         </button>
-        <button class="active-action-btn danger" @click="router.replace({ path: '/simulation-well', query: { view: 'downhole-work' } })">
+        <button class="active-action-btn danger" @click="abortActiveTest">
           <Icon icon="mdi:stop-circle-outline" />
           测试中止
         </button>

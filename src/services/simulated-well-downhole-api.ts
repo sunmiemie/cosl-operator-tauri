@@ -1,4 +1,5 @@
 import { http, type ApiResponse } from './http'
+import type { SimInstrumentListItem } from './sim-instrument-api'
 
 export interface SimulatedWellSupportingTool {
   code?: string
@@ -14,6 +15,8 @@ export interface SimulatedWellSupportingTool {
   modelNumber?: string
   usedCount?: number
   remainCount?: number
+  sourceInstrument?: SimInstrumentListItem
+  researchToolKey?: string
   orderId?: string
   sourceDeviceName?: string
   template?: string

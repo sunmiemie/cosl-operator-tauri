@@ -38,6 +38,8 @@ type TemplateInstrument = {
   modelNumber?: string
   usedCount?: number
   remainCount?: number
+  sourceInstrument?: SimInstrumentListItem
+  researchToolKey?: string
 }
 
 type ResolvedTemplateMeta = {
@@ -164,6 +166,8 @@ function normalizeInstrument(item: any): TemplateInstrument {
     modelNumber: item?.modelNumber,
     usedCount: item?.usedCount,
     remainCount: item?.remainCount,
+    sourceInstrument: item?.sourceInstrument,
+    researchToolKey: item?.researchToolKey,
   }
 }
 
@@ -447,6 +451,8 @@ function simInstrumentToTool(item: SimInstrumentListItem): TemplateInstrument {
     modelNumber: item.model_number,
     usedCount: item.used_count,
     remainCount: item.remain_count,
+    sourceInstrument: { ...item },
+    researchToolKey: `id:${item.id}`,
   }
 }
 
@@ -468,16 +474,36 @@ function getResearchInstruments(device: ResolvedDeviceRow) {
   return researchInstrumentMap.value[device.stateKey] || []
 }
 
+// 来源信息用于恢复内部SN，独立于当前生效的内部关联。
+function applyResearchInstrumentSn(tool: TemplateInstrument) {
+  const externalSn = (tool.externalInstrumentModel || '').trim()
+  const source = tool.sourceInstrument
+  Object.assign(tool, {
+    internalInstrumentId: externalSn ? undefined : source?.id,
+    internalInstrumentSn: externalSn ? undefined : source?.sn,
+    internalInstrumentName: externalSn ? undefined : source?.name,
+    usedCount: externalSn ? undefined : source?.used_count,
+    remainCount: externalSn ? undefined : source?.remain_count,
+  })
+}
+
+function buildResearchTool(tool: TemplateInstrument) {
+  const result = { ...tool, externalInstrumentModel: (tool.externalInstrumentModel || '').trim() }
+  if (result.sourceInstrument || result.externalInstrumentModel) applyResearchInstrumentSn(result)
+  return result
+}
+
 function normalizeResearchSelectedTools(tools: TemplateInstrument[]) {
   const result: TemplateInstrument[] = []
   const seen = new Set<string>()
-  ;(tools || []).forEach((item) => {
+  ;(tools || []).forEach((item, index) => {
     const tool = normalizeInstrument(item)
-    const key = tool.internalInstrumentId !== undefined && tool.internalInstrumentId !== null
-      ? `id:${tool.internalInstrumentId}`
-      : `sn:${tool.internalInstrumentSn || ''}`
-    if (key === 'sn:' || seen.has(key)) return
+    tool.sourceInstrument = tool.sourceInstrument || toolToSimInstrument(tool) || undefined
+    const key = tool.sourceInstrument ? `id:${tool.sourceInstrument.id}` : tool.researchToolKey || `legacy:${index}`
+    if ((!tool.sourceInstrument && !tool.internalInstrumentSn && !tool.externalInstrumentModel) || seen.has(key)) return
     seen.add(key)
+    tool.researchToolKey = key
+    if (tool.sourceInstrument || tool.externalInstrumentModel) applyResearchInstrumentSn(tool)
     result.push(tool)
   })
   return result
@@ -567,7 +593,7 @@ function openInstrumentPicker(orderId: string, device: ResolvedDeviceRow) {
   instrumentPickerTarget.value = { orderId, device }
   instrumentPickerDraft.value = {}
   getResearchInstruments(device).forEach((tool) => {
-    const item = toolToSimInstrument(tool)
+    const item = tool.sourceInstrument || toolToSimInstrument(tool)
     if (item) instrumentPickerDraft.value[item.id] = item
   })
   instrumentPickerSn.value = ''
@@ -605,9 +631,16 @@ function changeInstrumentPickerPage(page: number) {
 function confirmInstrumentPicker() {
   const target = instrumentPickerTarget.value
   if (!target) return
+  const previous = getResearchInstruments(target.device)
+  const tools = Object.values(instrumentPickerDraft.value).map(simInstrumentToTool).map((tool) => {
+    const existing = previous.find((item) => item.researchToolKey === tool.researchToolKey)
+    if (existing) tool.externalInstrumentModel = existing.externalInstrumentModel
+    applyResearchInstrumentSn(tool)
+    return tool
+  })
   researchInstrumentMap.value = {
     ...researchInstrumentMap.value,
-    [target.device.stateKey]: Object.values(instrumentPickerDraft.value).map(simInstrumentToTool),
+    [target.device.stateKey]: [...tools, ...previous.filter((tool) => !tool.sourceInstrument)],
   }
   instrumentPickerVisible.value = false
 }
@@ -616,7 +649,7 @@ function removeResearchInstrument(device: ResolvedDeviceRow, tool: TemplateInstr
   researchInstrumentMap.value = {
     ...researchInstrumentMap.value,
     [device.stateKey]: getResearchInstruments(device).filter(
-      (item) => String(item.internalInstrumentId) !== String(tool.internalInstrumentId),
+      (item) => item.researchToolKey !== tool.researchToolKey,
     ),
   }
 }
@@ -773,6 +806,15 @@ function getExternalInstrumentModel(orderId: string, device: ResolvedDeviceRow, 
   return externalInstrumentModelMap.value[key] ?? tool.externalInstrumentModel ?? ''
 }
 
+// 仅在用户操作时互斥清空，历史双值回填保留并交由保存校验处理。
+function handleInternalInstrumentChange(key: string) {
+  if (selectedInternalInstrumentMap.value[key]) externalInstrumentModelMap.value[key] = ''
+}
+
+function handleExternalInstrumentInput(key: string) {
+  if (externalInstrumentModelMap.value[key]?.trim()) selectedInternalInstrumentMap.value[key] = ''
+}
+
 function buildStructuredTool(orderId: string, device: ResolvedDeviceRow, tool: TemplateInstrument) {
   const selectedInstrument = getSelectedInternalInstrument(orderId, device, tool)
   return {
@@ -782,13 +824,13 @@ function buildStructuredTool(orderId: string, device: ResolvedDeviceRow, tool: T
     en: tool.en,
     templateInstrumentCode: tool.code,
     templateInstrumentName: tool.zh || tool.en || tool.code,
-    internalInstrumentId: selectedInstrument?.id ?? tool.internalInstrumentId,
-    internalInstrumentSn: selectedInstrument?.sn ?? tool.internalInstrumentSn,
-    internalInstrumentName: selectedInstrument?.name ?? tool.internalInstrumentName,
+    internalInstrumentId: selectedInstrument?.id,
+    internalInstrumentSn: selectedInstrument?.sn,
+    internalInstrumentName: selectedInstrument?.name,
     externalInstrumentModel: getExternalInstrumentModel(orderId, device, tool).trim(),
     modelNumber: selectedInstrument?.model_number ?? tool.modelNumber ?? tool.code,
-    usedCount: selectedInstrument?.used_count ?? tool.usedCount,
-    remainCount: selectedInstrument?.remain_count ?? tool.remainCount,
+    usedCount: selectedInstrument?.used_count,
+    remainCount: selectedInstrument?.remain_count,
   }
 }
 
@@ -924,7 +966,7 @@ const resolvedDownholeDevices = computed(() =>
         ? (device.supportTools || [])
             .filter((tool) => isToolSelected(order.id, device, tool))
             .map((tool) => buildStructuredTool(order.id, device, tool))
-        : getResearchInstruments(device)
+        : getResearchInstruments(device).map(buildResearchTool)
       return {
         id: device.id,
         orderId: order.id,
@@ -965,7 +1007,7 @@ const flattenedResearchSupportingTools = computed(() =>
   researchManualOrders.value.flatMap((order: any) =>
     (order.deviceList || []).flatMap((device: ResolvedDeviceRow) =>
       getResearchInstruments(device).map((tool) => ({
-        ...tool,
+        ...buildResearchTool(tool),
         orderId: order.id,
         sourceDeviceName: device.name,
         template: '',
@@ -1185,13 +1227,32 @@ function saveDownholeOperation() {
         const selected = getSelectedInternalInstrument(order.id, device, tool)
         const key = getSupportToolKey(order.id, device, tool)
         const rawValue = selectedInternalInstrumentMap.value[key]
+        const externalSn = getExternalInstrumentModel(order.id, device, tool).trim()
+        if (rawValue && externalSn) {
+          ElMessage.warning(`${device.name} / ${tool.zh || tool.code || '配接仪器'} 的内部、外部SN号只能填写一项，请重新选择`)
+          return
+        }
+        // 外部SN独立有效，不依赖内部仪器列表的加载结果。
+        if (externalSn) continue
         if (internalInstrumentLoadingMap.value[key]) {
           ElMessage.warning(`正在加载 ${device.name} / ${tool.zh || tool.code || '配接仪器'} 的内部仪器，请稍后再保存`)
           return
         }
         if (!selected) {
           const actionText = rawValue ? '重新选择可用' : '选择'
-          ElMessage.warning(`请${actionText} ${device.name} / ${tool.zh || tool.code || '配接仪器'} 的内部仪器 SN`)
+          ElMessage.warning(`请${actionText} ${device.name} / ${tool.zh || tool.code || '配接仪器'} 的内部仪器SN号，或填写外部仪器SN号`)
+          return
+        }
+      }
+    }
+  }
+  for (const order of researchManualOrders.value) {
+    for (const device of order.deviceList || []) {
+      for (const tool of getResearchInstruments(device)) {
+        const internalSn = (tool.internalInstrumentSn || '').trim()
+        const externalSn = (tool.externalInstrumentModel || '').trim()
+        if (Boolean(internalSn) === Boolean(externalSn)) {
+          ElMessage.warning(`${device.name} / ${tool.zh || tool.code || '配接仪器'} 必须且只能填写一个内部或外部仪器SN号，请填写外部SN或重新选择仪器`)
           return
         }
       }
@@ -1300,7 +1361,11 @@ onMounted(() => {
             <span class="group-count">按测试产品选择配接仪器</span>
           </div>
           <div class="table-wrapper">
-            <table class="data-table">
+            <table class="data-table research-support-table">
+              <colgroup>
+                <col class="research-product-column" />
+                <col />
+              </colgroup>
               <thead>
                 <tr>
                   <th>测试产品</th>
@@ -1323,7 +1388,7 @@ onMounted(() => {
                     <div v-if="getResearchInstruments(device).length" class="tool-selector-stack research-tool-list">
                       <div
                         v-for="tool in getResearchInstruments(device)"
-                        :key="String(tool.internalInstrumentId || tool.internalInstrumentSn)"
+                        :key="tool.researchToolKey"
                         class="tool-inline-option tool-row-option is-selected"
                       >
                         <div class="research-tool-summary">
@@ -1334,9 +1399,24 @@ onMounted(() => {
                           <button class="research-tool-remove" type="button" @click="removeResearchInstrument(device, tool)">移除</button>
                         </div>
                         <div class="tool-internal-panel research-sn-panel">
-                          <div class="internal-label">SN号</div>
-                          <div class="research-sn-value">{{ tool.internalInstrumentSn || '-' }}</div>
-                          <div class="tool-remain">已用 {{ tool.usedCount ?? 0 }} 次，剩余 {{ tool.remainCount ?? 0 }} 次</div>
+                          <label class="research-sn-row">
+                            <span class="internal-label">内部仪器SN号</span>
+                            <input
+                              :value="tool.internalInstrumentSn || ''"
+                              class="external-instrument-input"
+                              placeholder="选择仪器后自动填充"
+                              readonly
+                            />
+                          </label>
+                          <label class="research-sn-row">
+                            <span class="internal-label">外部仪器SN号</span>
+                            <input
+                              v-model="tool.externalInstrumentModel"
+                              class="external-instrument-input"
+                              placeholder="填写外部仪器SN号"
+                              @input="applyResearchInstrumentSn(tool)"
+                            />
+                          </label>
                         </div>
                       </div>
                     </div>
@@ -1397,13 +1477,13 @@ onMounted(() => {
                             </span>
                           </label>
                           <div v-if="isToolSelected(order.id, device, tool)" class="tool-internal-panel">
-                            <div class="internal-label">内部仪器编号</div>
+                            <div class="internal-label">内部仪器SN号</div>
                             <select
                               v-model="selectedInternalInstrumentMap[getSupportToolKey(order.id, device, tool)]"
                               class="instrument-select"
                               :disabled="internalInstrumentLoadingMap[getSupportToolKey(order.id, device, tool)]"
                               @click.stop
-                              @change.stop
+                              @change.stop="handleInternalInstrumentChange(getSupportToolKey(order.id, device, tool))"
                             >
                               <option value="">-- 请选择 --</option>
                               <option
@@ -1424,14 +1504,20 @@ onMounted(() => {
                               {{ internalInstrumentMessageMap[getSupportToolKey(order.id, device, tool)] }}
                             </div>
                             <div class="external-field">
-                              <div class="internal-label">外部仪器型号（可选）</div>
+                              <div class="internal-label">外部仪器SN号</div>
                               <input
                                 v-model="externalInstrumentModelMap[getSupportToolKey(order.id, device, tool)]"
                                 class="external-instrument-input"
-                                placeholder="填写外部仪器型号"
+                                placeholder="填写外部仪器SN号"
+                                @input="handleExternalInstrumentInput(getSupportToolKey(order.id, device, tool))"
                                 @click.stop
                               />
                             </div>
+                            <div class="tool-remain">内部、外部SN号只能填写一项</div>
+                            <div
+                              v-if="selectedInternalInstrumentMap[getSupportToolKey(order.id, device, tool)] && getExternalInstrumentModel(order.id, device, tool).trim()"
+                              class="tool-remain is-empty"
+                            >历史记录同时包含内部、外部SN号，请重新二选一</div>
                           </div>
                         </div>
                       </div>
@@ -1947,25 +2033,38 @@ onMounted(() => {
 
 .research-sn-panel {
   display: grid;
-  grid-template-columns: auto minmax(120px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.research-sn-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
 }
 
-.research-sn-panel .tool-remain {
+.research-sn-row input {
+  width: 100%;
+  min-width: 0;
   margin-top: 0;
+  box-sizing: border-box;
 }
 
-.research-sn-value {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  font-size: 13px;
+.research-support-table {
+  table-layout: fixed;
+}
+
+.research-product-column {
+  width: 30%;
+}
+
+.research-support-table td {
+  overflow-wrap: anywhere;
+}
+
+.research-sn-panel .tool-remain {
+  margin-top: 0;
 }
 
 .instrument-picker-search {

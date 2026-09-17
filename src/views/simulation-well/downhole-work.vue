@@ -189,7 +189,9 @@ const normalizeDeviceTools = (device: any) => {
         externalInstrumentModel: String(item?.externalInstrumentModel || item?.externalInstrument_model || '').trim(),
         modelNumber: String(item?.modelNumber || item?.model_number || item?.code || '').trim(),
         usedCount: item?.usedCount ?? item?.used_count,
-        remainCount: item?.remainCount ?? item?.remain_count
+        remainCount: item?.remainCount ?? item?.remain_count,
+        sourceInstrument: item?.sourceInstrument,
+        researchToolKey: item?.researchToolKey,
       }
     })
     .filter((item: any) => item.code || item.zh || item.en || item.internalInstrumentSn || item.externalInstrumentModel)
@@ -202,7 +204,7 @@ const formatDetailTool = (tool: any) => {
     tool.remainCount !== undefined && tool.remainCount !== null && `${tool.remainCount}` !== ''
       ? `剩余 ${tool.remainCount} 次`
       : ''
-  const externalText = tool.externalInstrumentModel ? `外部型号 ${tool.externalInstrumentModel}` : ''
+  const externalText = tool.externalInstrumentModel ? `外部仪器SN号 ${tool.externalInstrumentModel}` : ''
   return [templateText, internalText ? `SN ${internalText}` : '', externalText, remainText].filter(Boolean).join(' / ')
 }
 

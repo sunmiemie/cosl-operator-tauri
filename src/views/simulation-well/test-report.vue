@@ -1195,6 +1195,75 @@ function collectMeta(section: Record<string, any>) {
   return JSON.parse(JSON.stringify(section))
 }
 
+// 按表单实际渲染的控件检查完整性，不改变模板字段和历史数据。
+function getMissingTemplateReportField() {
+  type RequiredControl = { key: string; label: string; options?: string[] }
+  const controls: RequiredControl[] = []
+  const add = (prefix: string, index: number, label: string, suffix = '', options?: string[]) => {
+    controls.push({ key: fieldKey(prefix, index, suffix), label, options })
+  }
+  const testOptions = ['normal', 'abnormal']
+  const evaluationOptions = ['qualified', 'unqualified']
+  const sections = [
+    { fields: selectedTemplate.value?.test_items || [], prefix: 'test', name: '测试项目', values: testItemValues },
+    { fields: selectedTemplate.value?.evaluation_standards || [], prefix: 'eval', name: '资料评价', values: evaluationValues },
+    { fields: selectedTemplate.value?.transfer_data_records || [], prefix: 'transfer', name: '转样数据记录', values: transferDataValues },
+  ]
+  for (const section of sections) {
+    controls.length = 0
+    section.fields.forEach((field: any, index: number) => {
+      const type = getFieldType(field)
+      const label = `${section.name} / ${getFieldLabel(field, `第${index + 1}项`)}`
+      const addField = (suffix = '', detail = '', options?: string[]) =>
+        add(section.prefix, index, detail ? `${label} / ${detail}` : label, suffix, options)
+      if (section.prefix === 'transfer') {
+        if (type === 'single-row-multi-column') {
+          getTransferColumns(field).forEach((column, columnIndex) =>
+            addField(`c${columnIndex}`, getFieldLabel(column, `第${columnIndex + 1}列`)))
+        }
+      } else if (type === 'single-input') {
+        addField('', '输入值')
+        addField('result', '判断结果', section.prefix === 'test' ? testOptions : evaluationOptions)
+      } else if (section.prefix === 'eval' || !COMPOUND_TYPES.includes(type)) {
+        addField('', '', ['text', 'number', 'textarea'].includes(type)
+          ? undefined : section.prefix === 'test' ? testOptions : evaluationOptions)
+      } else if (type === 'depth-group') {
+        for (let point = 1; point <= Number(field?.pointCount || 4); point++) {
+          addField(`p${point}`, `第${point}点 / 深度`)
+          if (field?.withJudgment) addField(`p${point}_result`, `第${point}点 / 判断结果`, testOptions)
+        }
+      } else if (type === 'range-radio') {
+        addField('from', '起始深度')
+        addField('to', '结束深度')
+        addField('result', '判断结果', testOptions)
+      } else if (type === 'multi-input-row') {
+        for (let row = 1; row <= Number(field?.rowCount || 2); row++) {
+          ;(field?.columns || []).forEach((column: any, columnIndex: number) =>
+            addField(`r${row}c${columnIndex}`, `第${row}点 / ${getFieldLabel(column, `输入${columnIndex + 1}`)}`))
+        }
+      } else if (type === 'sampling-group') {
+        for (let point = 1; point <= Number(field?.pointCount || 2); point++) {
+          ;(field?.items || []).forEach((item: any, itemIndex: number) =>
+            addField(`p${point}i${itemIndex}`, `第${point}点 / ${getFieldLabel(item, `项目${itemIndex + 1}`)}`, testOptions))
+        }
+      } else if (type === 'card-group') {
+        ;(field?.cards || []).forEach((card: any, cardIndex: number) => {
+          ;(card?.fields || []).forEach((subField: any, subIndex: number) =>
+            addField(`c${cardIndex}f${subIndex}`, `${card?.title || `卡片${cardIndex + 1}`} / ${getFieldLabel(subField, `字段${subIndex + 1}`)}`))
+        })
+      }
+    })
+    for (const control of controls) {
+      const value = section.values[control.key]
+      if (value === undefined || value === null || String(value).trim() === ''
+        || (control.options && !control.options.includes(value))) {
+        return `请${control.options ? '选择' : '填写'} ${control.label}`
+      }
+    }
+  }
+  return evaluationOptions.includes(conclusion.value) ? '' : '请选择测试结论'
+}
+
 async function saveReport() {
   if (!selectedOperation.value || !selectedDevice.value) {
     ElMessage.warning('请先选择下井作业和测试设备')
@@ -1203,6 +1272,13 @@ async function saveReport() {
   if (usesTemplateReport.value && (!selectedTemplate.value || (!editingReport.value && selectedTemplate.value.id <= 0))) {
     ElMessage.warning('当前测试设备未关联有效报告模板，请先在管理端配置模板后再提交')
     return
+  }
+  if (usesTemplateReport.value) {
+    const missingField = getMissingTemplateReportField()
+    if (missingField) {
+      ElMessage.warning(missingField)
+      return
+    }
   }
   if (!editingReport.value && props.monitorSessionId && selectedOperation.value.work_no === props.autoWorkNo && !monitorCsvFile.value) {
     ElMessage.warning(monitorCsvLoading.value ? '监控 CSV 正在加载，请稍后提交' : '未能读取本次测试的监控 CSV')

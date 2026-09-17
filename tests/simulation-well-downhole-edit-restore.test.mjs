@@ -45,7 +45,9 @@ assert.match(downhole, /defineEmits<[\s\S]*'edit-saved': \[workNo: string\]/, 'd
 assert.match(downhole, /buildSimulatedWellDownholeWorkPayload\(payload, \{\s*status: 1,[\s\S]*emit\('edit-saved', res\.data\?\.data\?\.work_no \|\| editedWorkNo\)/, 'editing downhole work should mark it running and emit its final work number')
 assert.match(page, /async function enterMonitoringFlow\(workNo: string\)[\s\S]*await startMonitorAndNavigate\(workNo\)[\s\S]*view: 'active-test'/, 'saved downhole work should share monitoring and fallback navigation')
 assert.match(page, /const workNo = res\.data\.data\?\.work_no \|\| ''[\s\S]*await enterMonitoringFlow\(workNo\)/, 'saving new downhole work should enter the shared monitoring flow')
-assert.match(page, /async function handleEditedDownholeSaved\(workNo: string\)[\s\S]*activeTestOperation\.value = null[\s\S]*await enterMonitoringFlow\(workNo\)/, 'editing should clear stale active-test context before monitoring')
-assert.match(page, /@edit-saved="handleEditedDownholeSaved"/, 'saving edited downhole work should enter the shared monitoring flow')
+const editSavedHandler = page.slice(page.indexOf('async function handleEditedDownholeSaved('), page.indexOf('async function finishActiveTestToReportPrep('))
+assert.match(editSavedHandler, /activeTestOperation\.value = null[\s\S]*await router\.replace\(\{ path: '\/simulation-well', query: \{ view: 'downhole-work' \} \}\)/, 'editing should clear stale active-test context and return to the work list')
+assert.doesNotMatch(editSavedHandler, /enterMonitoringFlow|startMonitorAndNavigate|startSimulatedWellMonitorSession/, 'editing must not start monitoring')
+assert.match(page, /@edit-saved="handleEditedDownholeSaved"/, 'saving edited downhole work should return to the list')
 
 console.log('simulation well downhole edit restore assertions passed')

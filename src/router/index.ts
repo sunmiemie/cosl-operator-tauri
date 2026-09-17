@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import DefaultLayout from '@/layouts/DefaultLayout.vue'
 import { load } from '@tauri-apps/plugin-store'
+import { ElMessage } from 'element-plus'
+import { checkSimulationWellNavigation, simulationWellNavigationMessage } from '@/composables/useSimulationWellNavigationLock'
 
 // 路由配置
 const routes: RouteRecordRaw[] = [
@@ -152,6 +154,11 @@ async function getToken(): Promise<string | null> {
 
 // 路由守卫：认证检查 + 设置页面标题
 router.beforeEach(async (to, _from, next) => {
+  if (!checkSimulationWellNavigation(to.fullPath)) {
+    ElMessage.warning(simulationWellNavigationMessage)
+    next(false)
+    return
+  }
   // 设置页面标题
   const title = to.meta.title as string
   document.title = title ? `${title} - COSL Operator` : 'COSL Operator'
