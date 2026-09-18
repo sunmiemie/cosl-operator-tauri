@@ -117,9 +117,10 @@ function normalizedMqttConfig(value: Partial<HaltHassMqttConfig> | undefined): H
     broker: typeof value?.broker === 'string' && value.broker.trim()
       ? value.broker.trim()
       : defaults.broker,
-    port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : defaults.port,
+    port: (typeof value?.port === 'number' || typeof value?.port === 'string') &&
+      Number.isInteger(port) && port > 0 && port <= 65535 ? port : defaults.port,
     topicPrefix: typeof value?.topicPrefix === 'string' && value.topicPrefix.trim()
-      ? value.topicPrefix.trim().replace(/^\/+|\/+$/g, '')
+      ? value.topicPrefix.trim().replace(/^\/+|\/+$/g, '') || defaults.topicPrefix
       : defaults.topicPrefix,
     username: typeof value?.username === 'string' ? value.username : defaults.username,
     password: typeof value?.password === 'string' ? value.password : defaults.password,
@@ -151,7 +152,9 @@ function normalizedHardwareProfiles(value: unknown): HassHardwareProfile[] {
       resourceType: saved?.resourceType === 'visa' || saved?.resourceType === 'serial'
         ? saved.resourceType
         : fallback.resourceType,
-      baudrate: Number(saved?.baudrate) > 0 ? Number(saved?.baudrate) : fallback.baudrate,
+      baudrate: (typeof saved?.baudrate === 'number' || typeof saved?.baudrate === 'string') &&
+        Number.isSafeInteger(Number(saved.baudrate)) && Number(saved.baudrate) > 0
+        ? Number(saved.baudrate) : fallback.baudrate,
       matcher: {
         ...fallback.matcher,
         ...(saved?.matcher || {}),
