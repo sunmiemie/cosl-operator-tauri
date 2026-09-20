@@ -179,14 +179,13 @@ class BusinessValidator:
                     else:
                         previous.pending_jump_text = consensus.text
                         previous.pending_jump_count = 1
-                    if previous.pending_jump_count < 2:
-                        return ConsensusResult(
-                            ReadingStatus.PENDING_JUMP,
-                            consensus.text,
-                            value,
-                            consensus.confidence,
-                            f"change {change} exceeds allowed {allowed}; waiting for next cycle",
-                        )
+                    return ConsensusResult(
+                        ReadingStatus.PENDING_JUMP,
+                        consensus.text,
+                        value,
+                        consensus.confidence,
+                        f"change {change} exceeds allowed {allowed}; keeping last accepted value",
+                    )
 
             self._states[region.id] = ValidationState(
                 consensus.text, value, captured_at

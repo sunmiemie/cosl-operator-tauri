@@ -587,6 +587,21 @@ fn draw_data_table(
 }
 
 fn measurement_value(record: &serde_json::Value, preferred_id: &str, fallback_id: &str) -> String {
+    let compact_key = if preferred_id.contains("upper") {
+        Some("upper_temp")
+    } else if preferred_id.contains("lower") {
+        Some("lower_temp")
+    } else if preferred_id.contains("pressure") || fallback_id.contains("pressure") {
+        Some("pressure")
+    } else {
+        None
+    };
+    if let Some(key) = compact_key {
+        if let Some(value) = record.get(key).filter(|value| !value.is_null()) {
+            return text_value(Some(value));
+        }
+    }
+
     let measurements = record
         .get("measurements")
         .and_then(|value| value.as_array())
@@ -886,7 +901,27 @@ fn write_high_temp_pressure_pdf_report(
                 })
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            [
+                ("上部水温", "upper_temp"),
+                ("下部水温", "lower_temp"),
+                ("容器压力", "pressure"),
+            ]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (label, key))| {
+                records.latest.get(key).map(|value| {
+                    vec![
+                        (index + 1).to_string(),
+                        "试验容器".to_string(),
+                        (*label).to_string(),
+                        text_value(Some(value)),
+                        "-".to_string(),
+                    ]
+                })
+            })
+            .collect()
+        });
     draw_data_table(
         &mut page,
         &font,
@@ -1345,6 +1380,27 @@ pub fn write_high_temp_pressure_curve_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_curve_record_values_are_supported_by_report_reader() {
+        let record = serde_json::json!({
+            "upper_temp": 152,
+            "lower_temp": 149,
+            "pressure": 80.5,
+        });
+        assert_eq!(
+            measurement_value(&record, "upper_water_temp", "upper_inlet_oil_temp"),
+            "152"
+        );
+        assert_eq!(
+            measurement_value(&record, "lower_water_temp", "lower_inlet_oil_temp"),
+            "149"
+        );
+        assert_eq!(
+            measurement_value(&record, "vessel_250_pressure", "pressure"),
+            "80.5"
+        );
+    }
 
     #[test]
     fn incremental_journal_reader_returns_only_complete_records() {

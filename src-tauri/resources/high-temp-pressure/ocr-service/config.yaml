@@ -67,25 +67,25 @@ logging:
 
 regions:
   - { id: oil_tank_level, label: "油箱油位", rect: { x: 81, y: 212, width: 36, height: 23 }, value_type: integer, decimal_places: 0 }
-  - { id: oil_tank_oil_temp, label: "油箱油温", rect: { x: 277, y: 212, width: 37, height: 23 }, value_type: integer, decimal_places: 0 }
-  - { id: top_outlet_oil_temp, label: "出口油温", rect: { x: 353, y: 211, width: 39, height: 24 }, value_type: integer, decimal_places: 0 }
-  - { id: vessel_250_upper_water_temp, label: "250容器上部水温", rect: { x: 810, y: 254, width: 47, height: 22 }, value_type: integer, decimal_places: 0 }
+  - { id: oil_tank_oil_temp, label: "油箱油温", rect: { x: 277, y: 212, width: 37, height: 23 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: top_outlet_oil_temp, label: "出口油温", rect: { x: 353, y: 211, width: 39, height: 24 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: vessel_250_upper_water_temp, label: "250容器上部水温", rect: { x: 810, y: 254, width: 47, height: 22 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
   - { id: air_source_pressure, label: "气源压力", rect: { x: 989, y: 267, width: 44, height: 21 }, value_type: decimal, decimal_places: 2 }
-  - { id: vessel_250_upper_inlet_oil_temp, label: "250容器上进口油温", rect: { x: 735, y: 301, width: 45, height: 22 }, value_type: integer, decimal_places: 0 }
+  - { id: vessel_250_upper_inlet_oil_temp, label: "250容器上进口油温", rect: { x: 735, y: 301, width: 45, height: 22 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
   - { id: vessel_250_pressure, label: "250容器压力", rect: { x: 875, y: 342, width: 47, height: 19 }, value_type: decimal, decimal_places: 1 }
-  - { id: cooling_tank_outlet_water_temp, label: "冷却水箱出口水温", rect: { x: 449, y: 354, width: 34, height: 21 }, value_type: integer, decimal_places: 0 }
-  - { id: cooler_outlet_oil_temp, label: "冷却器出口油温", rect: { x: 534, y: 354, width: 47, height: 21 }, value_type: integer, decimal_places: 0 }
+  - { id: cooling_tank_outlet_water_temp, label: "冷却水箱出口水温", rect: { x: 449, y: 354, width: 34, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: cooler_outlet_oil_temp, label: "冷却器出口油温", rect: { x: 534, y: 354, width: 47, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
   - { id: low_pressure_pump_outlet_pressure, label: "低压泵出口压力", rect: { x: 1120, y: 353, width: 45, height: 21 }, value_type: integer, decimal_places: 0, fixed_width: 2 }
-  - { id: cooling_tank_water_temp, label: "冷却水箱水温", rect: { x: 294, y: 363, width: 37, height: 22 }, value_type: integer, decimal_places: 0 }
-  - { id: cooling_tank_inlet_water_temp, label: "冷却水箱进口水温", rect: { x: 343, y: 457, width: 37, height: 22 }, crop_margin: 4, value_type: integer, decimal_places: 0 }
-  - { id: vessel_250_lower_inlet_oil_temp, label: "250容器下进口油温", rect: { x: 740, y: 510, width: 46, height: 20 }, value_type: integer, decimal_places: 0 }
-  - { id: oil_gas_separator_inlet_oil_temp, label: "油气分离器进口油温", rect: { x: 202, y: 512, width: 46, height: 21 }, value_type: integer, decimal_places: 0 }
-  - { id: vessel_250_lower_water_temp, label: "250容器下部水温", rect: { x: 810, y: 529, width: 45, height: 21 }, value_type: integer, decimal_places: 0 }
-  - { id: oil_gas_separator_outlet_oil_temp, label: "油气分离器出口油温", rect: { x: 203, y: 541, width: 46, height: 21 }, value_type: integer, decimal_places: 0 }
-  - { id: vessel_480_upper_water_temp, label: "480容器上部水温", rect: { x: 810, y: 552, width: 45, height: 22 }, value_type: integer, decimal_places: 0 }
+  - { id: cooling_tank_water_temp, label: "冷却水箱水温", rect: { x: 294, y: 363, width: 37, height: 22 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: cooling_tank_inlet_water_temp, label: "冷却水箱进口水温", rect: { x: 343, y: 457, width: 37, height: 22 }, crop_margin: 4, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: vessel_250_lower_inlet_oil_temp, label: "250容器下进口油温", rect: { x: 740, y: 510, width: 46, height: 20 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: oil_gas_separator_inlet_oil_temp, label: "油气分离器进口油温", rect: { x: 202, y: 512, width: 46, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: vessel_250_lower_water_temp, label: "250容器下部水温", rect: { x: 810, y: 529, width: 45, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: oil_gas_separator_outlet_oil_temp, label: "油气分离器出口油温", rect: { x: 203, y: 541, width: 46, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: vessel_480_upper_water_temp, label: "480容器上部水温", rect: { x: 810, y: 552, width: 45, height: 22 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
   - { id: high_pressure_pump_outlet_pressure, label: "高压泵出口压力", rect: { x: 1129, y: 563, width: 46, height: 22 }, value_type: decimal, decimal_places: 1 }
-  - { id: vessel_480_upper_inlet_oil_temp, label: "480容器上进口油温", rect: { x: 740, y: 574, width: 45, height: 21 }, value_type: integer, decimal_places: 0 }
-  - { id: vessel_480_upper_outlet_oil_temp, label: "480容器上出口油温", rect: { x: 744, y: 756, width: 45, height: 21 }, value_type: integer, decimal_places: 0 }
+  - { id: vessel_480_upper_inlet_oil_temp, label: "480容器上进口油温", rect: { x: 740, y: 574, width: 45, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: vessel_480_upper_outlet_oil_temp, label: "480容器上出口油温", rect: { x: 744, y: 756, width: 45, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
   - { id: cylinder_pressure, label: "筒内压力", rect: { x: 881, y: 796, width: 47, height: 19 }, value_type: decimal, decimal_places: 1 }
-  - { id: vessel_480_lower_water_temp, label: "480容器下部水温", rect: { x: 815, y: 864, width: 45, height: 22 }, value_type: integer, decimal_places: 0 }
-  - { id: high_temp_chamber_room_temp, label: "高温室室温", rect: { x: 332, y: 869, width: 38, height: 21 }, value_type: integer, decimal_places: 0 }
+  - { id: vessel_480_lower_water_temp, label: "480容器下部水温", rect: { x: 815, y: 864, width: 45, height: 22 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }
+  - { id: high_temp_chamber_room_temp, label: "高温室室温", rect: { x: 332, y: 869, width: 38, height: 21 }, value_type: integer, decimal_places: 0, minimum: 0, maximum: 300, maximum_change_per_second: 10 }

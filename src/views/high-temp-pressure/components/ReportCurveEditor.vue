@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { EquipmentReportUploadFile } from '@/services/equipment-report-api'
 import { echarts } from '@/utils/echarts'
+import type { HighTempPressureCurveRangeDraftData } from '../utils/pendingReport'
 
 type CurvePoint = {
   timestamp: number
@@ -51,12 +52,14 @@ export type HighTempPressureCurveExport = {
   }
 }
 
-export type HighTempPressureCurveRangeDraft = {
-  id: string
-  title: string
-  startMs: number | null
-  endMs: number | null
-  visibleSeries?: CurveSeriesKey[]
+export type HighTempPressureCurveRangeDraft = HighTempPressureCurveRangeDraftData
+
+export type HighTempPressureCurveExportContext = {
+  testNumber: string
+  instrument: string
+  fieldName: string
+  fileNameSuffix: string
+  ranges: HighTempPressureCurveRangeDraft[]
 }
 
 const props = defineProps<{
@@ -65,6 +68,7 @@ const props = defineProps<{
   displayOrderNumbers?: string
   instruments: string
   operatorName: string
+  testType?: string
   initialRanges?: HighTempPressureCurveRangeDraft[]
   initialStartMs?: number | null
   initialEndMs?: number | null
@@ -98,11 +102,20 @@ const selectedPoints = computed(() => {
 })
 
 function numericValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
   const number = Number(value)
   return Number.isFinite(number) ? number : null
 }
 
 function parseRecordValues(record: any) {
+  const compactKeys = ['upper_temp', 'lower_temp', 'pressure']
+  if (compactKeys.some((key) => Object.prototype.hasOwnProperty.call(record || {}, key))) {
+    return {
+      upperTemp: numericValue(record?.upper_temp),
+      lowerTemp: numericValue(record?.lower_temp),
+      pressure: numericValue(record?.pressure),
+    }
+  }
   const values: Record<string, number> = {}
   const measurements = Array.isArray(record?.measurements) ? record.measurements : []
   measurements.forEach((item: any) => {
@@ -202,9 +215,12 @@ function createRangeId() {
 }
 
 function normalizeVisibleSeries(value: unknown): CurveSeriesKey[] {
-  if (!Array.isArray(value)) return ALL_CURVE_SERIES.slice()
+  const defaultSeries: CurveSeriesKey[] = String(props.testType || '').trim() === '高压测试'
+    ? ['pressure']
+    : ALL_CURVE_SERIES.slice()
+  if (!Array.isArray(value)) return defaultSeries
   const selected = ALL_CURVE_SERIES.filter((key) => value.includes(key))
-  return selected.length ? selected : ALL_CURVE_SERIES.slice()
+  return selected.length ? selected : defaultSeries
 }
 
 function cloneRanges() {
@@ -335,14 +351,21 @@ function formatPrintValue(value: number | null, key: CurveSeriesKey) {
   return value.toFixed(key === 'pressure' ? 3 : 1)
 }
 
-function buildPrintGraphics(source: CurvePoint[], range?: HighTempPressureCurveRangeDraft) {
+function buildPrintGraphics(
+  source: CurvePoint[],
+  range?: HighTempPressureCurveRangeDraft,
+  exportContext?: HighTempPressureCurveExportContext
+) {
   const tableLeft = 82
   const tableTop = 660
   const headerHeight = 30
   const rowHeight = 32
-  const columnWidths = [70, 286, 210, 105, 210, 105, 110, 110, 80, 150]
-  const headers = ['图例', '变量名称', '左时间', '左数值', '右时间', '右数值', '最小值', '最大值', '单位', '隐藏曲线']
+  const columnWidths = [70, 436, 210, 105, 210, 105, 110, 110, 80]
+  const headers = ['图例', '变量名称', '左时间', '左数值', '右时间', '右数值', '最小值', '最大值', '单位']
   const visibleSeries = normalizeVisibleSeries(range?.visibleSeries)
+  const visibleDefinitions = CURVE_SERIES_DEFINITIONS.filter((definition) => visibleSeries.includes(definition.key))
+  const testNumber = exportContext?.testNumber || props.displayOrderNumbers || props.orderNumbers || '-'
+  const instrument = exportContext?.instrument || props.instruments || '-'
   const graphics: any[] = []
   let x = tableLeft
 
@@ -384,7 +407,7 @@ function buildPrintGraphics(source: CurvePoint[], range?: HighTempPressureCurveR
     x += columnWidths[index]
   })
 
-  CURVE_SERIES_DEFINITIONS.forEach((definition, rowIndex) => {
+  visibleDefinitions.forEach((definition, rowIndex) => {
     const statistics = calculateSeriesStatistics(definition.key, definition.unit, source)
     const rowTop = tableTop + headerHeight + rowIndex * rowHeight
     const row = [
@@ -397,7 +420,6 @@ function buildPrintGraphics(source: CurvePoint[], range?: HighTempPressureCurveR
       formatPrintValue(statistics.min, definition.key),
       formatPrintValue(statistics.max, definition.key),
       definition.unit,
-      '',
     ]
     x = tableLeft
     row.forEach((text, columnIndex) => {
@@ -410,39 +432,20 @@ function buildPrintGraphics(source: CurvePoint[], range?: HighTempPressureCurveR
           style: { stroke: definition.color, lineWidth: 3 },
         })
       }
-      if (columnIndex === 9) {
-        const boxSize = 14
-        const boxX = x + (columnWidths[columnIndex] - boxSize) / 2
-        const boxY = rowTop + (rowHeight - boxSize) / 2
-        graphics.push({
-          type: 'rect',
-          silent: true,
-          shape: { x: boxX, y: boxY, width: boxSize, height: boxSize },
-          style: { fill: '#fff', stroke: '#334155', lineWidth: 1 },
-        })
-        if (!visibleSeries.includes(definition.key)) {
-          graphics.push({
-            type: 'polyline',
-            silent: true,
-            shape: { points: [[boxX + 2, boxY + 7], [boxX + 6, boxY + 11], [boxX + 12, boxY + 3]] },
-            style: { stroke: '#111827', lineWidth: 2, fill: null },
-          })
-        }
-      }
       x += columnWidths[columnIndex]
     })
   })
 
-  const businessTop = tableTop + headerHeight + CURVE_SERIES_DEFINITIONS.length * rowHeight + 18
+  const businessTop = tableTop + headerHeight + visibleDefinitions.length * rowHeight + 18
   const businessFont = 'bold 16px Microsoft YaHei, sans-serif'
   graphics.push(
     {
       type: 'text', silent: true,
-      style: { x: tableLeft, y: businessTop, text: `任务单编号：${props.orderNumbers || '-'}`, fill: '#111827', font: businessFont },
+      style: { x: tableLeft, y: businessTop, text: `测试单号：${testNumber}`, fill: '#111827', font: businessFont },
     },
     {
       type: 'text', silent: true,
-      style: { x: 760, y: businessTop, text: `仪器型号：${props.instruments || '-'}`, fill: '#111827', font: businessFont, width: 750, overflow: 'truncate' },
+      style: { x: 760, y: businessTop, text: `仪器型号：${instrument}`, fill: '#111827', font: businessFont, width: 750, overflow: 'truncate' },
     },
     {
       type: 'text', silent: true,
@@ -458,7 +461,8 @@ function buildPrintGraphics(source: CurvePoint[], range?: HighTempPressureCurveR
 
 function buildChartOption(
   exporting = false,
-  exportRange?: HighTempPressureCurveRangeDraft
+  exportRange?: HighTempPressureCurveRangeDraft,
+  exportContext?: HighTempPressureCurveExportContext
 ): echarts.EChartsCoreOption {
   const exportStart = exportRange?.startMs ?? selectedStartMs.value
   const exportEnd = exportRange?.endMs ?? selectedEndMs.value
@@ -550,7 +554,7 @@ function buildChartOption(
         fillerColor: 'rgba(21, 88, 165, 0.16)',
       },
     ],
-    graphic: exporting ? buildPrintGraphics(source, exportRange) : [],
+    graphic: exporting ? buildPrintGraphics(source, exportRange, exportContext) : [],
     series: CURVE_SERIES_DEFINITIONS
       .filter((item) => visibleSeries.includes(item.key))
       .map((item) => ({
@@ -562,7 +566,11 @@ function buildChartOption(
         smooth: false,
         connectNulls: false,
         sampling: 'lttb',
-        lineStyle: { width: item.key === 'pressure' ? 1.8 : item.key === 'upperTemp' ? 1.6 : 1.4 },
+        lineStyle: {
+          width: item.key === 'pressure' ? 1.8 : item.key === 'upperTemp' ? 1.6 : 1.4,
+          color: item.color,
+        },
+        itemStyle: { color: item.color },
       })),
   }
 }
@@ -690,8 +698,9 @@ function dataUrlToBytes(dataUrl: string) {
   return bytes
 }
 
-async function exportCurveFiles(): Promise<HighTempPressureCurveExport[]> {
-  const invalidRangeIndex = curveRanges.value.findIndex((range) => {
+async function exportCurveFiles(exportContext: HighTempPressureCurveExportContext): Promise<HighTempPressureCurveExport[]> {
+  const exportRanges = exportContext.ranges.length ? exportContext.ranges : curveRanges.value
+  const invalidRangeIndex = exportRanges.findIndex((range) => {
     if (range.startMs === null || range.endMs === null) return true
     return pointsInRange(range.startMs, range.endMs).length < 2
   })
@@ -700,8 +709,8 @@ async function exportCurveFiles(): Promise<HighTempPressureCurveExport[]> {
   }
 
   const exports: HighTempPressureCurveExport[] = []
-  for (let index = 0; index < curveRanges.value.length; index += 1) {
-    const range = curveRanges.value[index]
+  for (let index = 0; index < exportRanges.length; index += 1) {
+    const range = exportRanges[index]
     const startMs = range.startMs as number
     const endMs = range.endMs as number
     const source = pointsInRange(startMs, endMs)
@@ -710,10 +719,10 @@ async function exportCurveFiles(): Promise<HighTempPressureCurveExport[]> {
     document.body.appendChild(element)
     const exportChart = echarts.init(element, undefined, { renderer: 'canvas', width: 1600, height: 900 })
     try {
-      exportChart.setOption(buildChartOption(true, range), true)
+      exportChart.setOption(buildChartOption(true, range, exportContext), true)
       const dataUrl = exportChart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' })
       const bytes = dataUrlToBytes(dataUrl)
-      const fileName = `高温高压测试结果曲线-${String(index + 1).padStart(2, '0')}.png`
+      const fileName = `高温高压测试结果曲线-${exportContext.fileNameSuffix}-${String(index + 1).padStart(2, '0')}.png`
       const result = await invoke<any>('write_high_temp_pressure_curve_chart', {
         exportDir: props.exportDir,
         imageBytes: Array.from(bytes),
@@ -721,7 +730,7 @@ async function exportCurveFiles(): Promise<HighTempPressureCurveExport[]> {
       })
       exports.push({
         file: {
-          fieldName: 'testing_curve',
+          fieldName: exportContext.fieldName,
           fileName,
           blob: new Blob([bytes], { type: 'image/png' }),
         },

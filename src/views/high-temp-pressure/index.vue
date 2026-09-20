@@ -245,6 +245,10 @@ async function handleBeginTest() {
     ElMessage.error('未找到已选中的仪器')
     return
   }
+  if (testing.ocrDeviceIndex.value === null) {
+    ElMessage.warning('请先选择采集卡，再开始测试')
+    return
+  }
   const runningInstrumentIds = selections.map((selection) => selection.instrument.id)
   const uniqueOrders = Array.from(new Map(selections.map((selection) => [selection.order.id, selection.order])).values())
   const missingDbOrder = uniqueOrders.find((order) => typeof order.dbId !== 'number')
@@ -293,6 +297,12 @@ async function handleBeginTest() {
   } finally {
     testStartSubmitting.value = false
   }
+}
+
+async function handleOcrDeviceSelection(deviceIndex: number) {
+  const selected = await testing.selectOcrDevice(deviceIndex)
+  if (!selected || !backendTestStarted.value) return
+  await testing.connectOcrDevice()
 }
 
 async function handleConfirmEnd() {
@@ -655,7 +665,10 @@ onUnmounted(() => {
         :online-timer-str="testing.onlineTimerStr.value"
         :csv-count="testing.csvCount.value"
         :current-selected="schedule.currentSelected.value"
+        :ocr-device-index="testing.ocrDeviceIndex.value"
         :ocr-device-name="testing.ocrDeviceName.value"
+        :ocr-devices="testing.ocrDevices.value"
+        :ocr-devices-loading="testing.ocrDevicesLoading.value"
         :ocr-ready-pct="testing.ocrReadyPct.value"
         :capture-status-text="testing.captureStatusText.value"
         :latest-frame-url="testing.latestFrameUrl.value"
@@ -666,7 +679,8 @@ onUnmounted(() => {
         :chart-summary="testing.chartSummary"
         :chart-series-visibility="testing.chartSeriesVisibility"
         @start-test="handleBeginTest"
-        @connect-ocr="testing.connectOcrDevice"
+        @refresh-ocr-devices="testing.refreshOcrDevices"
+        @select-ocr-device="handleOcrDeviceSelection"
         @set-chart-window="testing.setChartWindowMinutes"
         @toggle-chart-series="testing.toggleChartSeries"
         @show-all-chart-series="testing.showAllChartSeries"

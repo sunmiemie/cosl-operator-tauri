@@ -10,6 +10,7 @@ import type {
 } from '../utils/pendingReport'
 import ReportCurveEditor, {
   type HighTempPressureCurveExport,
+  type HighTempPressureCurveExportContext,
   type HighTempPressureCurveRangeDraft,
 } from './ReportCurveEditor.vue'
 import { useAuth } from '@/composables/useAuth'
@@ -98,19 +99,38 @@ const shiftHours = ref('')
 const runtimeHours = computed(() => formatRuntimeHours(props.runtimeSeconds ?? 0))
 const totalHours = computed(() => runtimeHours.value)
 const taskSummary = ref('')
-const curveEditor = ref<{ exportCurveFiles: () => Promise<HighTempPressureCurveExport[]> } | null>(null)
+type PreparedInstrumentCurves = {
+  key: string
+  fieldName: string
+  exports: HighTempPressureCurveExport[]
+}
+
+const curveEditor = ref<{
+  exportCurveFiles: (context: HighTempPressureCurveExportContext) => Promise<HighTempPressureCurveExport[]>
+} | null>(null)
 const curveReady = ref(false)
-const preparedCurves = ref<HighTempPressureCurveExport[]>([])
-const curveRanges = ref<HighTempPressureCurveRangeDraft[]>(
-  props.initialDraft?.curveRanges?.length
-    ? props.initialDraft.curveRanges.map((range) => ({ ...range }))
-    : [{
-        id: 'full-range',
-        title: '全程曲线',
-        startMs: props.initialDraft?.curveRange?.startMs ?? null,
-        endMs: props.initialDraft?.curveRange?.endMs ?? null,
-      }]
-)
+const preparedCurves = ref<PreparedInstrumentCurves[]>([])
+
+function cloneCurveRanges(ranges: HighTempPressureCurveRangeDraft[]) {
+  return ranges.map((range) => ({
+    ...range,
+    visibleSeries: range.visibleSeries?.slice(),
+  }))
+}
+
+function createInitialCurveRanges(): HighTempPressureCurveRangeDraft[] {
+  if (props.initialDraft?.curveRanges?.length) {
+    return cloneCurveRanges(props.initialDraft.curveRanges)
+  }
+  return [{
+    id: 'full-range',
+    title: '全程曲线',
+    startMs: props.initialDraft?.curveRange?.startMs ?? null,
+    endMs: props.initialDraft?.curveRange?.endMs ?? null,
+  }]
+}
+
+const curveRanges = ref<HighTempPressureCurveRangeDraft[]>(createInitialCurveRanges())
 
 const reportSelections = computed(() => {
   return props.selectedScheduledOrders.length ? props.selectedScheduledOrders : props.currentSelected ? [props.currentSelected] : []
@@ -119,17 +139,17 @@ const reportSelections = computed(() => {
 const primaryOrder = computed(() => reportSelections.value[0]?.order ?? null)
 const selectionSignature = computed(() => reportSelections.value.map((item) => `${item.order.dbId ?? item.order.id}:${item.instrument.id}:${item.instrument.sn}`).join('|'))
 const orderNos = computed(() => Array.from(new Set(reportSelections.value.map((item) => item.order.no))).join(' / ') || '-')
-const displayOrderNos = computed(() => Array.from(new Set(reportSelections.value.map((item) => displayOrderNumber(item.order)))).join(' / ') || '-')
-const instruments = computed(() => reportSelections.value.map((item) => `${item.instrument.label} ${item.instrument.sn}`).join(', ') || '-')
 const canGenerateReport = computed(() => fileStatuses.value.json === 'done' && curveReady.value)
 const savePath = computed(() => props.exportedCaptureDir || '未获取到保存目录，请先完成 OCR 识别结果保存')
 const savedFiles = computed(() => [
   { icon: '🗂', name: 'ocr_readings_0.5s.json', usage: '仅本机保留' },
-  ...curveRanges.value.map((range, index) => ({
-    icon: '📈',
-    name: `高温高压测试结果曲线-${String(index + 1).padStart(2, '0')}.png`,
-    usage: `${range.title || `曲线${index + 1}`} · 独立打印附件`,
-  })),
+  ...reportSelections.value.flatMap((selection, instrumentIndex) =>
+    curveRangesForInstrument(getInstrumentKey(selection)).map((range, rangeIndex) => ({
+      icon: '📈',
+      name: `高温高压测试结果曲线-仪器${String(instrumentIndex + 1).padStart(2, '0')}-${String(rangeIndex + 1).padStart(2, '0')}.png`,
+      usage: `${selection.instrument.label} ${selection.instrument.sn} · ${range.title || `曲线${rangeIndex + 1}`}`.trim(),
+    }))
+  ),
   { icon: '📄', name: '设备级高温高压测试报告.pdf', usage: '仅报告正文，服务端按设备生成' },
 ])
 const shutdownItems = [
@@ -157,6 +177,7 @@ const activeInstrumentText = computed(() => {
   return selection ? `${selection.instrument.label} ${selection.instrument.sn}`.trim() : '-'
 })
 const activeOrderNo = computed(() => displayOrderNumber(activeReportOrder.value))
+const preparedCurveCount = computed(() => preparedCurves.value.reduce((count, item) => count + item.exports.length, 0))
 const overallResult = computed<HighTempPressureReportResult>(() => {
   const results = instrumentRows.value.map((row) => reportUnitDraftMap.value[row.key]?.result || row.state.result)
   if (results.includes('fail')) return 'fail'
@@ -197,6 +218,13 @@ const createClientSubmitId = () => {
 
 function getInstrumentKey(selection: ScheduledSelection) {
   return `${selection.order.dbId ?? selection.order.id}:${selection.instrument.id}:${selection.instrument.sn}`
+}
+
+function curveRangesForInstrument(key: string) {
+  const stored = reportUnitDraftMap.value[key]?.curveRanges
+  if (stored?.length) return cloneCurveRanges(stored)
+  if (key && key === activeReportKey.value && curveRanges.value.length) return cloneCurveRanges(curveRanges.value)
+  return createInitialCurveRanges()
 }
 
 function normalizeEquipmentId(...values: unknown[]) {
@@ -309,6 +337,8 @@ function resetReportStateForSelections() {
   clientSubmitId.value = props.clientSubmitId?.trim() || createClientSubmitId()
   submittedReportNo.value = ''
   uploadCompleted.value = false
+  preparedCurves.value = []
+  fileStatuses.value.curve = 'pending'
   const next: Record<string, InstrumentResultState> = {}
   reportSelections.value.forEach((selection) => {
     const key = getInstrumentKey(selection)
@@ -337,6 +367,7 @@ function cloneReportUnitDraft(
     ...value,
     confirmChecks: value.confirmChecks.slice(),
     paperReportChecks: clonePaperReportChecks(value.paperReportChecks),
+    curveRanges: cloneCurveRanges(value.curveRanges?.length ? value.curveRanges : createInitialCurveRanges()),
     completed,
   }
   delete cloned.reviewerName
@@ -354,6 +385,7 @@ function currentReportUnitDraft(completed?: boolean): HighTempPressureReportUnit
     operatorName: operatorName.value,
     confirmChecks: confirmChecks.value.slice(),
     paperReportChecks: clonePaperReportChecks(paperReportChecks.value),
+    curveRanges: cloneCurveRanges(curveRanges.value),
     completed: completed ?? previous?.completed ?? false,
   }
 }
@@ -385,6 +417,7 @@ function applyReportUnitDraft(draft: HighTempPressureReportUnitDraft) {
     : draft.operatorName
   confirmChecks.value = draft.confirmChecks.slice()
   paperReportChecks.value = clonePaperReportChecks(draft.paperReportChecks)
+  curveRanges.value = cloneCurveRanges(draft.curveRanges?.length ? draft.curveRanges : createInitialCurveRanges())
 }
 
 function openReportForEditing(index: number, inheritCurrent = false) {
@@ -405,8 +438,12 @@ function openReportForEditing(index: number, inheritCurrent = false) {
   activeReportIndex.value = index
   reportStage.value = 'editing'
   reviewConfirmed.value = false
+  curveReady.value = false
   if (target) applyReportUnitDraft(target)
-  else paperReportChecks.value = createDefaultPaperReportChecks(targetRow.selection.order.onlineTest)
+  else {
+    paperReportChecks.value = createDefaultPaperReportChecks(targetRow.selection.order.onlineTest)
+    curveRanges.value = createInitialCurveRanges()
+  }
 }
 
 function canOpenReport(index: number) {
@@ -431,18 +468,23 @@ function restoreInitialDraft() {
     ...paperReportChecks.value,
     ...(draft.paperReportChecks || {}),
   }
-  if (Array.isArray(draft.curveRanges) && draft.curveRanges.length) {
-    curveRanges.value = draft.curveRanges.map((range) => ({ ...range }))
-  } else if (draft.curveRange) {
-    curveRanges.value = [{
+  const legacyCurveRanges = Array.isArray(draft.curveRanges) && draft.curveRanges.length
+    ? cloneCurveRanges(draft.curveRanges)
+    : draft.curveRange
+      ? [{
       id: 'legacy-full-range',
       title: '全程曲线',
       startMs: draft.curveRange.startMs,
       endMs: draft.curveRange.endMs,
-    }]
-  }
+        }]
+      : createInitialCurveRanges()
+  curveRanges.value = cloneCurveRanges(legacyCurveRanges)
   reportUnitDraftMap.value = Object.fromEntries(
-    Object.entries(draft.reportUnitDraftMap || {}).map(([key, value]) => [key, cloneReportUnitDraft(value)])
+    Object.entries(draft.reportUnitDraftMap || {}).map(([key, value]) => {
+      const restored = cloneReportUnitDraft(value)
+      if (!value.curveRanges?.length) restored.curveRanges = cloneCurveRanges(legacyCurveRanges)
+      return [key, restored]
+    })
   )
   activeReportIndex.value = Math.min(
     Math.max(0, Number(draft.activeReportIndex) || 0),
@@ -468,7 +510,7 @@ function emitReportDraft() {
       startMs: curveRanges.value[0].startMs,
       endMs: curveRanges.value[0].endMs,
     } : undefined,
-    curveRanges: curveRanges.value.map((range) => ({ ...range })),
+    curveRanges: cloneCurveRanges(curveRanges.value),
     reportUnitDraftMap: Object.fromEntries(
       Object.entries(reportUnitDraftMap.value).map(([key, value]) => [key, cloneReportUnitDraft(value)])
     ),
@@ -547,8 +589,9 @@ function handleCurveReady(ready: boolean) {
 }
 
 function handleCurveRangesChange(ranges: HighTempPressureCurveRangeDraft[]) {
-  curveRanges.value = ranges.map((range) => ({ ...range }))
+  curveRanges.value = cloneCurveRanges(ranges)
   paperReportChecks.value.testingCurveCopies = Math.max(1, ranges.length)
+  syncCurrentReportUnit()
   preparedCurves.value = []
   fileStatuses.value.curve = 'pending'
 }
@@ -557,7 +600,20 @@ async function prepareCurveFiles() {
   if (!curveEditor.value || !curveReady.value) throw new Error('测试曲线尚未就绪')
   fileStatuses.value.curve = 'generating'
   try {
-    preparedCurves.value = await curveEditor.value.exportCurveFiles()
+    const nextPrepared: PreparedInstrumentCurves[] = []
+    for (let index = 0; index < instrumentRows.value.length; index += 1) {
+      const row = instrumentRows.value[index]
+      const fieldName = `testing_curve__${index + 1}`
+      const exports = await curveEditor.value.exportCurveFiles({
+        testNumber: displayOrderNumber(row.selection.order),
+        instrument: `${row.selection.instrument.label} ${row.selection.instrument.sn}`.trim(),
+        fieldName,
+        fileNameSuffix: `仪器${String(index + 1).padStart(2, '0')}`,
+        ranges: curveRangesForInstrument(row.key),
+      })
+      nextPrepared.push({ key: row.key, fieldName, exports })
+    }
+    preparedCurves.value = nextPrepared
     fileStatuses.value.curve = 'done'
     return preparedCurves.value
   } catch (error) {
@@ -754,9 +810,10 @@ const finishReportUpload = async () => {
     }
     const currentSignature = await refreshTesterSignature(true)
     if (!currentSignature) return
-    const curveExports = preparedCurves.value.length ? preparedCurves.value : await prepareCurveFiles()
+    const instrumentCurves = preparedCurves.value.length ? preparedCurves.value : await prepareCurveFiles()
+    const curvesByInstrument = new Map(instrumentCurves.map((item) => [item.key, item]))
     const reportFiles: EquipmentReportUploadFile[] = [
-      ...curveExports.map((item) => item.file),
+      ...instrumentCurves.flatMap((item) => item.exports.map((curve) => curve.file)),
       currentSignature.file,
     ]
     const bindings = await loadScheduledReportBindings()
@@ -766,6 +823,8 @@ const finishReportUpload = async () => {
       if (!binding) throw new Error(`未找到 ${displayOrderNumber(selection.order)}/${selection.instrument.sn} 的服务端关联信息`)
       const draft = reportUnitDraftMap.value[key]
       if (!draft?.completed) throw new Error(`${displayOrderNumber(selection.order)}/${selection.instrument.sn} 的报告尚未填写完成`)
+      const curveSet = curvesByInstrument.get(key)
+      if (!curveSet) throw new Error(`未找到 ${displayOrderNumber(selection.order)}/${selection.instrument.sn} 的测试曲线`)
       return {
         order_id: binding.orderId,
         order_no: selection.order.no,
@@ -778,7 +837,8 @@ const finishReportUpload = async () => {
         observation: draft.instrumentObservation || draft.observation,
         tester: draft.operatorName.trim(),
         remark: draft.observation.trim(),
-        report_json: buildReportUnitJson(selection, draft, curveExports),
+        curve_attachment_field: curveSet.fieldName,
+        report_json: buildReportUnitJson(selection, draft, curveSet.exports),
         metrics: {
           target_temp: selection.order.targetTemp,
           target_pressure: selection.order.targetPressure,
@@ -791,6 +851,8 @@ const finishReportUpload = async () => {
     const firstRow = instrumentRows.value[0]
     const firstDraft = firstRow ? reportUnitDraftMap.value[firstRow.key] : undefined
     if (!firstDraft) throw new Error('未找到首份报告填写信息')
+    const firstCurveSet = curvesByInstrument.get(firstRow.key)
+    if (!firstCurveSet) throw new Error('未找到首份报告测试曲线')
     const payload = {
       task_number: orderNos.value,
       test_date: todayText(),
@@ -800,7 +862,7 @@ const finishReportUpload = async () => {
       order_ids: orderIds,
       order_numbers: Array.from(new Set(reportSelections.value.map((item) => item.order.no).filter(Boolean))),
       instrument_results: instrumentResults,
-      report_json: buildReportUnitJson(firstRow.selection, firstDraft, curveExports),
+      report_json: buildReportUnitJson(firstRow.selection, firstDraft, firstCurveSet.exports),
       attachments: [],
       remark: firstDraft.observation.trim(),
       client_submit_id: clientSubmitId.value,
@@ -1030,12 +1092,14 @@ const finishShutdown = () => {
 
           <div class="report-section">
             <ReportCurveEditor
+              :key="activeReportKey"
               ref="curveEditor"
               :export-dir="exportedCaptureDir"
-              :order-numbers="orderNos"
-              :display-order-numbers="displayOrderNos"
-              :instruments="instruments"
+              :order-numbers="activeReportOrder?.no || '-'"
+              :display-order-numbers="activeOrderNo"
+              :instruments="activeInstrumentText"
               :operator-name="operatorName"
+              :test-type="activeReportOrder?.testType || ''"
               :initial-ranges="curveRanges"
               @ready="handleCurveReady"
               @ranges-change="handleCurveRangesChange"
@@ -1100,6 +1164,7 @@ const finishShutdown = () => {
               <div class="report-review-meta">
                 <span>工单：{{ displayOrderNumber(row.selection.order) }}</span>
                 <span>结论：{{ resultText(reportUnitDraftMap[row.key]?.result || row.state.result) }}</span>
+                <span>曲线附件：{{ reportUnitDraftMap[row.key]?.curveRanges?.length || 1 }} 张</span>
                 <span>测试人：{{ reportUnitDraftMap[row.key]?.operatorName || '-' }}</span>
                 <span>复核签名：待管理端审核填写</span>
               </div>
@@ -1176,7 +1241,7 @@ const finishShutdown = () => {
           <button class="modal-close-btn" :disabled="uploadSubmitting" @click="closeFileSaveModal">×</button>
         </div>
         <div class="modal-body">
-          <div class="save-alert">已按 {{ curveRanges.length }} 个选定范围生成 {{ curveRanges.length }} 张独立曲线附件；正式 PDF 仅包含报告正文，曲线图片单独下载和打印。</div>
+          <div class="save-alert">已按各仪器分别选择的曲线范围生成 {{ preparedCurveCount }} 张独立曲线附件；正式 PDF 仅包含报告正文，曲线图片单独下载和打印。</div>
           <div class="form-group">
           <div class="form-label">文件保存路径</div>
             <input class="form-control report-readonly" :value="savePath" readonly />

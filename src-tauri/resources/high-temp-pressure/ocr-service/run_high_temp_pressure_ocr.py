@@ -48,6 +48,36 @@ FIELD_METADATA = {
 
 JOURNAL_FILE_NAME = "ocr_records.ndjson"
 RETRYABLE_WINDOWS_ERRORS = {5, 32, 33}
+CURVE_OUTPUT_FIELDS = [
+    {
+        "id": "upper_temp",
+        "label": "上部水温",
+        "unit": "°C",
+        "source_ids": [
+            "vessel_250_upper_water_temp",
+            "vessel_480_upper_water_temp",
+        ],
+    },
+    {
+        "id": "lower_temp",
+        "label": "下部水温",
+        "unit": "°C",
+        "source_ids": [
+            "vessel_250_lower_water_temp",
+            "vessel_480_lower_water_temp",
+        ],
+    },
+    {
+        "id": "pressure",
+        "label": "容器压力",
+        "unit": "MPa",
+        "source_ids": [
+            "vessel_250_pressure",
+            "cylinder_pressure",
+            "high_pressure_pump_outlet_pressure",
+        ],
+    },
+]
 
 
 def emit_event(event: str, **payload: Any) -> None:
@@ -192,58 +222,87 @@ def enabled_fields(regions: list[RegionConfig]) -> list[dict[str, str]]:
     ]
 
 
-def write_json_output(
-    path: Path, journal: RecordJournal, fields: list[dict[str, str]]
+def measurement_values_by_id(record: dict[str, Any]) -> dict[str, int | float | None]:
+    return {
+        str(item.get("id")): item.get("value")
+        for item in record.get("measurements", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+
+
+def first_numeric_measurement(
+    values: dict[str, int | float | None], source_ids: list[str]
+) -> int | float | None:
+    for source_id in source_ids:
+        value = values.get(source_id)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def compact_curve_record(
+    record: dict[str, Any],
+    values: dict[str, int | float | None] | None = None,
+) -> dict[str, Any]:
+    measurement_values = values if values is not None else measurement_values_by_id(record)
+    return {
+        "record_index": record.get("record_index"),
+        "time_sec": record.get("time_sec"),
+        "captured_at": record.get("captured_at"),
+        "screen_detected": bool(record.get("screen_detected")),
+        **{
+            field["id"]: first_numeric_measurement(
+                measurement_values, field["source_ids"]
+            )
+            for field in CURVE_OUTPUT_FIELDS
+        },
+    }
+
+
+def write_compact_outputs(
+    json_path: Path,
+    csv_path: Path,
+    journal: RecordJournal,
+    regions: list[RegionConfig],
 ) -> None:
-    temporary = temporary_path_for(path)
+    json_temporary = temporary_path_for(json_path)
+    csv_temporary = temporary_path_for(csv_path)
+    field_ids = [region.id for region in regions if region.enabled]
     header = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "live_ocr",
         "sample_interval_seconds": 0.5,
-        "field_count": len(fields),
-        "fields": fields,
+        "field_count": len(CURVE_OUTPUT_FIELDS),
+        "fields": CURVE_OUTPUT_FIELDS,
         "record_count": journal.count,
     }
     try:
-        with temporary.open("w", encoding="utf-8", newline="") as handle:
+        with (
+            json_temporary.open("w", encoding="utf-8", newline="") as json_handle,
+            csv_temporary.open("w", encoding="utf-8", newline="") as csv_handle,
+        ):
             encoded_header = json.dumps(
                 header, ensure_ascii=False, separators=(",", ":")
             )
-            handle.write(encoded_header[:-1])
-            handle.write(',"records":[')
-            first = True
-            for record in journal.records():
-                if not first:
-                    handle.write(",")
-                handle.write(
-                    json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-                )
-                first = False
-            handle.write("]}")
-            handle.flush()
-        replace_with_retry(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def write_csv_output(
-    path: Path, journal: RecordJournal, regions: list[RegionConfig]
-) -> None:
-    temporary = temporary_path_for(path)
-    field_ids = [region.id for region in regions if region.enabled]
-    try:
-        with temporary.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(
+            json_handle.write(encoded_header[:-1])
+            json_handle.write(',"records":[')
+            csv_writer = csv.writer(csv_handle)
+            csv_writer.writerow(
                 ["time_sec", "captured_at", "screen_detected", *field_ids]
             )
+            first = True
             for record in journal.records():
-                values = {
-                    item["id"]: item.get("value")
-                    for item in record.get("measurements", [])
-                    if isinstance(item, dict) and item.get("id")
-                }
-                writer.writerow(
+                values = measurement_values_by_id(record)
+                if not first:
+                    json_handle.write(",")
+                json_handle.write(
+                    json.dumps(
+                        compact_curve_record(record, values),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+                csv_writer.writerow(
                     [
                         record.get("time_sec", ""),
                         record.get("captured_at", ""),
@@ -251,10 +310,15 @@ def write_csv_output(
                         *[values.get(field_id, "") for field_id in field_ids],
                     ]
                 )
-            handle.flush()
-        replace_with_retry(temporary, path)
+                first = False
+            json_handle.write("]}")
+            json_handle.flush()
+            csv_handle.flush()
+        replace_with_retry(json_temporary, json_path)
+        replace_with_retry(csv_temporary, csv_path)
     finally:
-        temporary.unlink(missing_ok=True)
+        json_temporary.unlink(missing_ok=True)
+        csv_temporary.unlink(missing_ok=True)
 
 
 def write_outputs(
@@ -272,12 +336,16 @@ def write_outputs(
         "latest_time_sec": latest.get("time_sec") if latest else 0,
         "latest_measurements": latest.get("measurements") if latest else [],
     }
-    write_json_output(output_dir / "ocr_readings_0.5s.json", journal, fields)
+    write_compact_outputs(
+        output_dir / "ocr_readings_0.5s.json",
+        output_dir / "ocr_readings.csv",
+        journal,
+        regions,
+    )
     atomic_write_text(
         output_dir / "experiment_summary.json",
         json.dumps(summary, ensure_ascii=False, indent=2),
     )
-    write_csv_output(output_dir / "ocr_readings.csv", journal, regions)
 
 
 def readiness_percent(status: dict[str, Any]) -> int:

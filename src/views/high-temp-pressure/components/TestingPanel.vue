@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { displayOrderNumber } from '../utils/orderNumber'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import type { ScheduledSelection } from '../types'
 import type {
   HighTempPressureChartSummary,
   HighTempPressureChartSeriesKey,
   HighTempPressureChartSeriesVisibility,
+  HighTempPressureOcrDevice,
   HighTempPressureOcrMeasurement,
 } from '../composables/useHighTempPressureTesting'
 
@@ -21,7 +22,10 @@ const props = defineProps<{
   onlineTimerStr: string
   csvCount: number
   currentSelected: ScheduledSelection | null
+  ocrDeviceIndex: number | null
   ocrDeviceName: string
+  ocrDevices: HighTempPressureOcrDevice[]
+  ocrDevicesLoading: boolean
   ocrReadyPct: number
   captureStatusText: string
   latestFrameUrl: string
@@ -35,7 +39,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'start-test': []
-  'connect-ocr': []
+  'refresh-ocr-devices': []
+  'select-ocr-device': [deviceIndex: number]
   pause: []
   resume: []
   'open-stop-modal': []
@@ -46,6 +51,8 @@ const emit = defineEmits<{
 }>()
 
 const detailModalVisible = ref(false)
+const deviceModalVisible = ref(false)
+const selectedDeviceIndex = ref<number | null>(null)
 const detailModuleCount = 6
 const chartWindowOptions = [5, 30, 60, 240]
 const chartSeriesOptions: Array<{
@@ -125,9 +132,25 @@ const scheduleEndText = computed(() => formatDateTime(scheduleEndTimestamp.value
 
 const handleTestStart = () => {
   if (props.testRunning || props.startSubmitting) return
-  if (props.ocrDeviceName) emit('resume')
-  else emit('start-test')
+  if (!props.testStarted) emit('start-test')
+  else emit('resume')
 }
+
+const openDeviceModal = () => {
+  selectedDeviceIndex.value = props.ocrDeviceIndex
+  deviceModalVisible.value = true
+  emit('refresh-ocr-devices')
+}
+
+const confirmDeviceSelection = () => {
+  if (selectedDeviceIndex.value === null) return
+  emit('select-ocr-device', selectedDeviceIndex.value)
+  deviceModalVisible.value = false
+}
+
+watch(() => props.ocrDeviceIndex, (value) => {
+  if (deviceModalVisible.value) selectedDeviceIndex.value = value
+})
 
 const displayValue = (value: unknown) => {
   if (value === undefined || value === null || value === '') return '-'
@@ -248,7 +271,7 @@ const testPurposeText = computed(() => {
           </div>
 
           <div class="test-controls">
-            <button class="control-action control-action-start" :disabled="testRunning || startSubmitting" @click="handleTestStart">
+            <button class="control-action control-action-start" :disabled="testRunning || startSubmitting || (!testStarted && !ocrDeviceName)" @click="handleTestStart">
               <span class="control-icon"><Icon icon="mdi:play" /></span>
               <span class="control-copy"><strong>{{ startSubmitting ? '正在启动' : '测试开始' }}</strong><small>启动或恢复 OCR 采集</small></span>
             </button>
@@ -260,9 +283,9 @@ const testPurposeText = computed(() => {
               <span class="control-icon"><Icon icon="mdi:check" /></span>
               <span class="control-copy"><strong>测试结束</strong><small>保存本次识别结果</small></span>
             </button>
-            <button class="control-action control-action-reconnect" :disabled="!testStarted || startSubmitting" @click="emit('connect-ocr')">
+            <button class="control-action control-action-reconnect" :disabled="startSubmitting" @click="openDeviceModal">
               <span class="control-icon"><Icon icon="mdi:camera-wireless-outline" /></span>
-              <span class="control-copy"><strong>重新连接采集卡</strong><small>{{ ocrDeviceName || '尚未连接采集卡' }}</small></span>
+              <span class="control-copy"><strong>{{ testStarted ? '重新连接采集卡' : '选择采集卡' }}</strong><small>{{ ocrDeviceName || '尚未选择采集卡' }}</small></span>
             </button>
           </div>
         </section>
@@ -584,6 +607,46 @@ const testPurposeText = computed(() => {
         <div class="modal-footer hthp-report-footer">
           <div>测试单号：{{ displayOrderNumber(currentOrder) || '-' }} · {{ currentOrder.applyDate || '-' }}</div>
           <button class="btn btn-primary" @click="detailModalVisible = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="deviceModalVisible" class="modal-overlay" @click.self="deviceModalVisible = false">
+      <div class="modal capture-device-modal" role="dialog" aria-modal="true" aria-labelledby="capture-device-title">
+        <div class="modal-header capture-device-header">
+          <div>
+            <div class="report-kicker">OCR CAPTURE DEVICE</div>
+            <div id="capture-device-title" class="modal-title">选择高温高压采集卡</div>
+          </div>
+          <button class="modal-close-btn" type="button" aria-label="关闭采集卡选择" @click="deviceModalVisible = false">
+            <Icon icon="mdi:close" />
+          </button>
+        </div>
+        <div class="modal-body capture-device-body">
+          <label class="capture-device-label" for="high-temp-pressure-capture-device">采集设备</label>
+          <select
+            id="high-temp-pressure-capture-device"
+            v-model.number="selectedDeviceIndex"
+            class="capture-device-select"
+            :disabled="ocrDevicesLoading"
+          >
+            <option :value="null">{{ ocrDevicesLoading ? '正在搜索采集卡…' : '请选择采集卡' }}</option>
+            <option v-for="device in ocrDevices" :key="device.index" :value="device.index">
+              {{ device.name }}（设备 {{ device.index }}）
+            </option>
+          </select>
+          <div v-if="!ocrDevicesLoading && !ocrDevices.length" class="capture-device-empty">未发现可用采集卡，请检查设备连接后重新搜索。</div>
+          <div class="capture-device-note">
+            {{ testStarted ? '确认后将停止当前采集，并使用新设备重新连接。' : '确认选择后不会立即开始采集；点击“测试开始”时才会使用该设备。' }}
+          </div>
+        </div>
+        <div class="modal-footer capture-device-footer">
+          <button class="btn btn-outline" type="button" :disabled="ocrDevicesLoading" @click="emit('refresh-ocr-devices')">
+            {{ ocrDevicesLoading ? '搜索中…' : '重新搜索' }}
+          </button>
+          <button class="btn btn-primary" type="button" :disabled="selectedDeviceIndex === null || ocrDevicesLoading" @click="confirmDeviceSelection">
+            确认选择
+          </button>
         </div>
       </div>
     </div>
@@ -1406,6 +1469,61 @@ const testPurposeText = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.capture-device-modal {
+  width: 480px;
+  max-width: 92vw;
+}
+
+.capture-device-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.capture-device-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.capture-device-label {
+  color: var(--capture-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.capture-device-select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+.capture-device-empty,
+.capture-device-note {
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.capture-device-empty {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.capture-device-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .hthp-report-body {

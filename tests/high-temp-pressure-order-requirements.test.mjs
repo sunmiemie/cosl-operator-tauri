@@ -14,7 +14,7 @@ function extract(source, names) {
 }
 
 const schedule = read('src/views/high-temp-pressure/composables/useHighTempPressureSchedule.ts')
-const mapperCode = extract(schedule, ['normalizeEquipmentId', 'getStatusText', 'formatDisplayValue', 'formatHoldTime', 'normalizeInstrumentItems', 'mapHighTempPressureOrder'])
+const mapperCode = extract(schedule, ['normalizeEquipmentId', 'getStatusText', 'formatDisplayValue', 'formatTemperature', 'formatHoldTime', 'normalizeInstrumentItems', 'mapHighTempPressureOrder'])
 const mapOrder = new Function('http', mapperCode + '\nreturn mapHighTempPressureOrder')({ getBaseUrl: () => '' })
 
 test('客户端仪器类型继承主单，在线要求与三新独立', () => {
@@ -28,6 +28,13 @@ test('客户端仪器类型继承主单，在线要求与三新独立', () => {
   assert.equal(order.onlineTest, false)
   assert.equal(order.sanxinIsSanxin, true)
   assert.equal(mapOrder({ id: 2 }).onlineTest, null)
+})
+
+test('目标温度兼容文本与旧数字响应且不追加错误单位', () => {
+  assert.equal(mapOrder({ id: 3, target_temp: '常温' }).targetTemp, '常温')
+  assert.equal(mapOrder({ id: 4, target_temp: '120~150' }).targetTemp, '120~150')
+  assert.equal(mapOrder({ id: 5, target_temp: '120' }).targetTemp, '120 °C')
+  assert.equal(mapOrder({ id: 6, target_temp: 80 }).targetTemp, '80 °C')
 })
 
 const panel = read('src/views/high-temp-pressure/components/ReportPanel.vue').split('<script setup lang="ts">')[1].split('</script>')[0]

@@ -9,7 +9,7 @@ export interface HighTempPressureOrderDTO {
   task_number: string
   test_number?: string | null
   table_no?: string | null
-  target_temp: number
+  target_temp: string | number
   target_pressure: number
   applicant: string
   applicant_phone?: string

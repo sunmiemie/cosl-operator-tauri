@@ -14,6 +14,9 @@ export interface EquipmentInstrumentReportResult {
   observation?: string
   metrics?: Record<string, unknown>
   attachments?: Array<Record<string, unknown>>
+  curve_attachment_field?: string
+  report_json?: Record<string, unknown>
+  remark?: string
 }
 
 export interface EquipmentReportPayload {

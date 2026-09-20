@@ -4,6 +4,14 @@ const LEGACY_PENDING_REPORT_STORAGE_KEY = 'high-temp-pressure-pending-report-v1'
 const SINGLE_PENDING_REPORT_STORAGE_KEY = 'high-temp-pressure-pending-report-v2'
 const PENDING_REPORT_LIST_STORAGE_KEY = 'high-temp-pressure-pending-reports-v3'
 
+export type HighTempPressureCurveRangeDraftData = {
+  id: string
+  title: string
+  startMs: number | null
+  endMs: number | null
+  visibleSeries?: Array<'upperTemp' | 'lowerTemp' | 'pressure'>
+}
+
 export type HighTempPressureReportDraft = {
   observation: string
   operatorName: string
@@ -30,13 +38,8 @@ export type HighTempPressureReportDraft = {
     startMs: number | null
     endMs: number | null
   }
-  curveRanges?: Array<{
-    id: string
-    title: string
-    startMs: number | null
-    endMs: number | null
-    visibleSeries?: Array<'upperTemp' | 'lowerTemp' | 'pressure'>
-  }>
+  /** @deprecated 旧缓存兼容；新版本按仪器保存在 reportUnitDraftMap 中。 */
+  curveRanges?: HighTempPressureCurveRangeDraftData[]
   reportUnitDraftMap?: Record<string, HighTempPressureReportUnitDraft>
   activeReportIndex?: number
   reportStage?: 'editing' | 'review'
@@ -52,6 +55,7 @@ export type HighTempPressureReportUnitDraft = {
   reviewerName?: string
   confirmChecks: boolean[]
   paperReportChecks: HighTempPressureReportDraft['paperReportChecks']
+  curveRanges?: HighTempPressureCurveRangeDraftData[]
   completed: boolean
 }
 

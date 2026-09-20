@@ -62,8 +62,8 @@ assert.match(
 )
 assert.match(
   testing,
-  /async function connectOcrDevice\(\)[\s\S]*await stopOcrStream\(\)[\s\S]*await initConfig\(\)/,
-  'connecting the capture card must stop any leftover OCR process even if the previous directory was cleared'
+  /async function connectOcrDevice\(\)[\s\S]*ocrDeviceIndex\.value === null[\s\S]*await stopOcrStream\(\)[\s\S]*startOcrCollection\(\)/,
+  'connecting the selected capture card must stop any leftover OCR process before starting a new stream'
 )
 assert.match(
   testing,

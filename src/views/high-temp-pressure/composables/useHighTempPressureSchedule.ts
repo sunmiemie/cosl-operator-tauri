@@ -71,6 +71,14 @@ function formatDisplayValue(value: number | string | undefined | null, unit: str
   return `${value} ${unit}`
 }
 
+function formatTemperature(value: number | string | undefined | null) {
+  if (value === undefined || value === null) return '-'
+  const text = String(value).trim()
+  if (!text) return '-'
+  if (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) return `${text} °C`
+  return text
+}
+
 function formatHoldTime(value: number | string | undefined | null) {
   if (value === undefined || value === null || value === '') return '-'
   return String(value)
@@ -192,7 +200,7 @@ function mapHighTempPressureOrder(dto: HighTempPressureOrderDTO): WorkOrder {
     useDevice: useDevice,
     vesselType: displayDevice,
     type: displayDevice,
-    targetTemp: formatDisplayValue(dto.target_temp, 'C'),
+    targetTemp: formatTemperature(dto.target_temp),
     targetPressure: formatDisplayValue(dto.target_pressure, 'MPa'),
     keepCondition: formatHoldTime(dto.hold_time),
     maxDiameter: formatDisplayValue(dto.max_diameter, 'mm'),

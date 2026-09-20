@@ -21,6 +21,12 @@ export type HighTempPressureOcrMeasurement = HighTempPressureOcrChannel & {
   confidence: number | null
 }
 
+export type HighTempPressureOcrDevice = {
+  index: number
+  name: string
+  available: boolean
+}
+
 export type HighTempPressureCurveData = {
   timestampMs: number[]
   timeSec: number[]
@@ -95,7 +101,7 @@ const MAX_POINTS = 120
 const MAX_RENDERED_CHART_POINTS = 6000
 
 export function useHighTempPressureTesting() {
-  const { initConfig, getConfigItem } = useConfig()
+  const { initConfig, getConfigItem, setConfig } = useConfig()
   const currentPanel = ref<HighTempPressurePanel>('dashboard')
   const activeModal = ref<HighTempPressureModal>(null)
   const testRunning = ref(false)
@@ -105,6 +111,8 @@ export function useHighTempPressureTesting() {
   const onlineTimerStr = ref(formatRuntimeTimer(0))
   const ocrDeviceIndex = ref<number | null>(null)
   const ocrDeviceName = ref('')
+  const ocrDevices = ref<HighTempPressureOcrDevice[]>([])
+  const ocrDevicesLoading = ref(false)
   const captureOutputDir = ref('')
   const ocrReadyPct = ref(0)
   const captureRecordCount = ref(0)
@@ -1078,25 +1086,57 @@ export function useHighTempPressureTesting() {
     }
   }
 
-  async function connectOcrDevice() {
-    await stopOcrStream()
-    await initConfig()
-    const configuredDevice = Number(getConfigItem('highTempPressureCaptureDevice'))
-    const configuredDeviceName = String(getConfigItem('highTempPressureCaptureDeviceName') || '').trim()
-    if (!Number.isInteger(configuredDevice) || configuredDevice < 0) {
-      ElMessage.error('请先在设置页刷新搜索并选择高温高压采集卡')
-      return
+  async function refreshOcrDevices() {
+    if (ocrDevicesLoading.value) return ocrDevices.value
+    ocrDevicesLoading.value = true
+    try {
+      const devices = await invoke<HighTempPressureOcrDevice[]>('get_high_temp_pressure_ocr_devices')
+      ocrDevices.value = devices.filter((device) => device.available)
+      if (!ocrDevices.value.length) ElMessage.warning('未搜索到可用的高温高压采集卡')
+      return ocrDevices.value
+    } catch (error) {
+      ElMessage.error(`搜索高温高压采集卡失败：${String(error)}`)
+      return []
+    } finally {
+      ocrDevicesLoading.value = false
     }
+  }
 
-    ocrDeviceIndex.value = configuredDevice
-    ocrDeviceName.value = configuredDeviceName || `采集卡 ${configuredDevice}`
+  async function selectOcrDevice(deviceIndex: number) {
+    const device = ocrDevices.value.find((item) => item.index === deviceIndex && item.available)
+    if (!device) {
+      ElMessage.warning('请选择当前可用的采集卡')
+      return false
+    }
+    ocrDeviceIndex.value = device.index
+    ocrDeviceName.value = device.name || `采集卡 ${device.index}`
+    captureStatusText.value = `已选择 ${ocrDeviceName.value}，等待开始测试`
+    try {
+      await setConfig({
+        highTempPressureCaptureDevice: device.index,
+        highTempPressureCaptureDeviceName: ocrDeviceName.value,
+      })
+    } catch (error) {
+      console.warn('[high-temp-pressure] persist capture device failed:', error)
+      ElMessage.warning('本次测试将使用已选采集卡，但未能保存为默认设备')
+    }
+    return true
+  }
+
+  async function connectOcrDevice() {
+    if (ocrDeviceIndex.value === null) {
+      ElMessage.warning('请先选择高温高压采集卡')
+      return false
+    }
+    await stopOcrStream()
     if (testStartTime.value === null) {
       testStartTime.value = Date.now()
       syncRuntime(testStartTime.value)
     }
     const started = await startOcrCollection()
-    if (!started) return
+    if (!started) return false
     ElMessage.success(`已连接 ${ocrDeviceName.value}，开始 OCR 识别采集`)
+    return true
   }
 
   function switchPanel(panel: HighTempPressurePanel) {
@@ -1238,6 +1278,8 @@ export function useHighTempPressureTesting() {
     csvCount,
     ocrDeviceIndex,
     ocrDeviceName,
+    ocrDevices,
+    ocrDevicesLoading,
     captureOutputDir,
     ocrReadyPct,
     captureRecordCount,
@@ -1262,6 +1304,8 @@ export function useHighTempPressureTesting() {
     closeModal,
     confirmStart,
     resetTestSession,
+    refreshOcrDevices,
+    selectOcrDevice,
     connectOcrDevice,
     pauseTest,
     resumeTest,
