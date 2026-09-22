@@ -1,4 +1,5 @@
 import { http, type ApiResponse } from './http'
+import { invoke } from '@tauri-apps/api/core'
 import type { SimInstrumentListItem } from './sim-instrument-api'
 
 export interface SimulatedWellSupportingTool {
@@ -68,9 +69,10 @@ export interface SimulatedWellDownholeWorkItem {
   supportingTools?: SimulatedWellSupportingTool[] | string
   supporting_tools?: SimulatedWellSupportingTool[] | string
   device_count: number
-  status: number
+  status: 0 | 1 | 2 | 3
   status_text?: string
   report_count?: number
+  monitor_csv_url?: string | null
   created_at: string
   updated_at: string
 }
@@ -127,12 +129,12 @@ export interface CreateSimulatedWellDownholeWorkPayload {
   devices: SimulatedWellDownholeDevicePayload[]
   supportingTools?: SimulatedWellSupportingTool[]
   supporting_tools?: SimulatedWellSupportingTool[]
-  status?: number
+  status?: 0 | 1 | 2 | 3
   report_count?: number
 }
 
 export interface BuildSimulatedWellDownholeWorkPayloadOptions {
-  status: number
+  status: 0 | 1 | 2 | 3
   reportCount?: unknown
 }
 
@@ -361,6 +363,84 @@ export async function updateSimulatedWellDownholeWork(
     payload,
     headers
   )
+}
+
+interface DownholeMonitorUploadInitResponse {
+  code: number
+  msg?: string
+  data?: {
+    upload_id: string
+    chunk_size: number
+    files: Array<{ id: string; name: string; size: number; kind: string }>
+  }
+}
+
+interface RustMonitorChunkResponse {
+  status: number
+  body: string
+}
+
+export async function uploadSimulatedWellDownholeMonitorCsv(
+  workId: number,
+  file: { path: string; name: string; size: number },
+  headers: Record<string, string>,
+): Promise<ApiResponse<CreateSimulatedWellDownholeWorkResponse>> {
+  const initialized = await http.post<DownholeMonitorUploadInitResponse>(
+    `/test/simulated-well/downhole/${workId}/monitor-upload/init/`,
+    { file: { name: file.name, size: file.size, content_type: 'text/csv' } },
+    headers,
+  )
+  const session = initialized.data?.data
+  if (!initialized.success || initialized.data?.code !== 0 || !session) {
+    return { success: false, error: initialized.error || initialized.data?.msg || '初始化监控 CSV 上传失败', status: initialized.status }
+  }
+  const remote = session.files?.[0]
+  if (!session.upload_id || !session.chunk_size || !remote) {
+    return { success: false, error: '监控 CSV 上传会话返回数据不完整' }
+  }
+
+  try {
+    for (let start = 0, index = 0; start < file.size; start += session.chunk_size, index += 1) {
+      const length = Math.min(session.chunk_size, file.size - start)
+      const url = http.buildUrl(
+        `/test/simulated-well/downhole/${workId}/monitor-upload/${session.upload_id}/files/${remote.id}/chunks/${index}/`,
+      )
+      const response = await invoke<RustMonitorChunkResponse>('upload_simulated_well_file_chunk', {
+        request: {
+          uploadId: session.upload_id,
+          url,
+          path: file.path,
+          start,
+          length,
+          totalFileSize: file.size,
+          fileName: file.name,
+          uploadedBefore: start,
+          totalUploadSize: file.size,
+          headers,
+        },
+      })
+      let body: { code?: number; msg?: string } = {}
+      try { body = JSON.parse(response.body) } catch { /* 后续统一处理 HTTP 错误 */ }
+      if (response.status < 200 || response.status >= 300 || body.code !== 0) {
+        throw new Error(body.msg || `监控 CSV 分块上传失败（HTTP ${response.status}）`)
+      }
+    }
+    const completed = await http.post<CreateSimulatedWellDownholeWorkResponse>(
+      `/test/simulated-well/downhole/${workId}/monitor-upload/${session.upload_id}/complete/`,
+      {},
+      headers,
+    )
+    if (!completed.success || completed.data?.code !== 0) {
+      throw new Error(completed.error || completed.data?.msg || '保存监控 CSV 失败')
+    }
+    return completed
+  } catch (error) {
+    await http.delete(
+      `/test/simulated-well/downhole/${workId}/monitor-upload/${session.upload_id}/`,
+      headers,
+    )
+    return { success: false, error: error instanceof Error ? error.message : '监控 CSV 上传失败' }
+  }
 }
 
 export async function deleteSimulatedWellDownholeWork(

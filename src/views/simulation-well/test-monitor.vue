@@ -75,6 +75,7 @@ let statusUnlisten: UnlistenFn | null = null
 let snapshotUnlisten: UnlistenFn | null = null
 let errorUnlisten: UnlistenFn | null = null
 let sessionStopped = false
+let stoppedFile: SimulatedWellMonitorCsvFile | null = null
 let allowLeave = false
 
 const latest = computed(() => snapshot.value?.latest || null)
@@ -481,9 +482,10 @@ async function refreshState() {
 }
 
 async function stopSession() {
-  if (sessionStopped) throw new Error('采集会话已经结束')
+  if (stoppedFile) return stoppedFile
   const file = await stopSimulatedWellMonitorSession(props.sessionId)
   sessionStopped = true
+  stoppedFile = file
   return file
 }
 

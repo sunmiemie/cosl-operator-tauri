@@ -3,7 +3,8 @@ defineOptions({ inheritAttrs: false })
 
 import { computed, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElDialog, ElMessage, ElMessageBox } from 'element-plus'
+import { ElConfigProvider, ElDialog, ElMessage, ElMessageBox, ElPagination } from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import EquipmentPackage from './equipment-package.vue'
 import { useAuth } from '@/composables/useAuth'
 import {
@@ -31,6 +32,10 @@ const { initAuth, getAuthHeaders } = useAuth()
 const loading = ref(false)
 const list = ref<SimulatedWellDownholeWorkItem[]>([])
 const keyword = ref('')
+const searchKeyword = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
 const createMode = ref(false)
 const editMode = ref(false)
 const editSaving = ref(false)
@@ -46,7 +51,11 @@ const fetchList = async () => {
   try {
     await initAuth()
     const res = await listSimulatedWellDownholeWorks(
-      { page: 1, pageSize: 2000, keyword: keyword.value.trim() || undefined },
+      {
+        page: currentPage.value,
+        pageSize: pageSize.value,
+        keyword: searchKeyword.value || undefined,
+      },
       getAuthHeaders()
     )
     if (!res.success) {
@@ -57,7 +66,10 @@ const fetchList = async () => {
       ElMessage.error(res.data?.msg || '获取下井作业失败')
       return
     }
-    list.value = res.data.data?.list || []
+    const data = res.data.data
+    list.value = data?.list || []
+    total.value = Number(data?.total || 0)
+    currentPage.value = Math.max(1, Number(data?.page || currentPage.value))
   } finally {
     loading.value = false
   }
@@ -81,6 +93,7 @@ const handleSave = async (payload: any) => {
     }
     ElMessage.success('已新增下井作业')
     createMode.value = false
+    currentPage.value = 1
     await fetchList()
   } catch (e) {
     ElMessage.error('新增下井作业失败')
@@ -109,10 +122,28 @@ const handleDelete = async (row: SimulatedWellDownholeWorkItem) => {
 }
 
 const getStatusLabel = (row: SimulatedWellDownholeWorkItem) => {
-  return row.status_text || (row.status === 2 ? '已完成' : row.status === 1 ? '进行中' : '已创建')
+  return row.status_text || (row.status === 3 ? '已提交报告' : row.status === 2 ? '已完成' : row.status === 1 ? '进行中' : '已创建')
+}
+
+const handleSearch = () => {
+  searchKeyword.value = keyword.value.trim()
+  currentPage.value = 1
+  void fetchList()
+}
+
+const handlePageChange = (page: number) => {
+  currentPage.value = page
+  void fetchList()
+}
+
+const handlePageSizeChange = (size: number) => {
+  pageSize.value = size
+  currentPage.value = 1
+  void fetchList()
 }
 
 const getStatusClass = (row: SimulatedWellDownholeWorkItem) => {
+  if (row.status === 3) return 'status-pill done'
   if (row.status === 2) return 'status-pill done'
   if (row.status === 1) return 'status-pill running'
   return 'status-pill created'
@@ -337,7 +368,7 @@ const handleEditSaveV3 = async (payload: any) => {
     const editedId = editingRow.value.id
     const editedWorkNo = editingRow.value.work_no
     const body = buildSimulatedWellDownholeWorkPayload(payload, {
-      status: 1,
+      status: editingRow.value.status,
       reportCount: payload?.reportCount ?? editingRow.value.report_count
     })
     const res = await updateSimulatedWellDownholeWork(editedId, body, getAuthHeaders())
@@ -351,7 +382,15 @@ const handleEditSaveV3 = async (payload: any) => {
       return
     }
     await fetchList()
-    const duplicateRows = list.value.filter((item) => item.work_no === editedWorkNo && Number(item.id) !== Number(editedId))
+    const duplicateResponse = await listSimulatedWellDownholeWorks(
+      { page: 1, pageSize: 100, keyword: editedWorkNo },
+      getAuthHeaders(),
+    )
+    const duplicateRows = duplicateResponse.success && duplicateResponse.data?.code === 0
+      ? (duplicateResponse.data.data?.list || []).filter(
+          (item) => item.work_no === editedWorkNo && Number(item.id) !== Number(editedId),
+        )
+      : []
     const removableDuplicates = duplicateRows.filter((item) => canDelete(item))
     for (const row of removableDuplicates) {
       await deleteSimulatedWellDownholeWork(row.id, getAuthHeaders())
@@ -416,8 +455,9 @@ onMounted(() => {
               :value="keyword"
               placeholder="搜索作业ID/井名称"
               @input="keyword = ($event.target as HTMLInputElement).value"
+              @keyup.enter="handleSearch"
             />
-            <button class="week-cal-nav primary search-action" @click="fetchList">查询</button>
+            <button class="week-cal-nav primary search-action" @click="handleSearch">查询</button>
           </div>
         </div>
 
@@ -474,6 +514,22 @@ onMounted(() => {
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="list-pagination downhole-pagination">
+          <span class="pagination-summary">共 {{ total }} 条</span>
+          <ElConfigProvider :locale="zhCn">
+            <ElPagination
+              background
+              layout="sizes, prev, pager, next, jumper"
+              :current-page="currentPage"
+              :page-size="pageSize"
+              :page-sizes="[10, 20, 50]"
+              :total="total"
+              :hide-on-single-page="false"
+              @current-change="handlePageChange"
+              @size-change="handlePageSizeChange"
+            />
+          </ElConfigProvider>
         </div>
       </div>
     </div>
@@ -574,8 +630,59 @@ onMounted(() => {
 
 <style scoped src="./components/simulation-well.shared.css"></style>
 <style scoped>
+.downhole-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.downhole-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.downhole-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+  box-sizing: border-box;
+}
+
 .downhole-view .table-wrapper {
+  flex: 1;
+  min-height: 0;
   overflow-x: auto;
+  overflow-y: scroll;
+}
+
+.downhole-view .list-toolbar,
+.downhole-view .list-pagination {
+  flex-shrink: 0;
+}
+
+.downhole-pagination {
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.pagination-summary {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .downhole-work-table {

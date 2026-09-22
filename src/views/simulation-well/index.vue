@@ -15,6 +15,7 @@ import SanxinOrderDetailModal from './components/SanxinOrderDetailModal.vue'
 import { listSimulatedWellOrders, type SimulatedWellOrderDTO } from '@/services/simulated-well-api'
 import { useAuth } from '@/composables/useAuth'
 import {
+  deleteSimulatedWellMonitorFile,
   startSimulatedWellMonitorSession,
   type SimulatedWellMonitorCsvFile,
 } from '@/services/simulated-well-monitor'
@@ -24,6 +25,8 @@ import {
   formatSimulatedWellEnvironment,
   formatSimulatedWellInterval,
   listSimulatedWellDownholeWorks,
+  updateSimulatedWellDownholeWork,
+  uploadSimulatedWellDownholeMonitorCsv,
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 
@@ -443,14 +446,60 @@ async function finishActiveTestToReportPrep() {
   await startMonitorAndNavigate(workNo)
 }
 
-function handleMonitorFinished(file: SimulatedWellMonitorCsvFile) {
-  void navigateTestFlow({
+async function handleMonitorFinished(file: SimulatedWellMonitorCsvFile) {
+  const workNo = activeTestWorkNo.value || String(route.query.workNo || route.query.work_no || '')
+  if (!workNo) {
+    ElMessage.error('未找到当前下井作业号，无法完成测试')
+    return
+  }
+
+  await initAuth()
+  let work = activeTestOperation.value?.work_no === workNo ? activeTestOperation.value : null
+  if (!work) {
+    const listResponse = await listSimulatedWellDownholeWorks(
+      { page: 1, pageSize: 2000, keyword: workNo },
+      getAuthHeaders(),
+    )
+    if (listResponse.success && listResponse.data?.code === 0) {
+      work = (listResponse.data.data?.list || []).find((item) => textValue(item.work_no) === workNo) || null
+    }
+  }
+  if (!work) {
+    ElMessage.error('未找到当前下井作业，测试状态更新失败，请重试')
+    return
+  }
+
+  const uploadResponse = await uploadSimulatedWellDownholeMonitorCsv(work.id, file, getAuthHeaders())
+  const monitorUploaded = uploadResponse.success && uploadResponse.data?.code === 0
+  if (!monitorUploaded) {
+    ElMessage.warning(
+      `监控 CSV 保存失败，后续报告将不包含监控数据：${uploadResponse.error || uploadResponse.data?.msg || '未知错误'}`,
+    )
+  } else if (uploadResponse.data?.data) {
+    work = uploadResponse.data.data
+  }
+
+  const updateResponse = await updateSimulatedWellDownholeWork(work.id, { status: 2 }, getAuthHeaders())
+  if (!updateResponse.success || updateResponse.data?.code !== 0) {
+    ElMessage.error(updateResponse.error || updateResponse.data?.msg || '下井作业状态更新失败，请重试')
+    return
+  }
+  activeTestOperation.value = updateResponse.data.data || { ...work, status: 2, status_text: '已完成' }
+
+  if (monitorUploaded) {
+    try {
+      await deleteSimulatedWellMonitorFile(file.sessionId)
+    } catch (error) {
+      console.warn('服务器已保存监控 CSV，但本地临时文件清理失败', error)
+    }
+  }
+
+  await navigateTestFlow({
     path: '/simulation-well',
     query: {
       view: 'test-report',
       autoCreate: '1',
-      workNo: activeTestWorkNo.value || String(route.query.workNo || route.query.work_no || ''),
-      monitorSession: file.sessionId,
+      workNo,
     },
   })
 }
@@ -823,7 +872,6 @@ async function handleSaveDownhole(payload: any) {
       :selected-devices="startSelectedDevices"
       :auto-create-report="route.query.autoCreate === '1'"
       :auto-work-no="String(route.query.workNo || route.query.work_no || '')"
-      :monitor-session-id="String(route.query.monitorSession || '')"
       @back="backToDashboard"
     />
   </div>

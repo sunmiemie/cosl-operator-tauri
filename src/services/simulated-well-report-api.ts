@@ -42,6 +42,7 @@ export interface SimulatedWellReportListResponse {
 export interface ListSimulatedWellReportsParams {
   page?: number
   pageSize?: number
+  keyword?: string
   taskNumber?: string
   tester?: string
   status?: number | string
@@ -54,6 +55,7 @@ export async function listSimulatedWellReports(
   const query: Record<string, string> = {}
   if (params.page !== undefined) query.page = String(params.page)
   if (params.pageSize !== undefined) query.pageSize = String(params.pageSize)
+  if (params.keyword) query.keyword = params.keyword
   if (params.taskNumber) query.taskNumber = params.taskNumber
   if (params.tester) query.tester = params.tester
   if (params.status !== undefined && params.status !== '') query.status = String(params.status)

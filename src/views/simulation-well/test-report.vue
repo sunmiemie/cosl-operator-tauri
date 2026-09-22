@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElConfigProvider, ElMessage, ElMessageBox, ElPagination } from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -32,22 +33,14 @@ import {
   formatSimulatedWellEnvironment,
   formatSimulatedWellInterval,
   listSimulatedWellDownholeWorks,
-  updateSimulatedWellDownholeWork,
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 import extractedFields from './extracted_fields.json'
-import {
-  deleteSimulatedWellMonitorFile,
-  getSimulatedWellMonitorFile,
-  type SimulatedWellMonitorCsvFile,
-} from '@/services/simulated-well-monitor'
-
 const props = defineProps<{
   selectedOrders: any[]
   selectedDevices: any[]
   autoCreateReport?: boolean
   autoWorkNo?: string
-  monitorSessionId?: string
 }>()
 
 const emit = defineEmits<{
@@ -101,7 +94,13 @@ const operationLoading = ref(false)
 const templateLoading = ref(false)
 const saving = ref(false)
 const reportKeyword = ref('')
+const reportSearchKeyword = ref('')
 const reports = ref<SimulatedWellReportItem[]>([])
+const reportPage = ref(1)
+const reportPageSize = ref(10)
+const reportTotal = ref(0)
+const reportedDeviceKeys = ref<Set<string>>(new Set())
+const reportedDeviceKeysLoading = ref(false)
 const operations = ref<SimulatedWellDownholeWorkItem[]>([])
 const selectedOperation = ref<SimulatedWellDownholeWorkItem | null>(null)
 const selectedDevice = ref<ReportOperationDevice | null>(null)
@@ -121,12 +120,6 @@ const noteEn = ref('')
 const curveChartNo = ref('')
 const curveFiles = ref<LocalUploadFile[]>([])
 const reportFiles = ref<LocalUploadFile[]>([])
-const monitorCsvFile = ref<SimulatedWellMonitorCsvFile | null>(null)
-const monitorCsvLoading = ref(false)
-const activeMonitorCsvFile = computed(() => {
-  if (!monitorCsvFile.value || !selectedOperation.value) return null
-  return selectedOperation.value.work_no === props.autoWorkNo ? monitorCsvFile.value : null
-})
 const operatorSignatureFile = ref<LocalUploadFile | null>(null)
 const operatorSignaturePreviewUrl = ref('')
 const operatorSignatureObjectUrl = ref('')
@@ -137,6 +130,8 @@ const uploadPhase = ref<'idle' | 'uploading' | 'saving'>('idle')
 const uploadCancelRequested = ref(false)
 const uploadProgress = reactive({ fileName: '', uploaded: 0, total: 0, speed: 0 })
 let uploadProgressUnlisten: (() => void) | null = null
+let reportSearchTimer: ReturnType<typeof setTimeout> | null = null
+let reportRequestSequence = 0
 const reportNextStepVisible = ref(false)
 const reportNextStepRemaining = ref(0)
 const autoStartedWorkNo = ref('')
@@ -367,31 +362,6 @@ function contentTypeForName(name: string) {
   if (/\.jpe?g$/i.test(name)) return 'image/jpeg'
   if (/\.webp$/i.test(name)) return 'image/webp'
   return 'application/octet-stream'
-}
-
-async function loadMonitorCsvFile(sessionId: string) {
-  monitorCsvFile.value = null
-  if (!sessionId) return
-  monitorCsvLoading.value = true
-  try {
-    monitorCsvFile.value = await getSimulatedWellMonitorFile(sessionId)
-  } catch (error) {
-    ElMessage.warning(`监控 CSV 加载失败：${String(error)}`)
-  } finally {
-    monitorCsvLoading.value = false
-  }
-}
-
-async function cleanupMonitorCsvAfterReportFlow() {
-  const sessionId = String(props.monitorSessionId || '').trim()
-  if (!sessionId || !monitorCsvFile.value) return
-  try {
-    await deleteSimulatedWellMonitorFile(sessionId)
-    monitorCsvFile.value = null
-  } catch (error) {
-    // 报告已由后端保存，本地临时文件清理失败不能改变报告保存结果。
-    console.warn('清理本地监控 CSV 失败', error)
-  }
 }
 
 async function selectOperatorSignature() {
@@ -726,39 +696,14 @@ const reportRows = computed(() =>
         statusClass: report.status === 1 ? 'approved' : report.status === 2 ? 'rejected' : 'pending'
       }
     })
-    .filter((row) => {
-      const kw = reportKeyword.value.trim()
-      if (!kw) return true
-      return [row.report_no, row.reportName, row.task_number, row.deviceName, row.operatorName]
-        .join(' ')
-        .includes(kw)
-    })
 )
 
 const currentAutoWorkNo = computed(() => String(props.autoWorkNo || '').trim())
 
 const selectableOperations = computed(() => {
-  const rows = operations.value.filter((item) => Number(item.device_count || 0) > 0 && Array.isArray(item.devices) && item.devices.length > 0)
+  const rows = operations.value.filter((item) => item.status === 2 && Number(item.device_count || 0) > 0 && Array.isArray(item.devices) && item.devices.length > 0)
   if (!props.autoCreateReport || !currentAutoWorkNo.value) return rows
   return rows.filter((item) => String(item.work_no || '').trim() === currentAutoWorkNo.value)
-})
-
-const reportedDeviceKeys = computed(() => {
-  const set = new Set<string>()
-  reports.value.forEach((report) => {
-    const meta = getReportMeta(report)
-    const workNo = (report as any).task_number || meta?.downhole_work_no || meta?.task_number || meta?.work_no
-    const sn =
-      meta?.device_sn ||
-      meta?.deviceSn ||
-      meta?.device_number ||
-      meta?.deviceNo ||
-      meta?.sn ||
-      meta?.code
-    const key = reportDeviceKey(workNo, sn)
-    if (key) set.add(key)
-  })
-  return set
 })
 
 const selectedOperationDevices = computed(() => {
@@ -810,10 +755,19 @@ const previewTransferDataRows = computed(() =>
 )
 
 async function fetchReports() {
+  const requestSequence = ++reportRequestSequence
   loading.value = true
   try {
     await initAuth()
-    const res = await listSimulatedWellReports({ page: 1, pageSize: 2000 }, getAuthHeaders())
+    const res = await listSimulatedWellReports(
+      {
+        page: reportPage.value,
+        pageSize: reportPageSize.value,
+        keyword: reportSearchKeyword.value || undefined,
+      },
+      getAuthHeaders(),
+    )
+    if (requestSequence !== reportRequestSequence) return
     if (!res.success) {
       ElMessage.error(res.error || '获取测试报告失败')
       return
@@ -822,9 +776,81 @@ async function fetchReports() {
       ElMessage.error(res.data?.msg || '获取测试报告失败')
       return
     }
-    reports.value = res.data.data?.list || []
+    const data = res.data.data
+    reports.value = data?.list || []
+    reportTotal.value = Number(data?.total || 0)
+    reportPage.value = Math.max(1, Number(data?.page || reportPage.value))
   } finally {
-    loading.value = false
+    if (requestSequence === reportRequestSequence) loading.value = false
+  }
+}
+
+function handleReportPageChange(page: number) {
+  reportPage.value = page
+  void fetchReports()
+}
+
+function handleReportPageSizeChange(size: number) {
+  reportPageSize.value = size
+  reportPage.value = 1
+  void fetchReports()
+}
+
+function addReportedDeviceKey(target: Set<string>, report: SimulatedWellReportItem, expectedWorkNo: string) {
+  const meta = getReportMeta(report)
+  const workNo = String(
+    report.task_number || meta?.downhole_work_no || meta?.task_number || meta?.work_no || '',
+  ).trim()
+  if (workNo !== expectedWorkNo) return
+  const sn =
+    meta?.device_sn ||
+    meta?.deviceSn ||
+    meta?.device_number ||
+    meta?.deviceNo ||
+    meta?.sn ||
+    meta?.code
+  const key = reportDeviceKey(workNo, sn)
+  if (key) target.add(key)
+}
+
+async function fetchReportedDeviceKeys(workNo: string): Promise<boolean> {
+  const normalizedWorkNo = String(workNo || '').trim()
+  if (!normalizedWorkNo) {
+    reportedDeviceKeys.value = new Set()
+    return true
+  }
+
+  reportedDeviceKeysLoading.value = true
+  try {
+    await initAuth()
+    const keys = new Set<string>()
+    const eligibilityPageSize = 100
+    let page = 1
+    let loaded = 0
+    let total = 0
+
+    do {
+      const res = await listSimulatedWellReports(
+        { page, pageSize: eligibilityPageSize, taskNumber: normalizedWorkNo },
+        getAuthHeaders(),
+      )
+      if (!res.success || res.data?.code !== 0) {
+        ElMessage.error(res.error || res.data?.msg || '获取下井作业已生成报告记录失败')
+        return false
+      }
+      const data = res.data.data
+      const rows = data?.list || []
+      rows.forEach((report) => addReportedDeviceKey(keys, report, normalizedWorkNo))
+      loaded += rows.length
+      total = Number(data?.total || 0)
+      if (rows.length === 0) break
+      page += 1
+    } while (loaded < total)
+
+    reportedDeviceKeys.value = keys
+    return true
+  } finally {
+    reportedDeviceKeysLoading.value = false
   }
 }
 
@@ -832,7 +858,7 @@ async function fetchOperations() {
   operationLoading.value = true
   try {
     await initAuth()
-    const res = await listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000 }, getAuthHeaders())
+    const res = await listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000, status: 2 }, getAuthHeaders())
     if (!res.success) {
       ElMessage.error(res.error || '获取下井作业失败')
       return
@@ -1011,7 +1037,8 @@ async function openCreateFlow() {
   editingReport.value = null
   mode.value = 'select-operation'
   resetSelection()
-  await Promise.all([fetchOperations(), fetchReports()])
+  reportedDeviceKeys.value = new Set()
+  await fetchOperations()
 }
 
 async function openCreateFlowForWorkNo(workNo: string) {
@@ -1023,11 +1050,11 @@ async function openCreateFlowForWorkNo(workNo: string) {
   reportNextStepVisible.value = false
   mode.value = 'select-operation'
   resetSelection()
-  await Promise.all([fetchOperations(), fetchReports()])
+  reportedDeviceKeys.value = new Set()
+  await fetchOperations()
 
   const work =
-    selectableOperations.value.find((item) => String(item.work_no || '').trim() === normalizedWorkNo) ||
-    operations.value.find((item) => String(item.work_no || '').trim() === normalizedWorkNo)
+    selectableOperations.value.find((item) => String(item.work_no || '').trim() === normalizedWorkNo)
 
   if (!work) {
     autoStartedWorkNo.value = ''
@@ -1035,7 +1062,11 @@ async function openCreateFlowForWorkNo(workNo: string) {
     return
   }
 
-  pickOperation(work)
+  const operationReady = await pickOperation(work)
+  if (!operationReady) {
+    autoStartedWorkNo.value = ''
+    return
+  }
   const firstDevice = selectedOperationDevices.value[0]
   if (!firstDevice) {
     autoStartedWorkNo.value = ''
@@ -1055,12 +1086,15 @@ function backStep() {
   mode.value = 'list'
 }
 
-function pickOperation(work: SimulatedWellDownholeWorkItem) {
-  selectedOperation.value = work
+async function pickOperation(work: SimulatedWellDownholeWorkItem): Promise<boolean> {
+  selectedOperation.value = null
   selectedDevice.value = null
   selectedTemplate.value = null
   templateMessage.value = ''
   resetReportForm()
+  const ready = await fetchReportedDeviceKeys(work.work_no)
+  if (ready) selectedOperation.value = work
+  return ready
 }
 
 async function pickDevice(device: ReportOperationDevice) {
@@ -1280,10 +1314,6 @@ async function saveReport() {
       return
     }
   }
-  if (!editingReport.value && props.monitorSessionId && selectedOperation.value.work_no === props.autoWorkNo && !monitorCsvFile.value) {
-    ElMessage.warning(monitorCsvLoading.value ? '监控 CSV 正在加载，请稍后提交' : '未能读取本次测试的监控 CSV')
-    return
-  }
   const description = usesTemplateReport.value ? note.value.trim() : ''
   const descriptionEn = usesTemplateReport.value ? noteEn.value.trim() : ''
   if (!operatorSignaturePreviewUrl.value) {
@@ -1350,15 +1380,6 @@ async function saveReport() {
     const uploadFiles: SimulatedWellLocalUploadFile[] = [
       ...curveFiles.value.map((file) => ({ ...file, kind: 'curve_chart' as const })),
       ...reportFiles.value.map((file) => ({ ...file, kind: 'report_file' as const })),
-      ...(!editing && activeMonitorCsvFile.value
-        ? [{
-            path: activeMonitorCsvFile.value.path,
-            name: activeMonitorCsvFile.value.name,
-            size: activeMonitorCsvFile.value.size,
-            contentType: 'text/csv',
-            kind: 'monitor_csv' as const,
-          }]
-        : []),
       ...(operatorSignatureFile.value
         ? [{ ...operatorSignatureFile.value, kind: 'operator_signature' as const }]
         : []),
@@ -1407,23 +1428,19 @@ async function saveReport() {
       return
     }
 
-    if (!editing && selectedOperation.value.id) {
-      await updateSimulatedWellDownholeWork(
-        selectedOperation.value.id,
-        { report_count: Number(selectedOperation.value.report_count || 0) + 1 },
-        getAuthHeaders()
-      )
-    }
-
     ElMessage.success(editing ? '测试报告已更新' : '测试报告已保存')
-    await Promise.all([fetchReports(), fetchOperations()])
+    if (!editing) reportPage.value = 1
+    const refreshTasks: Promise<unknown>[] = [fetchReports(), fetchOperations()]
+    if (!editing && selectedOperation.value?.work_no) {
+      refreshTasks.push(fetchReportedDeviceKeys(selectedOperation.value.work_no))
+    }
+    await Promise.all(refreshTasks)
     if (remainingBeforeSave > 0) {
       reportNextStepRemaining.value = remainingBeforeSave
       reportNextStepVisible.value = true
       resetReportForm()
       return
     }
-    if (!editing) void cleanupMonitorCsvAfterReportFlow()
     mode.value = 'list'
     resetSelection()
   } finally {
@@ -1443,6 +1460,7 @@ async function cancelCurrentUpload() {
 }
 
 onBeforeUnmount(() => {
+  if (reportSearchTimer) clearTimeout(reportSearchTimer)
   revokeOperatorSignatureObjectUrl()
   uploadProgressUnlisten?.()
   if (activeUploadId.value && uploadPhase.value === 'uploading') {
@@ -1460,7 +1478,6 @@ function continueReportFill() {
 
 function finishDownholeOperation() {
   reportNextStepVisible.value = false
-  void cleanupMonitorCsvAfterReportFlow()
   mode.value = 'list'
   resetSelection()
 }
@@ -1564,6 +1581,15 @@ onMounted(async () => {
   await fetchReports()
 })
 
+watch(reportKeyword, (value) => {
+  if (reportSearchTimer) clearTimeout(reportSearchTimer)
+  reportSearchTimer = setTimeout(() => {
+    reportSearchKeyword.value = value.trim()
+    reportPage.value = 1
+    void fetchReports()
+  }, 300)
+})
+
 watch(
   () => [props.autoCreateReport, props.autoWorkNo],
   ([autoCreate, workNo]) => {
@@ -1573,11 +1599,6 @@ watch(
   { immediate: true }
 )
 
-watch(
-  () => props.monitorSessionId,
-  (sessionId) => { void loadMonitorCsvFile(String(sessionId || '')) },
-  { immediate: true },
-)
 </script>
 
 <template>
@@ -1695,6 +1716,22 @@ watch(
             </tbody>
           </table>
         </div>
+        <div v-if="reportTotal > 0" class="list-pagination report-list-pagination">
+          <div class="report-pagination-control">
+            <ElConfigProvider :locale="zhCn">
+              <ElPagination
+                background
+                layout="total, sizes, prev, pager, next, jumper"
+                :current-page="reportPage"
+                :page-size="reportPageSize"
+                :page-sizes="[10, 20, 50]"
+                :total="reportTotal"
+                @current-change="handleReportPageChange"
+                @size-change="handleReportPageSizeChange"
+              />
+            </ElConfigProvider>
+          </div>
+        </div>
       </div>
 
       <template v-else-if="mode === 'select-operation'">
@@ -1737,8 +1774,16 @@ watch(
                   <td>{{ formatSimulatedWellEnvironment(work.env_text) }}</td>
                   <td>{{ formatSimulatedWellInterval(work.interval_text) }}</td>
                   <td>{{ work.device_count || 0 }}台</td>
-                  <td>{{ work.status_text || (work.status === 2 ? '已完成' : work.status === 1 ? '进行中' : '已创建') }}</td>
-                  <td><button class="action-btn action-btn-view" @click="pickOperation(work)">选择</button></td>
+                  <td>{{ work.status_text || (work.status === 3 ? '已提交报告' : work.status === 2 ? '已完成' : work.status === 1 ? '进行中' : '已创建') }}</td>
+                  <td>
+                    <button
+                      class="action-btn action-btn-view"
+                      :disabled="reportedDeviceKeysLoading"
+                      @click="pickOperation(work)"
+                    >
+                      {{ reportedDeviceKeysLoading ? '加载中' : '选择' }}
+                    </button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -2157,12 +2202,10 @@ watch(
             <div class="upload-box">
               <div class="upload-title">测试监控 CSV</div>
               <div class="file-list">
-                <div v-if="monitorCsvLoading" class="tiny-hint">正在读取监控数据文件…</div>
-                <div v-else-if="activeMonitorCsvFile" class="file-row">
-                  {{ activeMonitorCsvFile.name }} · {{ formatFileSize(activeMonitorCsvFile.size) }}
+                <div v-if="editingReport?.monitor_csv_url || selectedOperation?.monitor_csv_url" class="file-row">
+                  csv文件已上传
                 </div>
-                <div v-else-if="editingReport?.monitor_csv_url" class="file-row">已保存监控 CSV</div>
-                <div v-else class="tiny-hint">本次流程未关联监控 CSV</div>
+                <div v-else class="tiny-hint">暂无监控csv文件</div>
               </div>
             </div>
           </div>
@@ -2474,6 +2517,18 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 12px;
+}
+
+.report-list-pagination {
+  display: flex;
+  width: 100%;
+  justify-content: flex-end !important;
+}
+
+.report-pagination-control {
+  display: flex;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .downhole-card-title {
