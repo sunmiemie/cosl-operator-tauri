@@ -2,6 +2,19 @@ import { http, type ApiResponse } from './http'
 
 export type EquipmentReportResult = 'pass' | 'fail' | 'pending'
 
+export interface EquipmentReportAttachment {
+  [key: string]: unknown
+  field?: string
+  type?: string
+  name?: string
+  file_name?: string
+  file_url?: string
+  content_type?: string
+  curve_index?: number
+  curve_title?: string
+  curve_range?: Record<string, unknown>
+}
+
 export interface EquipmentInstrumentReportResult {
   order_id?: number
   order_no?: string
@@ -13,7 +26,7 @@ export interface EquipmentInstrumentReportResult {
   result_text?: string
   observation?: string
   metrics?: Record<string, unknown>
-  attachments?: Array<Record<string, unknown>>
+  attachments?: EquipmentReportAttachment[]
   curve_attachment_field?: string
   report_json?: Record<string, unknown>
   remark?: string
@@ -30,7 +43,7 @@ export interface EquipmentReportPayload {
   order_numbers: string[]
   instrument_results: EquipmentInstrumentReportResult[]
   report_json?: Record<string, unknown>
-  attachments?: Array<Record<string, unknown>>
+  attachments?: EquipmentReportAttachment[]
   remark?: string
   client_submit_id: string
 }
@@ -113,7 +126,7 @@ export interface VibrationTablePreExperimentPayload {
   tester?: string
   summary: Record<string, unknown>
   records: Array<Record<string, unknown>>
-  attachments?: Array<Record<string, unknown>>
+  attachments?: EquipmentReportAttachment[]
   export_dir?: string
   client_submit_id: string
 }

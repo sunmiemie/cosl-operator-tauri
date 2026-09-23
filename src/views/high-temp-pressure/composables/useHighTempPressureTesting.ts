@@ -6,6 +6,10 @@ import { ElMessage } from 'element-plus'
 import { useConfig } from '@/composables/useConfig'
 import { echarts } from '@/utils/echarts'
 import type { HighTempPressureModal, HighTempPressurePanel } from '../types'
+import {
+  buildHighTempPressureExportFolderName,
+  type HighTempPressureExportContext,
+} from '../utils/exportFolder'
 import { formatRuntimeTimer, getElapsedRuntimeSeconds } from '../utils/runtime'
 
 export type HighTempPressureOcrChannel = {
@@ -336,6 +340,7 @@ export function useHighTempPressureTesting() {
       grid: { left: 58, right: 58, top: 28, bottom: 72, containLabel: false },
       tooltip: {
         trigger: 'axis',
+        hideDelay: 3000,
         axisPointer: { type: 'line', lineStyle: { color: '#98a2b3', width: 1 } },
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params]
@@ -466,7 +471,7 @@ export function useHighTempPressureTesting() {
           emphasis: { focus: 'series' },
         },
       ],
-    }, true)
+    })
     queueMicrotask(() => {
       applyingChartOption = false
     })
@@ -1189,11 +1194,6 @@ export function useHighTempPressureTesting() {
     switchPanel('dashboard')
   }
 
-  function buildExportFolderName() {
-    const source = ocrDeviceName.value || 'ocr_capture'
-    return `${source}_高温高压井OCR采集结果`
-  }
-
   async function getConfiguredDownloadDir() {
     await initConfig()
     const configuredDownloadDir = String(getConfigItem('highTempPressureDownloadDir') || '').trim()
@@ -1205,7 +1205,9 @@ export function useHighTempPressureTesting() {
     return configuredDownloadDir
   }
 
-  async function finalizeOcrCapture() {
+  async function finalizeOcrCapture(context: HighTempPressureExportContext) {
+    // 结束流程后续步骤失败时会允许重试；已完成导出的同一测试直接复用原目录。
+    if (exportedCaptureDir.value.trim()) return true
     stopCapturePolling()
     if (!captureOutputDir.value) {
       captureStatusText.value = '尚未生成 OCR 采集结果，无法结束并上传报告'
@@ -1228,7 +1230,7 @@ export function useHighTempPressureTesting() {
       const result = await invoke<any>('export_high_temp_pressure_capture_output', {
         sourceOutputDir: captureOutputDir.value,
         targetDir: configuredDownloadDir,
-        folderName: buildExportFolderName(),
+        folderName: buildHighTempPressureExportFolderName(context),
       })
       exportedCaptureDir.value = String(result?.export_dir || configuredDownloadDir)
     } catch (error) {

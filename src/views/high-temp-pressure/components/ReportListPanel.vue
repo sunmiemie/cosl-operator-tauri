@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
+import { http } from '@/services/http'
 import {
   downloadHighTempPressureReportPdf,
   getHighTempPressureReportDetail,
@@ -11,6 +12,11 @@ import {
   type HighTempPressureReportItem,
 } from '@/services/high-temp-pressure-report-api'
 import type { HighTempPressurePendingReport } from '../utils/pendingReport'
+import {
+  extractHighTempPressureCurveAttachments,
+  resolveBackendAttachmentEndpoint,
+  type HighTempPressureCurveAttachment,
+} from '../utils/reportCurves'
 
 const props = defineProps<{
   pendingReports: HighTempPressurePendingReport[]
@@ -32,6 +38,22 @@ const detailLoading = ref(false)
 const detailReport = ref<HighTempPressureReportItem | null>(null)
 const detailPdfUrl = ref('')
 const detailPdfBuffer = ref<ArrayBuffer | null>(null)
+type CurvePreviewItem = HighTempPressureCurveAttachment & {
+  blobUrl: string
+  error: string
+}
+const curvePreviewReport = ref<HighTempPressureReportItem | null>(null)
+const curvePreviewItems = ref<CurvePreviewItem[]>([])
+const curvePreviewLoading = ref(false)
+let curveLoadGeneration = 0
+let curvePrintFrame: HTMLIFrameElement | null = null
+
+const curvePrintReady = computed(() =>
+  curvePreviewItems.value.length > 0 &&
+  !curvePreviewLoading.value &&
+  curvePreviewItems.value.every((item) => item.blobUrl && !item.error)
+)
+const curvePreviewHasErrors = computed(() => curvePreviewItems.value.some((item) => !!item.error))
 
 const filteredServerReports = computed(() => {
   const keyword = serverKeyword.value.trim().toLowerCase()
@@ -93,6 +115,15 @@ function resultText(value: string | undefined) {
   if (value === 'pass') return '合格'
   if (value === 'fail') return '不合格'
   return '待确认'
+}
+
+function hasReportCurves(report: HighTempPressureReportItem | null | undefined) {
+  return extractHighTempPressureCurveAttachments(report).length > 0
+}
+
+function formatCurveRange(item: HighTempPressureCurveAttachment) {
+  if (!item.rangeStart && !item.rangeEnd) return '未记录曲线时间范围'
+  return `${formatDateTime(item.rangeStart || undefined)} — ${formatDateTime(item.rangeEnd || undefined)}`
 }
 
 function clearDetailPdf() {
@@ -196,11 +227,182 @@ function downloadDetailPdf() {
   void downloadReport(detailReport.value)
 }
 
+function clearCurveBlobUrls() {
+  curvePreviewItems.value.forEach((item) => {
+    if (item.blobUrl) URL.revokeObjectURL(item.blobUrl)
+  })
+  curvePreviewItems.value = []
+}
+
+function removeCurvePrintFrame() {
+  if (!curvePrintFrame) return
+  curvePrintFrame.remove()
+  curvePrintFrame = null
+}
+
+function closeCurvePreview() {
+  curveLoadGeneration += 1
+  curvePreviewLoading.value = false
+  clearCurveBlobUrls()
+  curvePreviewReport.value = null
+  removeCurvePrintFrame()
+}
+
+async function openCurvePreview(report: HighTempPressureReportItem) {
+  const generation = ++curveLoadGeneration
+  clearCurveBlobUrls()
+  curvePreviewReport.value = report
+  curvePreviewLoading.value = true
+  try {
+    const authOk = await initAuth()
+    if (!authOk) throw new Error('登录已失效，请重新登录后查看曲线')
+    const headers = getAuthHeaders()
+    const detailResponse = await getHighTempPressureReportDetail(report.id, headers)
+    if (!detailResponse.success || detailResponse.data?.code !== 0 || !detailResponse.data.data) {
+      throw new Error(detailResponse.data?.msg || detailResponse.error || '获取报告曲线信息失败')
+    }
+    if (generation !== curveLoadGeneration) return
+
+    const detail = detailResponse.data.data
+    curvePreviewReport.value = detail
+    const curves = extractHighTempPressureCurveAttachments(detail)
+    curvePreviewItems.value = curves.map((curve) => ({ ...curve, blobUrl: '', error: '' }))
+    if (!curves.length) return
+
+    await Promise.all(curvePreviewItems.value.map(async (item) => {
+      try {
+        const endpoint = resolveBackendAttachmentEndpoint(item.fileUrl, http.getBaseUrl())
+        if (!endpoint) throw new Error('附件地址不属于当前服务端')
+        const response = await http.downloadFile(endpoint, undefined, headers)
+        if (!response.success || !response.data) {
+          throw new Error(response.error || '曲线图片下载失败')
+        }
+        const blobUrl = URL.createObjectURL(new Blob([response.data], { type: item.contentType || 'image/png' }))
+        if (generation !== curveLoadGeneration) {
+          URL.revokeObjectURL(blobUrl)
+          return
+        }
+        item.blobUrl = blobUrl
+      } catch (error) {
+        if (generation === curveLoadGeneration) {
+          item.error = error instanceof Error ? error.message : '曲线图片加载失败'
+        }
+      }
+    }))
+    if (generation === curveLoadGeneration && curvePreviewItems.value.some((item) => item.error)) {
+      ElMessage.warning('部分曲线图片加载失败，请重试后再打印')
+    }
+  } catch (error) {
+    if (generation === curveLoadGeneration) {
+      ElMessage.error(error instanceof Error ? error.message : '曲线预览加载失败')
+    }
+  } finally {
+    if (generation === curveLoadGeneration) curvePreviewLoading.value = false
+  }
+}
+
+function retryCurvePreview() {
+  if (curvePreviewReport.value) void openCurvePreview(curvePreviewReport.value)
+}
+
+function appendPrintText(
+  documentRef: Document,
+  parent: HTMLElement,
+  tagName: 'h1' | 'h2' | 'div',
+  className: string,
+  content: string
+) {
+  const element = documentRef.createElement(tagName)
+  element.className = className
+  element.textContent = content
+  parent.appendChild(element)
+}
+
+async function printAllCurves() {
+  const report = curvePreviewReport.value
+  if (!report || !curvePrintReady.value) {
+    ElMessage.warning(curvePreviewHasErrors.value ? '请先重新加载失败的曲线图片' : '曲线图片尚未加载完成')
+    return
+  }
+  removeCurvePrintFrame()
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('aria-hidden', 'true')
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;'
+  document.body.appendChild(iframe)
+  curvePrintFrame = iframe
+  const printDocument = iframe.contentDocument
+  const printWindow = iframe.contentWindow
+  if (!printDocument || !printWindow) {
+    removeCurvePrintFrame()
+    ElMessage.error('无法创建客户端打印页面')
+    return
+  }
+
+  printDocument.open()
+  printDocument.write(`<!doctype html><html><head><meta charset="UTF-8"><title>高温高压井测试曲线</title><style>
+    @page { size: A4 landscape; margin: 8mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; color: #111827; font-family: "Microsoft YaHei", Arial, sans-serif; }
+    .curve-page { width: 100%; height: 190mm; display: flex; flex-direction: column; page-break-after: always; break-after: page; overflow: hidden; }
+    .curve-page:last-child { page-break-after: auto; break-after: auto; }
+    .print-title { margin: 0 0 2mm; text-align: center; font-size: 16pt; }
+    .report-meta, .curve-meta { display: flex; justify-content: center; gap: 8mm; margin-bottom: 2mm; font-size: 9pt; }
+    .curve-title { margin: 0 0 1mm; text-align: center; font-size: 12pt; }
+    .curve-image-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+    .curve-image { max-width: 100%; max-height: 100%; object-fit: contain; }
+  </style></head><body></body></html>`)
+  printDocument.close()
+
+  const images: HTMLImageElement[] = []
+  curvePreviewItems.value.forEach((item) => {
+    const page = printDocument.createElement('section')
+    page.className = 'curve-page'
+    appendPrintText(printDocument, page, 'h1', 'print-title', '高温高压井测试曲线')
+    appendPrintText(
+      printDocument,
+      page,
+      'div',
+      'report-meta',
+      `报告编号：${report.report_no || '-'}　测试单号：${serverOrderNumbers(report)}　仪器：${report.instrument_name || '-'}　SN：${report.instrument_sn || '-'}`
+    )
+    appendPrintText(printDocument, page, 'h2', 'curve-title', item.title)
+    appendPrintText(printDocument, page, 'div', 'curve-meta', formatCurveRange(item))
+    const imageWrap = printDocument.createElement('div')
+    imageWrap.className = 'curve-image-wrap'
+    const image = printDocument.createElement('img')
+    image.className = 'curve-image'
+    image.src = item.blobUrl
+    image.alt = item.title
+    imageWrap.appendChild(image)
+    page.appendChild(imageWrap)
+    printDocument.body.appendChild(page)
+    images.push(image)
+  })
+
+  await Promise.all(images.map((image) => {
+    if (image.complete) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      image.onload = () => resolve()
+      image.onerror = () => resolve()
+    })
+  }))
+
+  printWindow.onafterprint = () => removeCurvePrintFrame()
+  printWindow.focus()
+  printWindow.print()
+  window.setTimeout(() => {
+    if (curvePrintFrame === iframe) removeCurvePrintFrame()
+  }, 60_000)
+}
+
 onMounted(() => {
   if (activeTab.value === 'server' || props.pendingReports.length === 0) void switchTab('server')
 })
 
-onBeforeUnmount(clearDetailPdf)
+onBeforeUnmount(() => {
+  clearDetailPdf()
+  closeCurvePreview()
+})
 </script>
 
 <template>
@@ -354,6 +556,14 @@ onBeforeUnmount(clearDetailPdf)
                 <div class="action-buttons">
                   <button class="action-btn action-btn-view" @click="openReportDetail(report)"><Icon icon="mdi:eye-outline" /> 查看</button>
                   <button class="action-btn action-btn-download" @click="downloadReport(report)"><Icon icon="mdi:download" /> PDF</button>
+                  <button
+                    class="action-btn action-btn-curve"
+                    :disabled="!hasReportCurves(report)"
+                    :title="hasReportCurves(report) ? '查看并打印测试曲线' : '该报告无曲线附件'"
+                    @click="openCurvePreview(report)"
+                  >
+                    <Icon icon="mdi:chart-line" /> 曲线
+                  </button>
                 </div>
               </td>
             </tr>
@@ -371,6 +581,14 @@ onBeforeUnmount(clearDetailPdf)
               <h3>{{ detailReport.report_no }}</h3>
             </div>
             <div class="detail-actions">
+              <button
+                class="primary-btn compact secondary"
+                :disabled="detailLoading || !hasReportCurves(detailReport)"
+                :title="hasReportCurves(detailReport) ? '查看并打印测试曲线' : '该报告无曲线附件'"
+                @click="openCurvePreview(detailReport)"
+              >
+                <Icon icon="mdi:chart-line" /> 查看曲线
+              </button>
               <button class="primary-btn compact" :disabled="detailLoading" @click="downloadDetailPdf">
                 <Icon icon="mdi:download" /> 单独下载 PDF
               </button>
@@ -393,6 +611,65 @@ onBeforeUnmount(clearDetailPdf)
               <iframe v-else-if="detailPdfUrl" :src="detailPdfUrl" title="高温高压报告 PDF 预览"></iframe>
               <div v-else class="pdf-placeholder"><Icon icon="mdi:file-alert-outline" /> PDF 暂时无法预览，可尝试单独下载</div>
             </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="curvePreviewReport" class="detail-mask curve-preview-mask" @click.self="closeCurvePreview">
+        <div class="detail-dialog curve-preview-dialog">
+          <div class="detail-header">
+            <div>
+              <span class="detail-kicker">高温高压井测试曲线</span>
+              <h3>{{ curvePreviewReport.report_no }}</h3>
+            </div>
+            <div class="detail-actions">
+              <button class="primary-btn compact secondary" :disabled="curvePreviewLoading" @click="retryCurvePreview">
+                <Icon icon="mdi:refresh" /> 重新加载
+              </button>
+              <button class="primary-btn compact" :disabled="!curvePrintReady" @click="printAllCurves">
+                <Icon icon="mdi:printer-outline" /> 打印全部曲线
+              </button>
+              <button class="detail-close" @click="closeCurvePreview">×</button>
+            </div>
+          </div>
+          <div class="curve-report-meta">
+            <span>测试单号：<strong>{{ serverOrderNumbers(curvePreviewReport) }}</strong></span>
+            <span>仪器：<strong>{{ curvePreviewReport.instrument_name || '-' }}</strong></span>
+            <span>SN：<strong>{{ curvePreviewReport.instrument_sn || '-' }}</strong></span>
+            <span>共 {{ curvePreviewItems.length }} 张曲线</span>
+          </div>
+          <div class="curve-preview-body">
+            <div v-if="curvePreviewLoading" class="curve-preview-state">
+              <Icon icon="mdi:loading" class="spin" /> 正在加载客户端曲线预览
+            </div>
+            <div v-else-if="curvePreviewItems.length === 0" class="curve-preview-state">
+              <Icon icon="mdi:chart-line-variant" /> 该报告没有可预览的曲线附件
+            </div>
+            <template v-else>
+              <article v-for="item in curvePreviewItems" :key="`${item.index}-${item.fileUrl}`" class="curve-preview-card">
+                <div class="curve-preview-card-header">
+                  <div>
+                    <span>曲线 {{ item.index }}</span>
+                    <h4>{{ item.title }}</h4>
+                  </div>
+                  <small>{{ formatCurveRange(item) }}</small>
+                </div>
+                <div v-if="item.error" class="curve-image-error">
+                  <Icon icon="mdi:image-off-outline" />
+                  <strong>曲线图片加载失败</strong>
+                  <span>{{ item.error }}</span>
+                </div>
+                <div v-else-if="!item.blobUrl" class="curve-image-loading">
+                  <Icon icon="mdi:loading" class="spin" /> 图片加载中
+                </div>
+                <img v-else :src="item.blobUrl" :alt="item.title" class="curve-preview-image" />
+              </article>
+            </template>
+          </div>
+          <div v-if="curvePreviewHasErrors" class="curve-preview-warning">
+            存在未加载成功的曲线，已暂停打印。请点击“重新加载”后再打印完整资料。
           </div>
         </div>
       </div>
@@ -437,7 +714,7 @@ onBeforeUnmount(clearDetailPdf)
 .pending-report-table .col-pending-time { width: 14%; }
 .pending-report-table .col-pending-status { width: 9%; }
 .pending-report-table .col-pending-actions { width: 15%; }
-.server-report-table { min-width: 1120px; }
+.server-report-table { min-width: 1200px; }
 .server-report-table .col-report-no { width: 14%; }
 .server-report-table .col-task-no { width: 14%; }
 .server-report-table .col-device { width: 16%; }
@@ -445,7 +722,7 @@ onBeforeUnmount(clearDetailPdf)
 .server-report-table .col-tester { width: 8%; }
 .server-report-table .col-status { width: 9%; }
 .server-report-table .col-submit-time { width: 13%; }
-.server-report-table .col-actions { width: 17%; }
+.server-report-table .col-actions { width: 22%; }
 .cell-primary { min-width: 0; color: var(--color-text-primary); font-weight: 500; line-height: 1.45; word-break: break-word; }
 .cell-secondary { margin-top: 4px; overflow: hidden; color: var(--color-text-secondary); font-size: 12px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .wrap-id { overflow-wrap: anywhere; }
@@ -459,9 +736,12 @@ onBeforeUnmount(clearDetailPdf)
 .action-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 58px; height: 30px; padding: 0 9px; border: 1px solid rgba(59,130,246,.25); border-radius: 9px; background: rgba(59,130,246,.12); color: var(--color-accent-blue); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .action-btn-edit { border-color: rgba(16,185,129,.25); background: rgba(16,185,129,.12); color: #059669; }
 .action-btn-download { border-color: rgba(16,185,129,.25); background: rgba(16,185,129,.12); color: #059669; }
+.action-btn-curve { border-color: rgba(139,92,246,.28); background: rgba(139,92,246,.12); color: #7c3aed; }
 .action-btn-danger { border-color: rgba(239,68,68,.25); background: rgba(239,68,68,.1); color: var(--color-error); }
 .action-btn:hover { filter: brightness(.96); }
+.action-btn:disabled, .primary-btn:disabled { cursor: not-allowed; filter: none; opacity: .45; }
 .primary-btn.compact { height: 36px; justify-content: center; padding: 0 13px; border-radius: 10px; font-size: 13px; }
+.primary-btn.compact.secondary { border: 1px solid var(--color-border); background: var(--color-bg-tertiary); color: var(--color-text-primary); }
 .status-badge { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .status-badge.pending, .status-pending { background: rgba(245,158,11,.12); color: #d97706; }
 .status-badge.warning { background: rgba(239,68,68,.1); color: var(--color-error); }
@@ -485,10 +765,28 @@ onBeforeUnmount(clearDetailPdf)
 .pdf-preview { min-width: 0; min-height: 0; padding: 10px; background: #525659; }
 .pdf-preview iframe { width: 100%; height: 100%; border: 0; background: white; }
 .pdf-placeholder { height: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; color: white; }
+.curve-preview-mask { z-index: 1600; }
+.curve-preview-dialog { width: min(1280px, 96vw); height: min(900px, 94vh); }
+.curve-report-meta { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 11px 20px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-primary); color: var(--color-text-secondary); font-size: 12px; }
+.curve-report-meta strong { color: var(--color-text-primary); }
+.curve-preview-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 16px; overflow: auto; padding: 18px; background: #e5e7eb; }
+.curve-preview-state { flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; gap: 9px; border-radius: 10px; background: var(--color-bg-primary); color: var(--color-text-secondary); }
+.curve-preview-card { flex: 0 0 auto; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: #fff; box-shadow: 0 4px 16px rgba(15,23,42,.08); }
+.curve-preview-card-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; color: #111827; }
+.curve-preview-card-header span { color: #6b7280; font-size: 11px; }
+.curve-preview-card-header h4 { margin: 2px 0 0; font-size: 14px; }
+.curve-preview-card-header small { color: #6b7280; font-size: 11px; }
+.curve-preview-image { display: block; width: 100%; height: auto; max-height: 72vh; object-fit: contain; background: #fff; }
+.curve-image-error, .curve-image-loading { min-height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #6b7280; }
+.curve-image-error { color: var(--color-error); }
+.curve-image-error svg { font-size: 34px; }
+.curve-image-error span { max-width: 70%; text-align: center; font-size: 12px; overflow-wrap: anywhere; }
+.curve-preview-warning { padding: 10px 18px; border-top: 1px solid rgba(239,68,68,.25); background: rgba(239,68,68,.08); color: var(--color-error); font-size: 12px; }
 @media (max-width: 800px) {
   .section-heading, .server-heading { align-items: stretch; flex-direction: column; }
   .server-tools, .search-box.inline.report-search { width: 100%; }
   .detail-body { grid-template-columns: 1fr; }
   .detail-info { display: grid; grid-template-columns: repeat(2,1fr); max-height: 220px; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  .curve-preview-card-header { align-items: flex-start; flex-direction: column; }
 }
 </style>

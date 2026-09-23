@@ -324,7 +324,13 @@ async function handleConfirmEnd() {
   const endConfirmedAt = Date.now()
 
   try {
-    const captureSaved = await testing.finalizeOcrCapture()
+    const orderNumbers = Array.from(new Set(
+      currentSelections.map((selection) => selection.order.no.trim()).filter(Boolean)
+    ))
+    const captureSaved = await testing.finalizeOcrCapture({
+      orderNumbers,
+      completedAtMs: endConfirmedAt,
+    })
     if (!captureSaved) return
 
     testCompletionSavingText.value = '正在固化待提交报告数据…'

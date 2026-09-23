@@ -1013,6 +1013,29 @@ fn sanitize_folder_name(input: &str) -> String {
     }
 }
 
+fn create_unique_export_dir(target_root: &Path, folder_name: &str) -> Result<PathBuf, String> {
+    for sequence in 1_u32.. {
+        let candidate_name = if sequence == 1 {
+            folder_name.to_string()
+        } else {
+            format!("{}-{}", folder_name, sequence)
+        };
+        let candidate = target_root.join(candidate_name);
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "创建独立测试导出目录失败 {}: {}",
+                    candidate.to_string_lossy(),
+                    error
+                ))
+            }
+        }
+    }
+    unreachable!("测试导出目录序号已耗尽")
+}
+
 #[tauri::command]
 pub fn get_high_temp_pressure_ocr_devices() -> Result<Vec<HighTempPressureOcrDevice>, String> {
     let mut devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
@@ -1263,13 +1286,19 @@ pub fn export_high_temp_pressure_capture_output(
             .unwrap_or_else(|| "high_temp_pressure_capture".to_string())
             .as_str(),
     );
-    let final_target = target_root.join(folder_name);
+    let final_target = create_unique_export_dir(&target_root, &folder_name)?;
 
-    if final_target.exists() {
-        fs::remove_dir_all(&final_target).map_err(|e| format!("清理旧导出目录失败: {}", e))?;
+    if let Err(error) = copy_high_temp_pressure_report_output(&source, &final_target) {
+        if let Err(cleanup_error) = fs::remove_dir_all(&final_target) {
+            return Err(format!(
+                "{}；清理本次失败导出目录 {} 时失败: {}",
+                error,
+                final_target.to_string_lossy(),
+                cleanup_error
+            ));
+        }
+        return Err(error);
     }
-
-    copy_high_temp_pressure_report_output(&source, &final_target)?;
 
     Ok(serde_json::json!({
         "export_dir": final_target.to_string_lossy(),
@@ -1492,5 +1521,90 @@ mod tests {
         assert!(bytes
             .windows(b"/Subtype /Image".len())
             .any(|window| window == b"/Subtype /Image"));
+    }
+
+    #[test]
+    fn repeated_exports_create_separate_directories_without_overwriting() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("tmp")
+            .join(format!("high-temp-pressure-export-test-{}", suffix));
+        let source_one = root.join("source-one");
+        let source_two = root.join("source-two");
+        let target = root.join("exports");
+        fs::create_dir_all(&source_one).unwrap();
+        fs::create_dir_all(&source_two).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source_one.join("ocr_readings_0.5s.json"), r#"{"run":1}"#).unwrap();
+        fs::write(source_two.join("ocr_readings_0.5s.json"), r#"{"run":2}"#).unwrap();
+
+        let first = export_high_temp_pressure_capture_output(
+            source_one.to_string_lossy().to_string(),
+            target.to_string_lossy().to_string(),
+            Some("20260923-143205_TASK-001_高温高压井测试数据".to_string()),
+        )
+        .unwrap();
+        let second = export_high_temp_pressure_capture_output(
+            source_two.to_string_lossy().to_string(),
+            target.to_string_lossy().to_string(),
+            Some("20260923-143205_TASK-001_高温高压井测试数据".to_string()),
+        )
+        .unwrap();
+
+        let first_dir = PathBuf::from(first["export_dir"].as_str().unwrap());
+        let second_dir = PathBuf::from(second["export_dir"].as_str().unwrap());
+        assert_ne!(first_dir, second_dir);
+        assert_eq!(
+            fs::read_to_string(first_dir.join("ocr_readings_0.5s.json")).unwrap(),
+            r#"{"run":1}"#
+        );
+        assert_eq!(
+            fs::read_to_string(second_dir.join("ocr_readings_0.5s.json")).unwrap(),
+            r#"{"run":2}"#
+        );
+        assert!(second_dir.ends_with("20260923-143205_TASK-001_高温高压井测试数据-2"));
+        assert_eq!(sanitize_folder_name("TASK/001:井*1?"), "TASK_001_井_1_");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_export_only_removes_the_new_directory() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("tmp")
+            .join(format!("high-temp-pressure-failed-export-test-{}", suffix));
+        let source = root.join("source");
+        let target = root.join("exports");
+        let existing = target.join("fixed-test-folder");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&existing).unwrap();
+        fs::write(existing.join("keep.txt"), "historical data").unwrap();
+
+        let error = export_high_temp_pressure_capture_output(
+            source.to_string_lossy().to_string(),
+            target.to_string_lossy().to_string(),
+            Some("fixed-test-folder".to_string()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("采样JSON不存在"));
+        assert_eq!(
+            fs::read_to_string(existing.join("keep.txt")).unwrap(),
+            "historical data"
+        );
+        assert!(!target.join("fixed-test-folder-2").exists());
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
