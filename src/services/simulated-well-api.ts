@@ -9,6 +9,10 @@ export interface SimulatedWellOrderDeviceDTO {
   schedule_segments?: Array<{
     scheduled_start_at?: string | null
     scheduled_end_at?: string | null
+    use_device?: string
+    useDevice?: string
+    equipment_id?: string | number
+    equipmentId?: string | number
   }>
   instrument_status?: number
   is_completed?: boolean
@@ -112,13 +116,27 @@ export type SimulatedWellDeviceScheduleBody = {
   schedule_segments?: Array<{
     scheduled_start_at: string
     scheduled_end_at: string
+    use_device: string
+    equipment_id: string
   }>
+}
+
+export type SimulatedWellAssistantSync = {
+  success?: boolean
+  queued?: boolean
+  skipped?: boolean
+  reason?: string
+  error?: string
+  list?: Array<{ error?: string; reason?: string }>
 }
 
 export type SimulatedWellDeviceScheduleResponse = {
   code: number
   msg?: string
-  data?: SimulatedWellOrderDeviceDTO & { order_id?: number }
+  data?: SimulatedWellOrderDeviceDTO & {
+    order_id?: number
+    assistantSync?: SimulatedWellAssistantSync
+  }
 }
 
 export async function saveSimulatedWellDeviceSchedule(

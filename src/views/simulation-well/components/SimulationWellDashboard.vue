@@ -453,7 +453,7 @@ const handleGridDrop = (e: DragEvent) => {
                   }"
                   :style="getScheduledStyle(it)"
                   @click="emit('select-scheduled-event', it.eventId)"
-                  :title="`${it.orderId} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getWorkOrderById(it.orderId)?.planTime || ''} · ${getWorkOrderById(it.orderId)?.taskDesc || ''}`"
+                  :title="`${it.orderId} · ${it.hostDeviceName || '-'} · ${getWorkOrderById(it.orderId)?.customer || ''} · ${getWorkOrderById(it.orderId)?.planTime || ''} · ${getWorkOrderById(it.orderId)?.taskDesc || ''}`"
                 >
                   <div class="scheduled-content">
                     <span class="device-name">{{ it.orderId }}</span>
@@ -475,7 +475,8 @@ const handleGridDrop = (e: DragEvent) => {
                     </button>
                   </div>
                   <div class="scheduled-tag">
-                    <template v-if="it.isTentative">待排程 · </template>{{ getWorkOrderById(it.orderId)?.customer || '-' }} ·
+                    <template v-if="it.isTentative">待排程 · </template>{{ it.hostDeviceName || '-' }} ·
+                    {{ getWorkOrderById(it.orderId)?.customer || '-' }} ·
                     {{ getWorkOrderById(it.orderId)?.planTime || '-' }}
                   </div>
                   <div

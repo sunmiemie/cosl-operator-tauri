@@ -9,6 +9,7 @@ import {
   type SimulatedWellOrderDTO,
 } from '@/services/simulated-well-api'
 import { fetchScheduleHostDeviceNames } from '@/services/schedule-host-device-api'
+import { listSimulatedWellDownholeWorks } from '@/services/simulated-well-downhole-api'
 import type { CalendarDay, DownholeDevice, TimeSlot, UnscheduledDeviceRow, WorkOrder } from '../types'
 
 function getMonday(d: Date) {
@@ -42,8 +43,20 @@ function normalizeText(val?: string | null) {
   return (val || '').trim()
 }
 
+function normalizeEquipmentId(value: unknown) {
+  if (typeof value !== 'string' && typeof value !== 'number') return ''
+  return String(value).trim()
+}
+
 function normalizeScheduleSegments(
-  segments?: Array<{ scheduled_start_at?: string | null; scheduled_end_at?: string | null }> | null
+  segments?: Array<{
+    scheduled_start_at?: string | null
+    scheduled_end_at?: string | null
+    use_device?: string
+    useDevice?: string
+    equipment_id?: string | number
+    equipmentId?: string | number
+  }> | null
 ) {
   return Array.isArray(segments)
     ? segments
@@ -51,14 +64,44 @@ function normalizeScheduleSegments(
           const scheduledStartAt = normalizeText(segment?.scheduled_start_at)
           const scheduledEndAt = normalizeText(segment?.scheduled_end_at)
           if (!scheduledStartAt || !scheduledEndAt) return null
-          return { scheduledStartAt, scheduledEndAt }
+          return {
+            scheduledStartAt,
+            scheduledEndAt,
+            useDevice: normalizeText(segment?.use_device || segment?.useDevice),
+            equipmentId: normalizeEquipmentId(segment?.equipment_id ?? segment?.equipmentId),
+          }
         })
-        .filter(Boolean) as Array<{ scheduledStartAt: string; scheduledEndAt: string }>
+        .filter(Boolean) as Array<{
+          scheduledStartAt: string
+          scheduledEndAt: string
+          useDevice: string
+          equipmentId: string
+        }>
     : []
 }
 
 function normalizeOrderType(value: unknown): 0 | 1 {
   return Number(value) === 1 ? 1 : 0
+}
+
+const hasDeviceSchedule = (device: {
+  scheduled_start_at?: string | null
+  scheduled_end_at?: string | null
+  schedule_segments?: unknown[] | null
+}) => Boolean(
+  device.schedule_segments?.length
+  || (device.scheduled_start_at && device.scheduled_end_at)
+)
+
+function downholeWorkDevices(value: unknown) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 export function useSimulationWellSchedule() {
@@ -71,23 +114,43 @@ export function useSimulationWellSchedule() {
 
   const workOrders = ref<WorkOrder[]>([])
   const hostDeviceNames = ref<string[]>([])
+  const hostDevicePsiIdsByName = ref<Record<string, string>>({})
 
   const refreshWorkOrders = async () => {
     await initAuth()
     const headers = getAuthHeaders()
     await refreshHostDeviceNames(headers)
-    const orderResponse = await listSimulatedWellOrders(
-      { page: 1, pageSize: 2000, statuses: [1, 2, 4], includeDevices: true },
-      headers
-    )
+    const [orderResponse, downholeResponse] = await Promise.all([
+      listSimulatedWellOrders(
+        { page: 1, pageSize: 2000, statuses: [1, 2, 4], includeDevices: true },
+        headers
+      ),
+      listSimulatedWellDownholeWorks({ page: 1, pageSize: 2000 }, headers),
+    ])
     if (!orderResponse.success || orderResponse.data?.code !== 0) return
+
+    const savedDownholeDeviceIds = new Set<string>()
+    if (downholeResponse.success && downholeResponse.data?.code === 0) {
+      const downholeWorks = downholeResponse.data.data?.list || []
+      downholeWorks.forEach((work) => {
+        downholeWorkDevices(work.devices).forEach((device) => {
+          const record = device as Record<string, unknown>
+          const id = normalizeEquipmentId(record.deviceDbId ?? record.device_db_id ?? record.id)
+          if (id) savedDownholeDeviceIds.add(id)
+        })
+      })
+    }
 
     const combined = orderResponse.data.data?.list || []
     workOrders.value = combined
       .map((dto) => {
         const orderId = dto.task_number
         const devices = dto.devices || []
-        const remainingDevices = devices.filter((d) => !d.is_completed && Number(d.instrument_status || 0) !== 2)
+        const remainingDevices = devices.filter((d) =>
+          !d.is_completed
+          && Number(d.instrument_status || 0) !== 2
+          && (hasDeviceSchedule(d) || !savedDownholeDeviceIds.has(String(d.id ?? '')))
+        )
         return {
           id: orderId,
           dbId: dto.id,
@@ -137,6 +200,8 @@ export function useSimulationWellSchedule() {
     scheduleOwnerDeviceId: string
     deviceName: string
     deviceNumber: string
+    hostDeviceName: string
+    equipmentId: string
     dateStr: string
     startTimeKey: string
     span: number
@@ -181,7 +246,12 @@ export function useSimulationWellSchedule() {
     const segments = device.scheduleSegments?.length
       ? device.scheduleSegments
       : device.scheduledStartAt && device.scheduledEndAt
-        ? [{ scheduledStartAt: device.scheduledStartAt, scheduledEndAt: device.scheduledEndAt }]
+        ? [{
+            scheduledStartAt: device.scheduledStartAt,
+            scheduledEndAt: device.scheduledEndAt,
+            useDevice: '',
+            equipmentId: '',
+          }]
         : []
 
     return segments
@@ -199,6 +269,8 @@ export function useSimulationWellSchedule() {
           scheduleOwnerDeviceId: device.id,
           deviceName: device.name,
           deviceNumber,
+          hostDeviceName: segment.useDevice,
+          equipmentId: segment.equipmentId,
           dateStr,
           startTimeKey,
           span,
@@ -306,6 +378,8 @@ export function useSimulationWellSchedule() {
     orderId: string
     deviceName: string
     deviceNumber: string
+    hostDeviceName: string
+    equipmentId: string
     dateStr: string
     startTimeKey: string
     startIdx: number
@@ -375,6 +449,8 @@ export function useSimulationWellSchedule() {
           orderId: x.ev.orderId,
           deviceName: x.ev.deviceName,
           deviceNumber: x.ev.deviceNumber,
+          hostDeviceName: x.ev.hostDeviceName,
+          equipmentId: x.ev.equipmentId,
           dateStr,
           startTimeKey: x.ev.startTimeKey,
           startIdx: x.startIdx,
@@ -500,6 +576,7 @@ export function useSimulationWellSchedule() {
     }
 
     hostDeviceNames.value = result.names
+    hostDevicePsiIdsByName.value = result.psiIdsByName
   }
 
   const deviceIndex = computed(() => {
@@ -516,7 +593,7 @@ export function useSimulationWellSchedule() {
   const getDeviceRow = (deviceId: string) => deviceIndex.value.get(deviceId) || null
 
   function getEventHostDeviceName(event?: ScheduledEvent | null) {
-    return event?.deviceName?.trim() || '-'
+    return event?.hostDeviceName?.trim() || '-'
   }
 
   const hostDeviceTabs = computed(() => {
@@ -629,6 +706,8 @@ export function useSimulationWellSchedule() {
       scheduleSegments: segments.map((segment) => ({
         scheduled_start_at: segment.scheduledStartAt,
         scheduled_end_at: segment.scheduledEndAt,
+        use_device: segment.hostDeviceName,
+        equipment_id: segment.equipmentId,
       })),
       segments,
     }
@@ -640,7 +719,14 @@ export function useSimulationWellSchedule() {
     data?: {
       scheduled_start_at?: string | null
       scheduled_end_at?: string | null
-      schedule_segments?: Array<{ scheduled_start_at?: string | null; scheduled_end_at?: string | null }>
+      schedule_segments?: Array<{
+        scheduled_start_at?: string | null
+        scheduled_end_at?: string | null
+        use_device?: string
+        useDevice?: string
+        equipment_id?: string | number
+        equipmentId?: string | number
+      }>
     }
   ) {
     const row = getDeviceRow(scheduleOwnerDeviceId)
@@ -651,6 +737,8 @@ export function useSimulationWellSchedule() {
     const payloadSegments = schedule?.scheduleSegments.map((segment) => ({
       scheduledStartAt: segment.scheduled_start_at,
       scheduledEndAt: segment.scheduled_end_at,
+      useDevice: segment.use_device,
+      equipmentId: segment.equipment_id,
     })) || []
     row.device.scheduleSegments = responseSegments.length ? responseSegments : payloadSegments
     const selectedThisOwner = selectedScheduledEventIds.value.some(
@@ -675,6 +763,21 @@ export function useSimulationWellSchedule() {
     const schedule = getScheduleChangePayload(scheduleOwnerDeviceId)
     if (!row?.device?.dbId) return true
 
+    const invalidSegment = schedule?.segments.find((segment) => !segment.hostDeviceName || !segment.equipmentId)
+    if (schedule && invalidSegment) {
+      if (fallback !== undefined) setOwnerEvents(scheduleOwnerDeviceId, fallback)
+      if (!invalidSegment.hostDeviceName) {
+        ElMessage.warning('请先选择主机后再保存排期')
+      } else {
+        ElMessage({
+          type: 'warning',
+          message: `测试台 ${invalidSegment.hostDeviceName} 缺少 psi_id，请刷新主机列表后重新排期`,
+          grouping: true,
+        })
+      }
+      return false
+    }
+
     markPendingSchedule(scheduleOwnerDeviceId, getOwnerEvents(scheduleOwnerDeviceId))
     try {
       const authOk = await initAuth()
@@ -698,12 +801,28 @@ export function useSimulationWellSchedule() {
 
       if (!resp.success || !resp.data || resp.data.code !== 0) {
         if (fallback !== undefined) setOwnerEvents(scheduleOwnerDeviceId, fallback)
-        ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        if (resp.status === 401) {
+          ElMessage.error('登录状态失效，请重新登录后再保存排期')
+        } else if (resp.status === 403) {
+          ElMessage.error('当前账号没有模拟井排程权限，请联系管理员开通权限')
+        } else {
+          ElMessage.error(resp.data?.msg || resp.error || '排期保存失败')
+        }
         return false
       }
 
       if (schedule) {
         applySavedDeviceSchedule(scheduleOwnerDeviceId, schedule, resp.data.data)
+        const assistantSync = resp.data.data?.assistantSync
+        if (assistantSync?.queued === true) {
+          ElMessage.info('排程已保存，小助手同步处理中')
+        } else if (assistantSync?.success === false) {
+          const reason = assistantSync.error
+            || assistantSync.list?.find((item) => item.error || item.reason)?.error
+            || assistantSync.list?.find((item) => item.error || item.reason)?.reason
+            || ''
+          ElMessage.warning(`排期已保存，但第三方排期同步失败${reason ? `：${reason}` : ''}`)
+        }
       } else {
         row.device.scheduledStartAt = null
         row.device.scheduledEndAt = null
@@ -825,6 +944,20 @@ export function useSimulationWellSchedule() {
     if (!order || !order.deviceList.length) return
     const ownerDevice = getScheduleOwnerDevice(order)
     if (!ownerDevice) return
+    const scheduleHostDeviceName = activeHostDeviceName.value.trim()
+    if (!scheduleHostDeviceName) {
+      ElMessage.warning('请先选择主机后再保存排期')
+      return
+    }
+    const scheduleHostEquipmentId = hostDevicePsiIdsByName.value[scheduleHostDeviceName] || ''
+    if (!scheduleHostEquipmentId) {
+      ElMessage({
+        type: 'warning',
+        message: `测试台 ${scheduleHostDeviceName} 缺少 psi_id，请刷新主机列表后重新排期`,
+        grouping: true,
+      })
+      return
+    }
 
     const startIdx = timeKeyToIndex.value[timeKey]
     const maxSpan = startIdx === undefined ? 1 : Math.max(1, timeSlots.value.length - 1 - startIdx)
@@ -837,6 +970,8 @@ export function useSimulationWellSchedule() {
       scheduleOwnerDeviceId: ownerDevice.id,
       deviceName: normalizeText(meta?.label) || ownerDevice.name || order.id,
       deviceNumber: ownerDevice.code || ownerDevice.sn || '',
+      hostDeviceName: scheduleHostDeviceName,
+      equipmentId: scheduleHostEquipmentId,
       dateStr,
       startTimeKey: timeKey,
       span: Math.min(1, maxSpan)
@@ -987,6 +1122,8 @@ export function useSimulationWellSchedule() {
       scheduleOwnerDeviceId: ev.scheduleOwnerDeviceId,
       deviceName: ev.deviceName,
       deviceNumber: ev.deviceNumber,
+      hostDeviceName: ev.hostDeviceName,
+      equipmentId: ev.equipmentId,
       dateStr: ev.dateStr,
       startTimeKey: ev.startTimeKey,
       span: nextSpan
@@ -1020,6 +1157,8 @@ export function useSimulationWellSchedule() {
       scheduleOwnerDeviceId: ev.scheduleOwnerDeviceId,
       deviceName: ev.deviceName,
       deviceNumber: ev.deviceNumber,
+      hostDeviceName: ev.hostDeviceName,
+      equipmentId: ev.equipmentId,
       dateStr: ev.dateStr,
       startTimeKey: nextStartKey,
       span: nextSpan

@@ -12,6 +12,8 @@ export interface DeviceItem {
   scheduleSegments?: Array<{
     scheduledStartAt: string
     scheduledEndAt: string
+    useDevice: string
+    equipmentId: string
   }>
   instrumentStatus?: number
   isCompleted?: boolean
@@ -71,6 +73,8 @@ export interface ScheduledItem {
   orderId: string
   deviceName?: string
   deviceNumber?: string
+  hostDeviceName: string
+  equipmentId: string
   dateStr: string
   startTimeKey: string
   startIdx: number

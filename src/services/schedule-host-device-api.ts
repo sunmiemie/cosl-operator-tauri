@@ -30,7 +30,8 @@ const EQUIPMENT_MODEL_KEYWORDS: Record<ScheduleHostEquipment, string[]> = {
   'halt-hass': ['HALT-HASS', 'HALT', 'HASS'],
   'vibration-table': ['振动台', '冲击台'],
   'water-cycle': ['水循环'],
-  'simulated-well': ['模拟井'],
+  // 设备台账中的正式型号为 MSY-800，实例名称通常为“模拟井”。
+  'simulated-well': ['模拟井', 'MSY-800'],
   'high-temp-box': ['高温箱'],
 }
 
