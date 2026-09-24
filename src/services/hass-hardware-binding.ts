@@ -380,8 +380,8 @@ export function externalizeHassRuntimeGraph<
     for (const sourceEdge of incoming) {
       for (const targetEdge of outgoing) {
         if (
-          externalNodeIds.has(sourceEdge.source)
-          || externalNodeIds.has(targetEdge.target)
+          sourceEdge.source === externalNodeId
+          || targetEdge.target === externalNodeId
           || sourceEdge.source === targetEdge.target
         ) {
           continue
@@ -395,7 +395,7 @@ export function externalizeHassRuntimeGraph<
         if (duplicate) continue
         runtimeEdges.push({
           ...sourceEdge,
-          id: `client-managed-bypass-${externalNodeId}-${sourceEdge.source}-${targetEdge.target}`,
+          id: `client-managed-bypass-${externalNodeId}-${sourceEdge.source}-${targetEdge.target}-${runtimeEdges.length}`,
           source: sourceEdge.source,
           target: targetEdge.target,
           sourceHandle: sourceEdge.sourceHandle,
