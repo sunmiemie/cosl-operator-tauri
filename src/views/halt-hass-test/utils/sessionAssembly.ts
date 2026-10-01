@@ -13,6 +13,17 @@ export function validateSessionAssembly(params: {
   eligibleBoards: HaltHassTargetBoard[]
 }): SessionAssemblyValidationResult {
   const { processId, rule, assignments, eligibleBoards } = params
+  if (!Number.isSafeInteger(rule.slotCount) || rule.slotCount <= 0 ||
+      !Number.isSafeInteger(rule.minimumTargetBoards) || rule.minimumTargetBoards < 0 ||
+      rule.minimumTargetBoards > rule.slotCount) {
+    return { valid: false, message: '工艺板位数量配置无效' }
+  }
+  const slotNumbers = assignments.map(item => item.slotNo)
+  if (slotNumbers.some(slotNo => !Number.isSafeInteger(slotNo) || slotNo < 1 || slotNo > rule.slotCount) ||
+      new Set(slotNumbers).size !== slotNumbers.length ||
+      assignments.some(item => !['target', 'companion', 'empty'].includes(item.role))) {
+    return { valid: false, message: '板位编号重复、越界或角色无效' }
+  }
   const occupied = assignments.filter(item => item.role !== 'empty')
   const targets = assignments.filter(item => item.role === 'target')
   if (targets.length < rule.minimumTargetBoards) {
@@ -35,6 +46,9 @@ export function validateSessionAssembly(params: {
       }
       if (!assignment.allowedBoardModelIds.includes(target.boardModelId)) {
         return { valid: false, message: `${assignment.slotName} 不支持目标板型号 ${target.boardModelName}` }
+      }
+      if (typeof target.serial !== 'string' || !target.serial.trim()) {
+        return { valid: false, message: `${assignment.slotName} 的目标板 SN 不能为空` }
       }
       const serial = target.serial.trim().toUpperCase()
       if (serials.has(serial)) return { valid: false, message: '同一场次不能重复使用相同 SN' }
