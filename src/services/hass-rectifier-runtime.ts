@@ -39,32 +39,40 @@ export function createRectifierStageTracker(
   maximumSampleGapSeconds = 10,
   startingStageIndex = 0,
 ): RectifierStageTracker {
+  if (![toleranceC, stableDurationSeconds, maximumSampleGapSeconds].every(
+    value => Number.isFinite(value) && value >= 0,
+  ) || !Number.isSafeInteger(startingStageIndex) || startingStageIndex < 0) {
+    throw new Error('温度稳定判断参数必须为有效的非负数，阶段号必须为非负整数')
+  }
   let candidateTarget: number | null = null
-  let stableSince = 0
+  let stableSince: number | null = null
   let lockedTarget: number | null = null
   let stageIndex = Math.max(0, Math.floor(startingStageIndex))
-  let lastReceivedAt = 0
+  let lastReceivedAt: number | null = null
 
   function resetCandidate(target: number | null): void {
     candidateTarget = target
-    stableSince = 0
+    stableSince = null
   }
 
   return {
     observe(sample) {
       const target = sample.targetTemperature
       const actual = sample.actualTemperature
-      if (target === null || actual === null) {
-        resetCandidate(target)
-        lastReceivedAt = sample.receivedAt
+      if (target === null || actual === null || !Number.isFinite(target)
+        || !Number.isFinite(actual) || !Number.isFinite(sample.receivedAt)
+        || !Number.isFinite(sample.totalTime) || sample.totalTime < 0) {
+        resetCandidate(null)
+        lastReceivedAt = null
         return null
       }
 
       if (
-        lastReceivedAt
-        && sample.receivedAt - lastReceivedAt > maximumSampleGapSeconds * 1000
+        lastReceivedAt !== null
+        && (sample.receivedAt < lastReceivedAt
+          || sample.receivedAt - lastReceivedAt > maximumSampleGapSeconds * 1000)
       ) {
-        stableSince = 0
+        stableSince = null
       }
       lastReceivedAt = sample.receivedAt
 
@@ -82,16 +90,16 @@ export function createRectifierStageTracker(
       }
 
       if (Math.abs(target - actual) > toleranceC) {
-        stableSince = 0
+        stableSince = null
         return null
       }
 
-      if (!stableSince) stableSince = sample.receivedAt
+      if (stableSince === null) stableSince = sample.receivedAt
       if (sample.receivedAt - stableSince < stableDurationSeconds * 1000) return null
 
       stageIndex += 1
       lockedTarget = target
-      stableSince = 0
+      stableSince = null
       return {
         ...sample,
         stageIndex,
@@ -100,10 +108,10 @@ export function createRectifierStageTracker(
     },
     reset() {
       candidateTarget = null
-      stableSince = 0
+      stableSince = null
       lockedTarget = null
       stageIndex = Math.max(0, Math.floor(startingStageIndex))
-      lastReceivedAt = 0
+      lastReceivedAt = null
     },
   }
 }
