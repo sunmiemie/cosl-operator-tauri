@@ -181,6 +181,19 @@ export async function executeRectifierTemperatureStage(
   delay: (milliseconds: number) => Promise<void>,
   now: () => Date = () => new Date(),
 ): Promise<HaltHassRectifierTemperatureStageRecord> {
+  // 在任何设备调用前校验完整方案，避免执行到一半才发现损坏的配置。
+  const positive = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0
+  const validRange = (range: { min: number; max: number }) => range
+    && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min <= range.max
+  if (!Array.isArray(config.inputVoltageSteps) || !config.inputVoltageSteps.length
+    || !config.inputVoltageSteps.every(positive) || !positive(config.sourceCurrentLimitA)
+    || !positive(config.halfLoad?.load48Ohm) || !positive(config.halfLoad?.load90Ohm)
+    || !positive(config.fullLoad?.load48Ohm) || !positive(config.fullLoad?.load90Ohm)
+    || ![config.voltageSettleSeconds, config.halfLoadSettleSeconds, config.fullLoadSettleSeconds]
+      .every(value => Number.isFinite(value) && value >= 0 && value * 1000 <= 2147483647)
+    || !validRange(config.output48VoltageRange) || !validRange(config.output90VoltageRange)) {
+    throw new Error('整流板执行方案包含无效电压、负载、等待时间或判定范围')
+  }
   const startedAt = now().toISOString()
   const voltageSteps: HaltHassRectifierTemperatureStageRecord['voltageSteps'] = []
 
