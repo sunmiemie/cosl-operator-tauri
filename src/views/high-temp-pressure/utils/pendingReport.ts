@@ -98,10 +98,13 @@ function isValidPendingReport(value: unknown): value is HighTempPressurePendingR
   if (!value || typeof value !== 'object') return false
   const parsed = value as Partial<HighTempPressurePendingReport>
   return parsed.version === 1 &&
+    (parsed.phase === 'finishing' || parsed.phase === 'report') &&
     Array.isArray(parsed.selections) &&
     parsed.selections.length > 0 &&
-    !!String(parsed.exportedCaptureDir || '').trim() &&
-    !!String(parsed.clientSubmitId || '').trim()
+    parsed.selections.every(item => item !== null && typeof item === 'object' && !Array.isArray(item)) &&
+    typeof parsed.exportedCaptureDir === 'string' && !!parsed.exportedCaptureDir.trim() &&
+    typeof parsed.clientSubmitId === 'string' && !!parsed.clientSubmitId.trim() &&
+    typeof parsed.savedAt === 'string' && Number.isFinite(Date.parse(parsed.savedAt))
 }
 
 function sortPendingReports(reports: HighTempPressurePendingReport[]) {
@@ -110,15 +113,17 @@ function sortPendingReports(reports: HighTempPressurePendingReport[]) {
 
 export function loadPendingHighTempPressureReports(): HighTempPressurePendingReport[] {
   try {
-    window.localStorage.removeItem(LEGACY_PENDING_REPORT_STORAGE_KEY)
+    try {
+      window.localStorage.removeItem(LEGACY_PENDING_REPORT_STORAGE_KEY)
+    } catch {
+      // 旧键清理失败不应隐藏仍可读取的报告。
+    }
 
     const listRaw = window.localStorage.getItem(PENDING_REPORT_LIST_STORAGE_KEY)
     if (listRaw) {
       const parsed = JSON.parse(listRaw) as unknown
       const reports = Array.isArray(parsed) ? parsed.filter(isValidPendingReport) : []
-      if (reports.length !== (Array.isArray(parsed) ? parsed.length : 0)) {
-        window.localStorage.setItem(PENDING_REPORT_LIST_STORAGE_KEY, JSON.stringify(reports))
-      }
+      // 读取时只过滤，保留原始数据供恢复，且不依赖可写存储。
       return sortPendingReports(reports)
     }
 
