@@ -140,18 +140,19 @@ export interface BuildSimulatedWellDownholeWorkPayloadOptions {
 
 const simulatedWellText = (value: unknown) => String(value ?? '').trim()
 
-export function stripSimulatedWellUnit(value: unknown, unit: 'm' | '℃' | 'MPa') {
+export function stripSimulatedWellUnit(value: unknown, unit: 'm' | '℃' | 'inch' | 'Ω.m') {
   const text = simulatedWellText(value)
   if (!text || text === '-') return text
   const suffixPattern = {
     m: /\s*m$/i,
     '℃': /\s*(?:℃|°\s*C)$/i,
-    MPa: /\s*MPa$/i,
+    inch: /\s*inch$/i,
+    'Ω.m': /\s*Ω\.m$/i,
   }[unit]
   return text.replace(suffixPattern, '').trim()
 }
 
-function formatSimulatedWellUnit(value: unknown, unit: 'm' | '℃' | 'MPa') {
+function formatSimulatedWellUnit(value: unknown, unit: 'm' | '℃' | 'inch' | 'Ω.m') {
   const text = simulatedWellText(value)
   if (!text || text === '-') return text || '-'
   const normalized = stripSimulatedWellUnit(text, unit)
@@ -175,11 +176,12 @@ export function formatSimulatedWellEnvironment(value: unknown) {
   if (typeof value === 'string') {
     const text = value.trim()
     if (!text) return '-'
-    const values = namedValues(text, ['井深', '井温', '井压'])
+    const values = namedValues(text, ['井深', '井温', '井眼', '泥浆电阻率'])
     const parts = [
       values['井深'] ? `井深: ${formatSimulatedWellUnit(values['井深'], 'm')}` : '',
       values['井温'] ? `井温: ${formatSimulatedWellUnit(values['井温'], '℃')}` : '',
-      values['井压'] ? `井压: ${formatSimulatedWellUnit(values['井压'], 'MPa')}` : '',
+      values['井眼'] ? `井眼: ${formatSimulatedWellUnit(values['井眼'], 'inch')}` : '',
+      values['泥浆电阻率'] ? `泥浆电阻率: ${formatSimulatedWellUnit(values['泥浆电阻率'], 'Ω.m')}` : '',
     ].filter(Boolean)
     return parts.length ? parts.join(' / ') : text
   }
@@ -189,11 +191,13 @@ export function formatSimulatedWellEnvironment(value: unknown) {
   if (text !== undefined && text !== null && `${text}`.trim() !== '') return formatSimulatedWellEnvironment(String(text))
   const depth = env?.wellDepth ?? env?.depth
   const temperature = env?.wellTemperature ?? env?.temperature
-  const pressure = env?.wellPressure ?? env?.pressure
+  const wellbore = env?.wellbore
+  const mudResistivity = env?.mudResistivity
   const parts = [
     depth !== undefined && depth !== null && `${depth}`.trim() !== '' ? `井深: ${formatSimulatedWellUnit(depth, 'm')}` : '',
     temperature !== undefined && temperature !== null && `${temperature}`.trim() !== '' ? `井温: ${formatSimulatedWellUnit(temperature, '℃')}` : '',
-    pressure !== undefined && pressure !== null && `${pressure}`.trim() !== '' ? `井压: ${formatSimulatedWellUnit(pressure, 'MPa')}` : '',
+    wellbore !== undefined && wellbore !== null && `${wellbore}`.trim() !== '' ? `井眼: ${formatSimulatedWellUnit(wellbore, 'inch')}` : '',
+    mudResistivity !== undefined && mudResistivity !== null && `${mudResistivity}`.trim() !== '' ? `泥浆电阻率: ${formatSimulatedWellUnit(mudResistivity, 'Ω.m')}` : '',
   ].filter(Boolean)
   return parts.length ? parts.join(' / ') : '-'
 }
@@ -202,11 +206,12 @@ export function formatSimulatedWellEnvironment(value: unknown) {
 export function parseSimulatedWellEnvironment(value: unknown) {
   const env: any = value && typeof value === 'object' ? value : {}
   const text = typeof value === 'string' ? value : String(env?.text ?? env?.env_text ?? '')
-  const values = namedValues(text, ['井深', '井温', '井压'])
+  const values = namedValues(text, ['井深', '井温', '井眼', '泥浆电阻率'])
   return {
     wellDepth: stripSimulatedWellUnit(values['井深'] ?? env?.wellDepth ?? env?.depth, 'm'),
     wellTemperature: stripSimulatedWellUnit(values['井温'] ?? env?.wellTemperature ?? env?.temperature, '℃'),
-    wellPressure: stripSimulatedWellUnit(values['井压'] ?? env?.wellPressure ?? env?.pressure, 'MPa'),
+    wellbore: stripSimulatedWellUnit(values['井眼'] ?? env?.wellbore, 'inch'),
+    mudResistivity: stripSimulatedWellUnit(values['泥浆电阻率'] ?? env?.mudResistivity, 'Ω.m'),
   }
 }
 
@@ -268,12 +273,15 @@ export function parseSimulatedWellInterval(value: unknown) {
 }
 
 function buildEnvironmentText(payload: any) {
+  const environment = parseSimulatedWellEnvironment(payload?.testEnvironment)
   return [
-    payload?.testEnvironment?.wellDepth ? `井深:${payload.testEnvironment.wellDepth}` : '',
-    payload?.testEnvironment?.wellTemperature ? `井温:${payload.testEnvironment.wellTemperature}` : '',
-    payload?.testEnvironment?.wellPressure ? `井压:${payload.testEnvironment.wellPressure}` : ''
+    ['井深', environment.wellDepth],
+    ['井温', environment.wellTemperature],
+    ['井眼', environment.wellbore],
+    ['泥浆电阻率', environment.mudResistivity],
   ]
-    .filter(Boolean)
+    .filter(([, value]) => value !== '')
+    .map(([label, value]) => `${label}:${value}`)
     .join(' ')
 }
 

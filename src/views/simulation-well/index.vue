@@ -6,6 +6,7 @@ import DownholeWork from './downhole-work.vue'
 import EquipmentPackage from './equipment-package.vue'
 import SimulationWellDashboard from './components/SimulationWellDashboard.vue'
 import TestReport from './test-report.vue'
+import { groupSupportingDevices } from './supporting-groups'
 import TestMonitor from './test-monitor.vue'
 import { useSimulationWellSchedule } from './composables/useSimulationWellScheduleV2'
 import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
@@ -366,6 +367,8 @@ function splitLines(value: string) {
     .map((item) => item.trim())
     .filter(Boolean)
 }
+
+const activeTestDeviceGroups = computed(() => groupSupportingDevices(activeTestDevices.value))
 
 function selectedSupportTools(device: any) {
   const selected = Array.isArray(device?.selectedSupportingTools) ? device.selectedSupportingTools : []
@@ -766,17 +769,17 @@ async function handleSaveDownhole(payload: any) {
             <span class="active-count">{{ activeTestDevices.length }} 个产品</span>
           </div>
           <div v-if="!activeTestDevices.length" class="empty-state"><p>暂无测试产品</p></div>
-          <div v-for="device in activeTestDevices" :key="device?.id || device?.sn || device?.deviceName" class="combo-box">
+          <div v-for="group in activeTestDeviceGroups" :key="group.key" class="combo-box">
             <div class="combo-head">
-              <span class="combo-template">{{ device?.template || 'DEFAULT' }}</span>
-              <span>{{ device?.templateName || device?.deviceName || device?.name || '-' }}</span>
+              <span class="combo-template">{{ group.members[0]?.template || 'DEFAULT' }}</span>
+              <span>{{ group.members[0]?.templateName || '待测仪器' }}</span>
             </div>
-            <div class="combo-line ok">
+            <div v-for="device in group.members" :key="device.id || formatDeviceSn(device)" class="combo-line ok">
               <span>✓ {{ device?.deviceName || device?.name || '-' }}</span>
               <span>{{ formatDeviceSn(device) || '-' }}</span>
             </div>
             <div
-              v-for="tool in selectedSupportTools(device)"
+              v-for="tool in selectedSupportTools(group.members[0])"
               :key="`${tool?.templateInstrumentCode || tool?.code}-${tool?.internalInstrumentSn || tool?.externalInstrumentModel}`"
               class="combo-line support"
             >

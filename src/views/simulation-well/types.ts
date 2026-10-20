@@ -94,3 +94,21 @@ export interface UnscheduledDeviceRow {
   deviceName: string
   deviceNumber: string
 }
+
+// 模拟井报告按同作业、同工单和有效模板分组。
+export type ReportDevice = {
+  id: string
+  orderId: string
+  orderDbId?: number
+  deviceDbId?: number
+  customer: string
+  deviceName: string
+  sn: string
+  template: string
+  orderType: 0 | 1
+}
+
+export type ResolvedReportDevice = ReportDevice & { templateId?: number; templateError?: string }
+export type ReportGroup = ResolvedReportDevice & { members: ReportDevice[] }
+
+export type SupportingDeviceGroup<T> = { key: string; members: T[] }

@@ -65,8 +65,8 @@ assert.match(
 
 assert.match(
   packageContent,
-  /testEnvironment:\s*\{\s*wellDepth:\s*wellDepth\.value,\s*wellTemperature:\s*wellTemperature\.value,\s*wellPressure:\s*wellPressure\.value\s*\}/,
-  'equipment-package should save well temperature and well pressure with the downhole environment'
+  /testEnvironment:\s*\{\s*wellDepth:\s*wellDepth\.value,\s*wellTemperature:\s*wellTemperature\.value,\s*wellbore:\s*wellbore\.value,\s*mudResistivity:\s*mudResistivity\.value\s*\}/,
+  'equipment-package should save depth, temperature, wellbore and mud resistivity with the downhole environment'
 )
 
 assert.match(
@@ -95,14 +95,14 @@ assert.match(
 )
 assert.match(
   packageContent,
-  /wellTemperature\.value = stripSimulatedWellUnit\(temp, '℃'\)/,
-  'editing a historical work should strip a Celsius suffix before refilling the input'
+  /wellTemperature\.value = environment\.wellTemperature/,
+  'editing a work should refill temperature through the shared environment parser'
 )
 
 assert.match(
   packageContent,
-  /<span class="input-label">井压：<\/span>[\s\S]*?<span class="input-unit">MPa<\/span>/,
-  'equipment-package should display the well pressure input'
+  /<span class="input-label">井眼：<\/span>[\s\S]*?<span class="input-unit">inch<\/span>/,
+  'equipment-package should display the wellbore input'
 )
 
 assert.match(
@@ -222,3 +222,6 @@ assert.match(
 )
 
 console.log('simulation-well restore assertions passed')
+
+assert.match(packageContent, /<span class="input-label">泥浆电阻率：<\/span>[\s\S]*?<span class="input-unit">Ω\.m<\/span>/)
+assert.doesNotMatch(packageContent, /wellPressure|井压：/)

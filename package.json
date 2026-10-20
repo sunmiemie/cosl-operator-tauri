@@ -9,6 +9,8 @@
     "prepare:ocr-runtime": "node scripts/prepare-ocr-runtime.mjs",
     "test:halt-hass": "node tests/halt-hass-real-link.test.mjs",
     "test:halt-hass-session": "node --experimental-strip-types --test tests/halt-hass-session-acceptance.test.mjs",
+    "test:simulation-well-report": "node --experimental-strip-types --test tests/simulation-well-report-groups.test.mjs",
+    "test:simulation-well-supporting": "node --experimental-strip-types --test tests/simulation-well-supporting-tools.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

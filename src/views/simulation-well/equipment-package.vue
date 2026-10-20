@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import { ElMessage } from 'element-plus'
 import { useAuth } from '@/composables/useAuth'
+import { groupSupportingDevices, supportingGroupKey } from './supporting-groups'
 import {
   getSimulatedWellReportTemplateDetail,
   listSimulatedWellReportTemplates,
@@ -72,6 +73,7 @@ const externalInstrumentModelMap = ref<Record<string, string>>({})
 const internalInstrumentOptionsMap = ref<Record<string, SimInstrumentListItem[]>>({})
 const internalInstrumentLoadingMap = ref<Record<string, boolean>>({})
 const internalInstrumentMessageMap = ref<Record<string, string>>({})
+const internalRequestVersions = new Map<string, number>()
 const researchInstrumentMap = ref<Record<string, TemplateInstrument[]>>({})
 const instrumentPickerVisible = ref(false)
 const instrumentPickerLoading = ref(false)
@@ -392,7 +394,7 @@ const startedOrderDevices = computed(() => {
     )
     const isResearchTemplateMode = orderType === 1 && !!resolvedTemplate.templateCode
     const persistedTemplateCode = findTemplateByCode(persistedTemplate)?.report_no || persistedTemplate
-    const restoresPersistedTemplate = isResearchTemplateMode
+    const restoresPersistedTemplate = Boolean(persistedTemplateCode)
       && normalizeCode(persistedTemplateCode) === normalizeCode(resolvedTemplate.templateCode)
     const availableTools = orderType === 1
       ? (isResearchTemplateMode
@@ -401,7 +403,7 @@ const startedOrderDevices = computed(() => {
               resolvedTemplate.supportTools,
             )
           : [])
-      : mergeInstrumentLists(sourceAvailableTools, resolvedTemplate.supportTools)
+      : mergeInstrumentLists(restoresPersistedTemplate ? sourceAvailableTools : [], resolvedTemplate.supportTools)
     const selectedToolSource = getSourceToolList(
       device,
       ['selectedSupportingTools', 'selected_supporting_tools', 'supportingTools', 'supporting_tools'],
@@ -410,7 +412,7 @@ const startedOrderDevices = computed(() => {
       ? (isResearchTemplateMode
           ? mergeInstrumentLists(restoresPersistedTemplate ? selectedToolSource : [])
           : normalizeResearchSelectedTools(selectedToolSource))
-      : mergeInstrumentLists(selectedToolSource)
+      : mergeInstrumentLists(restoresPersistedTemplate ? selectedToolSource : [])
     grouped.get(orderId).deviceList.push({
       id: device?.id || `${orderId}_${device?.sn || index + 1}`,
       deviceDbId: device?.deviceDbId || device?.dbId,
@@ -658,9 +660,10 @@ const selectedSupportingOrders = computed(() =>
   startedOrderDevices.value
     .map((order: any) => ({
       ...order,
-      deviceList: (order.deviceList || []).filter(
-        (device: ResolvedDeviceRow) => usesTemplateToolMode(order, device) && device.supportTools?.length,
-      ),
+      deviceList: groupSupportingDevices((order.deviceList || [])
+        .filter((device: ResolvedDeviceRow) => usesTemplateToolMode(order, device) && device.supportTools?.length)
+        .map((device: ResolvedDeviceRow) => ({ ...device, orderId: order.id, orderDbId: order.orderDbId })))
+        .map((group) => ({ ...group.members[0], members: group.members })),
     }))
     .filter((order: any) => order.deviceList.length),
 )
@@ -731,33 +734,22 @@ watch(
 
 function getSupportToolKey(orderId: string, device: ResolvedDeviceRow, tool: TemplateInstrument) {
   return [
-    orderId,
-    device.id,
-    normalizeCode(device.template),
+    supportingGroupKey(orderId, device.template, device.id),
     normalizeCode(tool.code),
     normalizeText(tool.zh || tool.en || tool.code),
   ].join('::')
 }
 
-function clearDeviceToolState(orderId: string, device: ResolvedDeviceRow) {
-  const prefix = `${orderId}::${device.id}::`
-  const withoutDevice = <T>(map: Record<string, T>) =>
-    Object.fromEntries(Object.entries(map).filter(([key]) => !key.startsWith(prefix))) as Record<string, T>
-
-  selectedSupportToolMap.value = withoutDevice(selectedSupportToolMap.value)
-  selectedInternalInstrumentMap.value = withoutDevice(selectedInternalInstrumentMap.value)
-  externalInstrumentModelMap.value = withoutDevice(externalInstrumentModelMap.value)
-  internalInstrumentOptionsMap.value = withoutDevice(internalInstrumentOptionsMap.value)
-  internalInstrumentLoadingMap.value = withoutDevice(internalInstrumentLoadingMap.value)
-  internalInstrumentMessageMap.value = withoutDevice(internalInstrumentMessageMap.value)
+function clearDeviceToolState(device: ResolvedDeviceRow) {
+  // 模板组状态由有效分组统一清理，不能因单台切换删除其他组员的选择。
   researchInstrumentMap.value = {
     ...researchInstrumentMap.value,
     [device.stateKey]: [],
   }
 }
 
-function handleTemplateChange(orderId: string, device: ResolvedDeviceRow) {
-  clearDeviceToolState(orderId, device)
+function handleTemplateChange(_orderId: string, device: ResolvedDeviceRow) {
+  clearDeviceToolState(device)
 }
 
 function getSelectedToolSnapshot(device: ResolvedDeviceRow, tool: TemplateInstrument) {
@@ -834,9 +826,17 @@ function buildStructuredTool(orderId: string, device: ResolvedDeviceRow, tool: T
   }
 }
 
+function isSupportKeyActive(key: string) {
+  return selectedSupportingOrders.value.some((order: any) => order.deviceList.some((device: ResolvedDeviceRow) =>
+    device.supportTools.some((tool) => getSupportToolKey(order.id, device, tool) === key)))
+}
+
 async function loadInternalInstrumentOptions(orderId: string, device: ResolvedDeviceRow, tool: TemplateInstrument) {
   const key = getSupportToolKey(orderId, device, tool)
   if (internalInstrumentLoadingMap.value[key]) return
+  const version = (internalRequestVersions.get(key) || 0) + 1
+  internalRequestVersions.set(key, version)
+  const isCurrent = () => internalRequestVersions.get(key) === version && isSupportKeyActive(key)
   internalInstrumentLoadingMap.value = { ...internalInstrumentLoadingMap.value, [key]: true }
   internalInstrumentMessageMap.value = { ...internalInstrumentMessageMap.value, [key]: '' }
   try {
@@ -860,6 +860,7 @@ async function loadInternalInstrumentOptions(orderId: string, device: ResolvedDe
         rows = byName.data.data?.list || []
       }
     }
+    if (!isCurrent()) return
     const selectedSnapshot = getSelectedToolSnapshot(device, tool)
     const savedInstrument = selectedSnapshot ? toolToSimInstrument(selectedSnapshot) : null
     const availableRows = savedInstrument && !rows.some((item) =>
@@ -882,7 +883,7 @@ async function loadInternalInstrumentOptions(orderId: string, device: ResolvedDe
       internalInstrumentMessageMap.value = { ...internalInstrumentMessageMap.value, [key]: '未找到可选内部仪器' }
     }
   } finally {
-    internalInstrumentLoadingMap.value = { ...internalInstrumentLoadingMap.value, [key]: false }
+    if (isCurrent()) internalInstrumentLoadingMap.value = { ...internalInstrumentLoadingMap.value, [key]: false }
   }
 }
 
@@ -962,10 +963,12 @@ const resolvedDownholeDevices = computed(() =>
   startedOrderDevices.value.flatMap((order: any) =>
     (order.deviceList || []).map((device: ResolvedDeviceRow) => {
       const templateToolMode = usesTemplateToolMode(order, device)
+      const group = selectedSupportingOrders.value.find((item: any) => item.id === order.id)?.deviceList
+        .find((item: ResolvedDeviceRow) => normalizeCode(item.template) === normalizeCode(device.template))
       const selectedTools = templateToolMode
-        ? (device.supportTools || [])
-            .filter((tool) => isToolSelected(order.id, device, tool))
-            .map((tool) => buildStructuredTool(order.id, device, tool))
+        ? (group?.supportTools || [])
+            .filter((tool: TemplateInstrument) => isToolSelected(order.id, group!, tool))
+            .map((tool: TemplateInstrument) => buildStructuredTool(order.id, group!, tool))
         : getResearchInstruments(device).map(buildResearchTool)
       return {
         id: device.id,
@@ -1040,7 +1043,8 @@ const repairOrderNumber = ref('')
 
 const wellDepth = ref('')
 const wellTemperature = ref('')
-const wellPressure = ref('')
+const wellbore = ref('')
+const mudResistivity = ref('')
 
 const mainIntervalFrom = ref('')
 const mainIntervalTo = ref('')
@@ -1092,7 +1096,8 @@ function loadTodayTestEnvironment() {
     if (!data || data.date !== todayText()) return
     wellDepth.value = data.wellDepth || wellDepth.value
     wellTemperature.value = data.wellTemperature || wellTemperature.value
-    wellPressure.value = data.wellPressure || wellPressure.value
+    wellbore.value = data.wellbore ?? wellbore.value
+    mudResistivity.value = data.mudResistivity ?? mudResistivity.value
     mainIntervalFrom.value = data.mainIntervalFrom || mainIntervalFrom.value
     mainIntervalTo.value = data.mainIntervalTo || mainIntervalTo.value
     repeatIntervalFrom.value = data.repeatIntervalFrom || repeatIntervalFrom.value
@@ -1107,7 +1112,8 @@ function saveTodayTestEnvironment() {
       date: todayText(),
       wellDepth: wellDepth.value,
       wellTemperature: wellTemperature.value,
-      wellPressure: wellPressure.value,
+      wellbore: wellbore.value,
+      mudResistivity: mudResistivity.value,
       mainIntervalFrom: mainIntervalFrom.value,
       mainIntervalTo: mainIntervalTo.value,
       repeatIntervalFrom: repeatIntervalFrom.value,
@@ -1183,7 +1189,8 @@ watch(
     const environment = parseSimulatedWellEnvironment(work.env_text ?? work.test_environment ?? work.testEnvironment)
     wellDepth.value = environment.wellDepth
     wellTemperature.value = environment.wellTemperature
-    wellPressure.value = environment.wellPressure
+    wellbore.value = environment.wellbore
+    mudResistivity.value = environment.mudResistivity
     const interval = parseSimulatedWellInterval(work.interval_text ?? work.test_interval ?? work.testInterval)
     mainIntervalFrom.value = interval.mainFrom
     mainIntervalTo.value = interval.mainTo
@@ -1275,7 +1282,7 @@ function saveDownholeOperation() {
     testType: shouldShowTestInformation.value ? selectedTestType.value : '',
     testCount: shouldShowTestInformation.value ? testCount.value : '',
     repairOrderNumber: shouldShowTestInformation.value ? repairOrderNumber.value : '',
-    testEnvironment: { wellDepth: wellDepth.value, wellTemperature: wellTemperature.value, wellPressure: wellPressure.value },
+    testEnvironment: { wellDepth: wellDepth.value, wellTemperature: wellTemperature.value, wellbore: wellbore.value, mudResistivity: mudResistivity.value },
     testInterval: { mainFrom: mainIntervalFrom.value, mainTo: mainIntervalTo.value, repeatFrom: repeatIntervalFrom.value, repeatTo: repeatIntervalTo.value }
   }
   saveTodayTestEnvironment()
@@ -1435,7 +1442,7 @@ onMounted(() => {
           <div class="table-group-header">
             <span class="group-order-id">{{ order.id }}</span>
             <span class="group-customer">{{ order.customer }}</span>
-            <span class="group-count">{{ order.deviceList?.length || 0 }} 个测试产品已匹配</span>
+            <span class="group-count">{{ order.deviceList?.length || 0 }} 组模板共用配接仪器</span>
           </div>
           <div class="table-wrapper">
             <table class="data-table">
@@ -1449,8 +1456,9 @@ onMounted(() => {
               <tbody>
                 <tr v-for="(device, idx) in order.deviceList" :key="getDevKey(order.id, device, idx)">
                   <td>
-                    <div>{{ device.name }}</div>
-                    <div class="cell-subtext">{{ device.sn || device.code || 'SN-' + (idx + 1) }}</div>
+                    <div v-for="member in device.members" :key="member.stateKey" class="cell-subtext">
+                      {{ member.name }} · {{ member.sn || member.code || '-' }}
+                    </div>
                   </td>
                   <td>
                     <div>{{ device.template || '-' }}</div>
@@ -1630,9 +1638,14 @@ onMounted(() => {
                 <span class="input-unit">℃</span>
               </label>
               <label class="labeled-input">
-                <span class="input-label">井压：</span>
-                <input v-model="wellPressure" class="form-input inline-field" />
-                <span class="input-unit">MPa</span>
+                <span class="input-label">井眼：</span>
+                <input v-model="wellbore" class="form-input inline-field" />
+                <span class="input-unit">inch</span>
+              </label>
+              <label class="labeled-input">
+                <span class="input-label">泥浆电阻率：</span>
+                <input v-model="mudResistivity" class="form-input inline-field" />
+                <span class="input-unit">Ω.m</span>
               </label>
             </div>
           </div>

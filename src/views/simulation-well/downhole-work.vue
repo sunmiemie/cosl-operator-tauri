@@ -6,6 +6,7 @@ import { Icon } from '@iconify/vue'
 import { ElConfigProvider, ElDialog, ElMessage, ElMessageBox, ElPagination } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import EquipmentPackage from './equipment-package.vue'
+import { groupSupportingDevices } from './supporting-groups'
 import { useAuth } from '@/composables/useAuth'
 import {
   createSimulatedWellDownholeWork,
@@ -241,6 +242,7 @@ const formatDetailTool = (tool: any) => {
 
 const detailOrderList = computed(() => normalizeTextList(detailRow.value?.order_ids))
 const detailDeviceList = computed(() => normalizeArray(detailRow.value?.devices))
+const detailDeviceGroups = computed(() => groupSupportingDevices(detailDeviceList.value))
 const getDeviceName = (device: any) => device?.deviceName || device?.name || device?.label || '-'
 const getDeviceSn = (device: any) => device?.sn || device?.code || device?.device_number || '-'
 
@@ -595,20 +597,20 @@ onMounted(() => {
           <div class="detail-section">
             <div class="detail-section-title">测试产品</div>
             <div v-if="detailDeviceList.length" class="detail-device-list">
-              <div v-for="(device, index) in detailDeviceList" :key="device?.id || `${device?.name}-${index}`" class="detail-device-card">
-                <div class="detail-device-head">
+              <div v-for="group in detailDeviceGroups" :key="group.key" class="detail-device-card">
+                <div v-for="device in group.members" :key="device.id || getDeviceSn(device)" class="detail-device-head">
                   <div class="detail-device-title">{{ getDeviceName(device) }}</div>
                   <div class="detail-device-sn">{{ getDeviceSn(device) }}</div>
                 </div>
                 <div class="detail-device-meta">
-                  <span>模板编号：{{ device?.template || '-' }}</span>
-                  <span>模板名称：{{ device?.templateName || device?.template_name || '-' }}</span>
+                  <span>模板编号：{{ group.members[0]?.template || '-' }}</span>
+                  <span>模板名称：{{ group.members[0]?.templateName || group.members[0]?.template_name || '-' }}</span>
                 </div>
                 <div class="detail-device-tools">
                   <span class="detail-sub-label">配接仪器</span>
-                  <div v-if="normalizeDeviceTools(device).length" class="detail-chip-list">
+                  <div v-if="normalizeDeviceTools(group.members[0]).length" class="detail-chip-list">
                     <span
-                      v-for="tool in normalizeDeviceTools(device)"
+                      v-for="tool in normalizeDeviceTools(group.members[0])"
                       :key="`${tool.code}-${tool.zh}-${tool.en}-${tool.internalInstrumentSn}`"
                       class="detail-chip"
                     >

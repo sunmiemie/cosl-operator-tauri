@@ -36,6 +36,8 @@ import {
   type SimulatedWellDownholeWorkItem
 } from '@/services/simulated-well-downhole-api'
 import extractedFields from './extracted_fields.json'
+import { groupReportDevices } from './report-groups'
+import type { ReportGroup, ReportDevice, ResolvedReportDevice } from './types'
 const props = defineProps<{
   selectedOrders: any[]
   selectedDevices: any[]
@@ -60,17 +62,7 @@ type ReportAttachment = {
   content_type?: string
   size?: number
 }
-type ReportOperationDevice = {
-  id: string
-  orderId: string
-  orderDbId?: number
-  deviceDbId?: number
-  customer: string
-  deviceName: string
-  sn: string
-  template: string
-  orderType: 0 | 1
-}
+type ReportOperationDevice = ReportDevice
 type LocalUploadFile = Omit<SimulatedWellLocalUploadFile, 'kind'>
 type UploadProgressEvent = {
   uploadId: string
@@ -103,7 +95,9 @@ const reportedDeviceKeys = ref<Set<string>>(new Set())
 const reportedDeviceKeysLoading = ref(false)
 const operations = ref<SimulatedWellDownholeWorkItem[]>([])
 const selectedOperation = ref<SimulatedWellDownholeWorkItem | null>(null)
-const selectedDevice = ref<ReportOperationDevice | null>(null)
+const selectedDevice = ref<ReportGroup | null>(null)
+const resolvedOperationDevices = ref<ResolvedReportDevice[]>([])
+const clientSubmitId = ref('')
 const selectedTemplate = ref<SimulatedWellReportTemplateDetail | null>(null)
 const templateCatalog = ref<SimulatedWellReportTemplateListItem[]>([])
 const templateDetails = ref<SimulatedWellReportTemplateDetail[]>([])
@@ -219,6 +213,14 @@ function mergeTemplateProductLists(...lists: any[][]): TemplateProduct[] {
 
 function templateKey(template: { report_no?: string; report_name?: string }) {
   return `${normalizeCode(template.report_no)}::${normalizeText(template.report_name)}`
+}
+
+function reportDeviceIdKey(workNo: unknown, id: unknown) {
+  return id ? `${normalizeCode(workNo)}::id:${id}` : ''
+}
+
+function reportDevices(meta: ReportMeta): any[] {
+  return Array.isArray(meta.devices) && meta.devices.length ? meta.devices : [{ device_name: meta.device_name, instrument_sn: meta.device_sn || meta.deviceSn || meta.device_number || meta.deviceNo || meta.sn || meta.code }]
 }
 
 function reportDeviceKey(workNo: unknown, sn: unknown) {
@@ -690,7 +692,7 @@ const reportRows = computed(() =>
         ...report,
         meta,
         reportName: String(meta.report_name || ''),
-        deviceName: meta.device_name || '-',
+        deviceName: reportDevices(meta).map((device) => device.device_name || '-').join('、'),
         operatorName: report.tester || '-',
         statusLabel: statusText(report.status, report.status_text),
         statusClass: report.status === 1 ? 'approved' : report.status === 2 ? 'rejected' : 'pending'
@@ -708,14 +710,13 @@ const selectableOperations = computed(() => {
 
 const selectedOperationDevices = computed(() => {
   const workNo = selectedOperation.value?.work_no
-  const list = buildOperationDevices(selectedOperation.value)
-  if (!workNo) return list
-  return list.filter((device) => {
-    if (!device.sn) return true
-    const key = reportDeviceKey(workNo, device.sn)
+  const list = resolvedOperationDevices.value.filter((device) => {
+    const key = device.deviceDbId ? reportDeviceIdKey(workNo, device.deviceDbId) : reportDeviceKey(workNo, device.sn)
     return !key || !reportedDeviceKeys.value.has(key)
   })
+  return groupReportDevices(list)
 })
+
 const isResearchReport = computed(() => selectedDevice.value?.orderType === 1)
 const usesTemplateReport = computed(() => !isResearchReport.value || Boolean(selectedDevice.value?.template?.trim()))
 const reportTitle = computed(
@@ -802,15 +803,23 @@ function addReportedDeviceKey(target: Set<string>, report: SimulatedWellReportIt
     report.task_number || meta?.downhole_work_no || meta?.task_number || meta?.work_no || '',
   ).trim()
   if (workNo !== expectedWorkNo) return
-  const sn =
-    meta?.device_sn ||
-    meta?.deviceSn ||
-    meta?.device_number ||
-    meta?.deviceNo ||
-    meta?.sn ||
-    meta?.code
-  const key = reportDeviceKey(workNo, sn)
-  if (key) target.add(key)
+  const rows = Array.isArray(report.instrument_results) && report.instrument_results.length
+    ? report.instrument_results : reportDevices(meta)
+  rows.forEach((device: any) => {
+    const id = device.device_id || device.deviceDbId || device.deviceId || device.device_db_id
+    const key = id ? reportDeviceIdKey(workNo, id) : reportDeviceKey(workNo,
+      device.instrument_sn || device.device_sn || device.sn || device.device_number)
+    if (key) target.add(key)
+  })
+  // 旧报告只有 SN 时，也标记当前作业中对应产品的主键。
+  rows.forEach((row: any) => {
+    if (row.device_id || row.deviceDbId || row.deviceId || row.device_db_id) return
+    const sn = normalizeCode(row.instrument_sn || row.device_sn || row.sn || row.device_number)
+    buildOperationDevices(selectedOperation.value).forEach((device) => {
+      if (report.order_ids?.length && device.orderDbId && !report.order_ids.includes(device.orderDbId)) return
+      if (sn && normalizeCode(device.sn) === sn && device.deviceDbId) target.add(reportDeviceIdKey(workNo, device.deviceDbId))
+    })
+  })
 }
 
 async function fetchReportedDeviceKeys(workNo: string): Promise<boolean> {
@@ -1092,12 +1101,28 @@ async function pickOperation(work: SimulatedWellDownholeWorkItem): Promise<boole
   selectedTemplate.value = null
   templateMessage.value = ''
   resetReportForm()
+  resolvedOperationDevices.value = []
+  selectedOperation.value = work
   const ready = await fetchReportedDeviceKeys(work.work_no)
-  if (ready) selectedOperation.value = work
-  return ready
+  if (!ready) { selectedOperation.value = null; return false }
+  await ensureTemplateCatalog()
+  resolvedOperationDevices.value = buildOperationDevices(work).map((device) => {
+    if (device.orderType === 1 && !device.template.trim()) return device
+    // 显式选择的模板失效时必须修正，不能静默改用另一模板。
+    const template = device.template.trim() && device.template !== 'DEFAULT_DOWNHOLE_REPORT' ? findMatchedTemplateByCode(device.template) : findMatchedTemplateByProduct(device.deviceName)
+    return template && template.id > 0
+      ? { ...device, template: template.report_no, templateId: template.id }
+      : { ...device, templateError: '关联模板无效，请在管理端配置并重新选择模板' }
+  })
+  return true
 }
 
-async function pickDevice(device: ReportOperationDevice) {
+async function pickDevice(device: ReportGroup) {
+  if (device.templateError) { ElMessage.warning(device.templateError); return }
+  const identity = [selectedOperation.value?.work_no, device.orderDbId, device.templateId || 'research',
+    ...device.members.map((item) => item.deviceDbId).sort((a, b) => Number(a) - Number(b))].join(':')
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity))
+  clientSubmitId.value = 'SWG-' + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
   editingReport.value = null
   selectedDevice.value = device
   // 选择工单后将工单号设置为曲线图编号前缀
@@ -1143,12 +1168,19 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   } as unknown as SimulatedWellDownholeWorkItem
   selectedDevice.value = {
     id: `edit-${report.id}`,
-    orderId: '',
+    orderId: report.order_numbers?.[0] || '',
+    orderDbId: report.order_ids?.[0],
     customer: '',
     deviceName: String(meta.device_name || '-'),
     sn: String(meta.device_sn || meta.device_number || meta.sn || ''),
     template: String(meta.template_code || meta.template_name || ''),
     orderType: normalizeOrderType(meta.order_type),
+    members: reportDevices(meta).map((device: any, index: number) => ({
+      id: `edit-${report.id}-${index}`, orderId: report.order_numbers?.[0] || '',
+      orderDbId: device.order_id || report.order_ids?.[0], deviceDbId: device.device_id || report.instrument_results?.[index]?.device_id,
+      customer: '', deviceName: device.device_name || '-', sn: device.instrument_sn || device.device_sn || '',
+      template: String(meta.template_code || ''), orderType: normalizeOrderType(meta.order_type),
+    })),
   }
 
   operationDate.value = report.test_date || new Date().toISOString().slice(0, 10)
@@ -1175,7 +1207,7 @@ async function openEditReport(report: SimulatedWellReportItem & { meta: ReportMe
   /*
    * 编辑时由于没有工单编号，所以要在曲线图中截取曲线图前缀
    */
-  if (report.meta.curve_chart_no.indexOf("-") > 0) {
+  if (String(report.meta.curve_chart_no || "").indexOf("-") > 0) {
     curveChartNoPrefix.value = report.meta.curve_chart_no.substring(0, report.meta.curve_chart_no.indexOf("-") + 1)
   }
   try {
@@ -1342,8 +1374,11 @@ async function saveReport() {
       repair_order_number: selectedOperation.value.repair_order_number || '',
       env_text: selectedOperation.value.env_text,
       interval_text: selectedOperation.value.interval_text,
-      device_name: selectedDevice.value.deviceName,
-      device_sn: selectedDevice.value.sn,
+      devices: editing ? editing.report_json?.devices : selectedDevice.value.members.map((device) => ({
+        order_id: device.orderDbId, device_id: device.deviceDbId, device_name: device.deviceName, instrument_sn: device.sn,
+      })),
+      device_name: selectedDevice.value.members[0]?.deviceName || selectedDevice.value.deviceName,
+      device_sn: selectedDevice.value.members[0]?.sn || selectedDevice.value.sn,
       conclusion: usesTemplateReport.value ? conclusion.value : '',
       test_items: usesTemplateReport.value ? collectMeta(testItemValues) : {},
       evaluation_standards: usesTemplateReport.value ? collectMeta(evaluationValues) : {},
@@ -1355,7 +1390,7 @@ async function saveReport() {
       note: description,
       note_en: descriptionEn
     }
-    if (!editing && (!selectedDevice.value.orderDbId || !selectedDevice.value.deviceDbId)) {
+    if (!editing && selectedDevice.value.members.some((device) => !device.orderDbId || !device.deviceDbId)) {
       ElMessage.error('当前测试产品缺少工单关联信息，请重新从排程日历领取')
       return
     }
@@ -1366,16 +1401,12 @@ async function saveReport() {
       tester: editing?.tester || getCurrentUserName(),
       status: 0,
       report_json: reportJson,
-      order_ids: selectedDevice.value.orderDbId ? [selectedDevice.value.orderDbId] : undefined,
-      order_numbers: [selectedDevice.value.orderId],
-      instrument_results: selectedDevice.value.orderDbId && selectedDevice.value.deviceDbId
-        ? [{
-            order_id: selectedDevice.value.orderDbId,
-            device_id: selectedDevice.value.deviceDbId,
-            instrument_sn: selectedDevice.value.sn,
-          }]
-        : undefined,
-      client_submit_id: editing?.client_submit_id || `${reportNo}-${Date.now()}`,
+      order_ids: editing ? editing.order_ids : selectedDevice.value.orderDbId ? [selectedDevice.value.orderDbId] : undefined,
+      order_numbers: editing ? editing.order_numbers : [selectedDevice.value.orderId],
+      instrument_results: editing ? editing.instrument_results : selectedDevice.value.members.map((device) => ({
+        order_id: device.orderDbId!, device_id: device.deviceDbId!, instrument_sn: device.sn,
+      })),
+      client_submit_id: editing ? editing.client_submit_id : clientSubmitId.value,
     }
     const uploadFiles: SimulatedWellLocalUploadFile[] = [
       ...curveFiles.value.map((file) => ({ ...file, kind: 'curve_chart' as const })),
@@ -1613,7 +1644,7 @@ watch(
               mode === 'list'
                 ? '查看报告列表并发起新增测试报告'
                 : mode === 'select-operation'
-                  ? '先选择下井作业，再选择具体测试设备'
+                  ? '先选择下井作业，再选择工单与模板对应的报告组'
                   : '根据所选下井作业和模板填写测试报告'
             }}
           </p>
@@ -1686,7 +1717,7 @@ watch(
                 </td>
                 <td>
                   <div class="cell-primary clamp-two" :title="row.deviceName">{{ row.deviceName }}</div>
-                  <div v-if="row.meta?.device_sn" class="cell-secondary">{{ row.meta.device_sn }}</div>
+                  <div class="cell-secondary">{{ reportDevices(row.meta).length }} 台 · {{ reportDevices(row.meta).map((device) => device.instrument_sn || device.device_sn).join("、") }}</div>
                 </td>
                 <td>
                   <div class="cell-primary compact-text">{{ row.operatorName }}</div>
@@ -1743,8 +1774,8 @@ watch(
           <p class="section-desc">
             {{
               props.autoCreateReport
-                ? '仅显示本次保存的下井作业，并从其测试设备中选择本次要创建报告的对象。'
-                : '请选择一个已保存的下井作业，再从其测试设备中选择本次要创建报告的对象。'
+                ? '仅显示本次保存的下井作业，相同工单和模板的待测仪器共用一份报告。'
+                : '请选择已完成的下井作业，再选择报告组；同工单同模板的待测仪器合并填写。'
             }}
           </p>
 
@@ -1791,7 +1822,7 @@ watch(
         </div>
 
         <div v-if="selectedOperation" class="downhole-card">
-          <div class="downhole-card-title">步骤 2：选择测试设备 <span class="english-sub">Select Device</span></div>
+          <div class="downhole-card-title">步骤 2：选择报告组 <span class="english-sub">Select Report Group</span></div>
           <p class="section-desc">
             已选择作业：<strong>{{ selectedOperation.work_no }}</strong> / {{ selectedOperation.well_name || '-' }}
           </p>
@@ -1801,9 +1832,12 @@ watch(
               v-for="device in selectedOperationDevices"
               :key="device.id"
               class="device-select-card"
+              :disabled="Boolean(device.templateError)"
               @click="pickDevice(device)"
             >
-              <div class="device-name">{{ device.deviceName }}</div>
+              <div class="device-name">{{ device.members.length }} 台待测仪器</div>
+              <div v-for="member in device.members" :key="member.id" class="device-meta">{{ member.deviceName }} · {{ member.sn }}</div>
+              <div v-if="device.templateError" class="inline-hint">{{ device.templateError }}</div>
               <div class="device-meta">工单：{{ device.orderId || '-' }}</div>
               <div class="device-meta">编号：{{ device.sn || '-' }}</div>
               <div v-if="device.template" class="device-meta">模板：{{ device.template }}</div>
@@ -1834,11 +1868,11 @@ watch(
             </div>
             <div class="info-item">
               <div class="info-label">测试设备</div>
-              <div class="info-value">{{ selectedDevice?.deviceName || '-' }}</div>
+              <div v-for="device in selectedDevice?.members" :key="device.id" class="info-value">{{ device.deviceName }} · {{ device.sn }}</div>
             </div>
             <div class="info-item">
               <div class="info-label">设备编号</div>
-              <div class="info-value">{{ selectedDevice?.sn || '-' }}</div>
+              <div class="info-value">{{ selectedDevice?.members.map((device) => device.sn).join('、') || '-' }}</div>
             </div>
             <div class="info-item wide">
               <div class="info-label">测试环境</div>
@@ -2275,7 +2309,7 @@ watch(
             </div>
             <div class="info-item">
               <div class="info-label">测试设备</div>
-              <div class="info-value">{{ previewReport.meta.device_name || '-' }}</div>
+              <div v-for="(device, index) in reportDevices(previewReport.meta)" :key="index" class="info-value">{{ device.device_name || '-' }} · {{ device.instrument_sn || device.device_sn || '-' }}</div>
             </div>
             <div class="info-item">
               <div class="info-label">操作工程师</div>
