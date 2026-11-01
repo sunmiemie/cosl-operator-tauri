@@ -3,7 +3,7 @@
  * PlotlyChart Component
  * Vue wrapper for Plotly.js charts
  */
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import type { Layout, Config, Data, PlotlyHTMLElement } from 'plotly.js-dist-min'
 import type { OverridePlotData } from '@/types'
@@ -35,6 +35,8 @@ const emit = defineEmits<{
 
 const chartRef = ref<HTMLDivElement | null>(null)
 const isInitialized = ref(false)
+let resizeObserver: ResizeObserver | null = null
+let disposed = false
 
 // Computed layout based on theme and thumbnail mode
 const computedLayout = computed(() => {
@@ -73,17 +75,22 @@ const formattedData = computed(() =>
 
 // Initialize chart
 async function initChart() {
-  if (!chartRef.value || !props.data?.length) return
+  if (disposed || !chartRef.value || !props.data?.length) return
+  const chartEl = chartRef.value as PlotlyHTMLElement
 
   try {
     await Plotly.newPlot(
-      chartRef.value,
+      chartEl,
       formattedData.value as Data[],
       computedLayout.value,
       computedConfig.value
     )
 
-    const chartEl = chartRef.value as PlotlyHTMLElement
+    // 初始化可能晚于卸载完成，释放原节点，避免重新绑定事件或恢复图表状态。
+    if (disposed || chartRef.value !== chartEl) {
+      Plotly.purge(chartEl)
+      return
+    }
     chartEl.on('plotly_click', (data: unknown) => emit('click', data))
     chartEl.on('plotly_hover', (data: unknown) => emit('hover', data))
     chartEl.on('plotly_unhover', (data: unknown) => emit('unhover', data))
@@ -98,7 +105,7 @@ async function initChart() {
 
 // Update chart when data or layout changes
 async function updateChart() {
-  if (!chartRef.value || !isInitialized.value) return
+  if (disposed || !chartRef.value || !isInitialized.value) return
 
   try {
     await Plotly.react(
@@ -114,7 +121,7 @@ async function updateChart() {
 
 // Resize chart
 async function resize() {
-  if (!chartRef.value || !isInitialized.value) return
+  if (disposed || !chartRef.value || !isInitialized.value) return
 
   try {
     await Plotly.Plots.resize(chartRef.value)
@@ -125,6 +132,8 @@ async function resize() {
 
 // Cleanup
 function cleanup() {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   if (chartRef.value) {
     try {
       Plotly.purge(chartRef.value)
@@ -156,15 +165,17 @@ onMounted(async () => {
   await initChart()
 
   // Add resize observer
-  if (props.responsive && chartRef.value) {
-    const resizeObserver = new ResizeObserver(() => {
+  if (!disposed && props.responsive && chartRef.value) {
+    resizeObserver = new ResizeObserver(() => {
       resize()
     })
     resizeObserver.observe(chartRef.value.parentElement || chartRef.value)
   }
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
+  // 模板引用清空前释放图表和观察器，并拦截已排队的异步回调。
+  disposed = true
   cleanup()
 })
 
