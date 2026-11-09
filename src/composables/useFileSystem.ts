@@ -158,7 +158,7 @@ export function useFileSystem() {
   /**
    * 解析暂存工艺文件名
    */
-  function parseTempFileName(fileName: string): TempProcessInfo | null {
+  function parseTempFileName(fileName: string, data?: TempProcessData): TempProcessInfo | null {
     try {
       // 移除 .json 后缀
       const baseName = fileName.replace(/\.json$/, '')
@@ -180,13 +180,29 @@ export function useFileSystem() {
         return null
       }
 
-      const parts = rest.split('-')
-      if (parts.length < 4) return null
-
-      const boardModelId = parseInt(parts[0], 10)
-      const name = parts[1]
-      const version = parts[2]
-      const modeStr = parts.slice(3).join('-') // 处理名称中可能有的 -
+      // 板组可能为尚未选择时的 -1，模式始终位于文件名末尾。
+      const boardMatch = rest.match(/^(-?\d+)-/)
+      const modeMatch = rest.match(/-(编辑|修改~(\d+))$/)
+      if (!boardMatch || !modeMatch) return null
+      const boardModelId = Number(boardMatch[1])
+      if (!Number.isSafeInteger(boardModelId)) return null
+      const modeStr = modeMatch[1]
+      const middle = rest.slice(boardMatch[0].length, -modeMatch[0].length)
+      let name: string
+      let version: string
+      if (data !== undefined) {
+        // 连字符无法区分名称和版本，使用已保存的内容恢复，保留旧文件名。
+        if (!data || typeof data !== 'object' || Array.isArray(data)
+          || typeof data.name !== 'string' || typeof data.version !== 'string'
+          || !Number.isSafeInteger(data.boardModelId) || data.boardModelId !== boardModelId) return null
+        name = data.name || (type === 'halt-hass' ? 'unnamed' : '')
+        version = data.version
+      } else {
+        const parts = middle.split('-')
+        if (parts.length !== 2) return null
+        name = parts[0]
+        version = parts[1]
+      }
 
       // 解析模式
       if (modeStr === '编辑') {
@@ -199,7 +215,8 @@ export function useFileSystem() {
           mode: '编辑'
         }
       } else if (modeStr.startsWith('修改~')) {
-        const processId = parseInt(modeStr.split('~')[1], 10)
+        const processId = Number(modeMatch[2])
+        if (!Number.isSafeInteger(processId)) return null
         return {
           fileName,
           type,
@@ -262,8 +279,12 @@ export function useFileSystem() {
       const result: TempProcessInfo[] = []
       
       for (const entry of entries) {
-        if (entry.isFile && entry.name?.endsWith('.json')) {
-          const info = parseTempFileName(entry.name)
+        if (entry.isFile && entry.name?.startsWith(`${type}-`) && entry.name.endsWith('.json')) {
+          let info = parseTempFileName(entry.name)
+          if (!info) {
+            const data = await loadTempProcess(entry.name)
+            if (data) info = parseTempFileName(entry.name, data)
+          }
           if (info && info.type === type) {
             result.push(info)
           }

@@ -627,14 +627,14 @@ export function useHaltHassProcess() {
       ) {
         throw new Error('暂存文件不是 HALT-HASS 双流程工艺')
       }
-      processJson.value = savedProcess
-      
-      // 解析文件名获取编辑信息
-      const info = fileSystem.parseTempFileName(fileName)
-      if (info) {
-        editForm.isEdit = info.mode === '修改'
-        editForm.processId = info.processId ?? -1
+      // 使用已加载内容解析含连字符的旧文件名，失败时不沿用上次编辑目标。
+      const info = fileSystem.parseTempFileName(fileName, data)
+      if (!info) {
+        throw new Error('暂存文件名与工艺信息不匹配')
       }
+      processJson.value = savedProcess
+      editForm.isEdit = info.mode === '修改'
+      editForm.processId = info.processId ?? -1
       
       editForm.hasUnsavedChanges = false
 
